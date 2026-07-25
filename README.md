@@ -37,10 +37,19 @@ Read in this order:
 
 ## Setup
 
+Local:
+
 ```sh
 cp src/config.example.php src/config.php   # then fill in db creds + API key
 php bin/migrate.php --status               # what's applied, what's pending
 php bin/migrate.php                        # apply pending migrations
+```
+
+Deploy to SiteGround — see [DEPLOY.md](docs/DEPLOY.md) for first-time setup:
+
+```sh
+bin/deploy.sh --dry-run    # list what would ship
+bin/deploy.sh              # ship + migrate
 ```
 
 ## Load-bearing decisions

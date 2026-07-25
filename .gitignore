@@ -4,6 +4,7 @@ source-projects/
 
 # Secrets
 src/config.php
+bin/deploy.env
 
 # Dependencies / build output
 node_modules/
