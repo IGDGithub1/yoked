@@ -14,7 +14,9 @@ declare(strict_types=1);
  *   php bin/make-invite.php <username>           issue a code from that user
  *   php bin/make-invite.php --owner              create the first account
  *   php bin/make-invite.php --list               show users and unused invites
- *   php bin/make-invite.php --clean-bootstrap    remove the placeholder
+ *   php bin/make-invite.php --clean-bootstrap    remove the placeholder,
+ *                                                promoting whoever used it
+ *   php bin/make-invite.php --admin <username>   promote to admin
  *   php bin/make-invite.php --drop <username>    delete a user and their data
  *
  * The owner's password is not taken as an argument — arguments land in shell
@@ -80,12 +82,12 @@ if (($args[0] ?? '') === '--owner') {
 // ---- list who exists -------------------------------------------------------
 
 if (($args[0] ?? '') === '--list') {
-    $users = DB::all('SELECT id, username, email, onboarding_state, created_at
+    $users = DB::all('SELECT id, username, email, role, onboarding_state, created_at
                       FROM users ORDER BY id');
     echo "users (" . count($users) . "):\n";
     foreach ($users as $u) {
-        printf("  #%-4d %-22s %-14s %s\n",
-            $u['id'], $u['username'], $u['onboarding_state'], $u['email']);
+        printf("  #%-4d %-22s %-7s %-14s %s\n",
+            $u['id'], $u['username'], $u['role'], $u['onboarding_state'], $u['email']);
     }
 
     $invites = DB::all('SELECT code, created_by FROM invites WHERE used_by IS NULL');
@@ -153,11 +155,54 @@ if (($args[0] ?? '') === '--clean-bootstrap') {
     // has to go first or the user delete fails outright. It has served its
     // purpose by now — the real account exists.
     $id = (int) $row['id'];
-    DB::tx(function () use ($id): void {
+
+    // Whoever claimed the bootstrap invite is the owner of this install, so they
+    // become admin here. This is the moment it can be decided without guessing:
+    // the placeholder is going away and exactly one account came through it.
+    $owner = DB::one(
+        'SELECT u.id, u.username, u.role FROM users u
+         JOIN invites i ON i.used_by = u.id
+         WHERE i.created_by = ? ORDER BY u.id LIMIT 1',
+        [$id]
+    );
+
+    DB::tx(function () use ($id, $owner): void {
+        if ($owner !== null && $owner['role'] !== 'admin') {
+            DB::run("UPDATE users SET role = 'admin' WHERE id = ?", [(int) $owner['id']]);
+        }
         DB::run('DELETE FROM invites WHERE created_by = ?', [$id]);
         DB::run('DELETE FROM users WHERE id = ?', [$id]);
     });
+
     echo "Removed the bootstrap placeholder (#{$id}) and its spent invite.\n";
+    if ($owner !== null) {
+        echo "Promoted {$owner['username']} (#{$owner['id']}) to admin.\n";
+    } else {
+        echo "No account claimed the bootstrap invite, so no admin was set.\n"
+            . "Promote one with: php bin/make-invite.php --admin <username>\n";
+    }
+    exit(0);
+}
+
+// ---- promote to admin ------------------------------------------------------
+
+if (($args[0] ?? '') === '--admin') {
+    $name = $args[1] ?? null;
+    if ($name === null) {
+        fwrite(STDERR, "Usage: php bin/make-invite.php --admin <username>\n");
+        exit(1);
+    }
+    $u = DB::one('SELECT id, username, role FROM users WHERE username = ?', [$name]);
+    if ($u === null) {
+        fwrite(STDERR, "No such user: {$name}\n");
+        exit(1);
+    }
+    if ($u['role'] === 'admin') {
+        echo "{$u['username']} is already an admin.\n";
+        exit(0);
+    }
+    DB::run("UPDATE users SET role = 'admin' WHERE id = ?", [(int) $u['id']]);
+    echo "Promoted {$u['username']} (#{$u['id']}) to admin.\n";
     exit(0);
 }
 

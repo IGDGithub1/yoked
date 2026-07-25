@@ -14,7 +14,7 @@ $router->add('GET', 'health', function (): void {
     $db = 'ok';
     try {
         DB::one('SELECT 1');
-    } catch (Throwable $e) {
+    } catch (Throwable) {
         // Report degraded rather than throwing: a health endpoint that 500s
         // tells a monitor less than one that says which part is down.
         $db = 'unreachable';
@@ -29,7 +29,7 @@ $router->add('GET', 'health', function (): void {
 });
 
 /**
- * GET /api/env — what the WEB SAPI actually has.
+ * GET /api/runtime — what the WEB SAPI actually has.
  *
  * bin/envcheck.php can only report the CLI binary, and the two differ here:
  * imagick is absent from CLI PHP on this host. Since uploads are processed by
@@ -38,8 +38,13 @@ $router->add('GET', 'health', function (): void {
  *
  * Admin-only, and deliberately not folded into /api/health: that endpoint is
  * unauthenticated, and an extension inventory is reconnaissance.
+ *
+ * Named 'runtime' rather than 'env' because SiteGround's WAF blocks any path
+ * ending in /env — it looks like a probe for a leaked .env file, which is a
+ * reasonable rule to have. The request was rejected with an HTML 403 before
+ * PHP ran at all, so the route appeared broken while being entirely correct.
  */
-$router->add('GET', 'env', function (): void {
+$router->add('GET', 'runtime', function (): void {
     $user = Auth::require();
     if (($user['role'] ?? '') !== 'admin') {
         Response::error('Not permitted.', 403);

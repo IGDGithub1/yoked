@@ -290,6 +290,13 @@ worker cached for a year cannot be recalled and it governs every other cache, so
 `Service-Worker-Allowed: /` itself. Rewriting `^sw\.js$` does not work either —
 nginx matches the URI before Apache is consulted. Leave this alone.
 
+**A route returns an HTML 403 instead of your JSON** — the host's WAF rejected
+it before PHP ran. Tell them apart by the body: your errors are JSON with
+`X-Httpd-Modphp` on the response; a WAF block is `Content-Type: text/html` with
+no such header. Known trigger: any path ending in `/env`, which reads as a probe
+for a leaked `.env` file. `GET /api/runtime` is named that way for this reason —
+it was `/api/env` and was silently unreachable.
+
 **A stale asset still 200s after deploy** — the deploy clears the server's
 `assets/` directory, but nginx's proxy cache may briefly still serve a deleted
 file. It expires on its own, and it is mildly useful: a user mid-session on the
