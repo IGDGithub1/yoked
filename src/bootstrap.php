@@ -103,3 +103,6 @@ require YK_SRC . '/lib/PlanSchema.php';
 require YK_SRC . '/lib/Safety.php';
 require YK_SRC . '/lib/Plans.php';
 require YK_SRC . '/lib/Onboarding.php';
+require YK_SRC . '/lib/Nutrition.php';
+require YK_SRC . '/lib/FoodSearch.php';
+require YK_SRC . '/lib/Training.php';

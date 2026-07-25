@@ -60,6 +60,8 @@ $router = new Router();
 require YK_SRC . '/routes/health.php';
 require YK_SRC . '/routes/auth.php';
 require YK_SRC . '/routes/onboarding.php';
+require YK_SRC . '/routes/nutrition.php';
+require YK_SRC . '/routes/training.php';
 
 // ---- Resolve path ----------------------------------------------------------
 
