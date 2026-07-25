@@ -7,9 +7,23 @@ Small, invite-only, PWA on PHP 8 / MySQL shared hosting.
 
 ## Status
 
-**Specification + schema.** Scope is settled. The schema is written (38 tables, four
-migrations) but **has not been executed** — no MySQL in the dev environment yet, so
-running `bin/migrate.php` against a real database is the next step.
+Scope is settled and the coaching engine generates real weeks against the live API.
+
+| | |
+|---|---|
+| Schema | ✅ 39 tables, 57 FKs, live on SiteGround |
+| Seed data | ✅ 90 exercises, 53 aliases, 8 goal presets |
+| Deploy | ✅ one command (`bin/deploy.ps1`) |
+| `Goals.php` | ✅ pluggable evaluator; reproduces the original keto rule exactly |
+| `Claude.php` | ✅ API client, prompt caching, constraint-retry loop |
+| `Plans.php` | ✅ week generation, validation, versioned persistence |
+| Onboarding UI | ⬜ next — nothing collects the quiz answers yet |
+| API tier / SPA | ⬜ no `api/index.php`, no front end |
+| Logging, check-ins, nudges | ⬜ schema exists, no code |
+
+Everything so far is driven from the CLI. `bin/test-plans.php` seeds the two users
+from the specs, generates their weeks, and asserts the output against the spec
+decisions — that is currently the only way to see the app work.
 
 ## The loop
 
@@ -33,23 +47,38 @@ Read in this order:
 | [SPEC-safety.md](docs/SPEC-safety.md) | Per-user constraints, hard/soft tiers, enforcement. |
 | [SPEC-coaching.md](docs/SPEC-coaching.md) | Generation, observation, vetoes, chat, adaptation, buddy system. |
 | [sample-week.md](docs/sample-week.md) | A worked example — two paired users, week 5. Review artifact. |
-| [SCHEMA.md](docs/SCHEMA.md) | What the 38 tables are and why. |
+| [SCHEMA.md](docs/SCHEMA.md) | What the tables are and why. |
 
 ## Setup
 
-Local:
-
 ```sh
-cp src/config.example.php src/config.php   # then fill in db creds + API key
+cp src/config.example.php src/config.php   # db creds, Anthropic key, model
 php bin/migrate.php --status               # what's applied, what's pending
 php bin/migrate.php                        # apply pending migrations
 ```
 
-Deploy to SiteGround — see [DEPLOY.md](docs/DEPLOY.md) for first-time setup:
+Deploy to SiteGround — see [DEPLOY.md](docs/DEPLOY.md) for first-time setup.
+On Windows use the PowerShell script; `deploy.sh` needs an ssh-agent that Git
+Bash cannot reach:
+
+```powershell
+.\bin\deploy.ps1 -DryRun    # list what would ship
+.\bin\deploy.ps1            # ship + migrate
+.\bin\deploy.ps1 -Verify    # + envcheck, dbcheck, smoketest, goal tests
+```
+
+## Verifying it works
+
+Every suite runs on the server via SSH. The `--offline` / `--seed-only` flags
+skip API calls where a suite has them.
 
 ```sh
-bin/deploy.sh --dry-run    # list what would ship
-bin/deploy.sh              # ship + migrate
+php bin/envcheck.php          # PHP version, extensions, outbound HTTPS
+php bin/dbcheck.php           # connection, table count, FK count
+php bin/smoketest.php         # 22 schema assertions, rolled back
+php bin/test-goals.php        # 46 evaluator assertions incl. keto parity
+php bin/test-claude.php       # API client; --offline for shape checks only
+php bin/test-plans.php        # end-to-end generation; --seed-only to skip API
 ```
 
 ## Load-bearing decisions
@@ -84,5 +113,20 @@ credentials and is not part of this project).
 
 ## Stack
 
-PHP 8.1+ · MySQL 8 · vanilla PDO · no Composer · React SPA · PWA · SiteGround shared
-hosting · Claude API for coaching.
+PHP 8.4 · MySQL 8.4 · vanilla PDO · no Composer · React SPA · PWA · SiteGround shared
+hosting · `claude-sonnet-5` for coaching.
+
+No Composer means the Anthropic SDK isn't available, so `src/lib/Claude.php` is
+hand-rolled cURL against `POST /v1/messages`. Four things about the current model
+family are each a 400 if you get them wrong, and all four are asserted in
+`bin/test-claude.php`:
+
+- adaptive thinking only — `budget_tokens` is **removed**, not deprecated
+- `temperature` / `top_p` / `top_k` are rejected outright
+- `effort` nests inside `output_config`, not at the top level
+- assistant-turn prefill is rejected; structured outputs replace it
+
+Structured outputs add two more that only surface at request time: every object
+needs `additionalProperties: false`, and a schema may have at most **24 optional
+parameters**. `PlanSchema::lint()` checks both so a bad schema fails a test
+instead of a user's plan.
