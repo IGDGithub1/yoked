@@ -144,6 +144,22 @@ t('no assistant prefill in the built body', function () use ($b) {
     return ($last['role'] ?? '') !== 'assistant' ?: 'built body ends with an assistant turn';
 });
 
+t('plan generation asks for enough output tokens', function () {
+    // Measured runs land at 22k-31k output tokens for a full week, and a 32k
+    // ceiling truncated two of six generations outright. A truncation is not a
+    // degraded plan — the JSON is incomplete, so nothing parses and the user
+    // gets nothing. Asserted here because the value is easy to "tidy" downward
+    // and the failure only shows up as an occasional dead generation.
+    $src = file_get_contents(YK_SRC . '/lib/Plans.php');
+    if (!preg_match("/'max_tokens'\s*=>\s*(\d+)/", (string) $src, $m)) {
+        return 'could not find max_tokens in Plans.php';
+    }
+    $n = (int) $m[1];
+    return $n >= 48000
+        ?: "plan generation max_tokens is {$n}; needs >= 48000 for headroom "
+           . 'over the 31k observed maximum';
+});
+
 echo "\n4. cost estimation (no API calls)\n";
 
 t('prices a known model', function () {

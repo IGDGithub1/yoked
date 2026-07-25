@@ -53,7 +53,19 @@ final class Plans
             [
                 'purpose'      => $purpose,
                 'user_id'      => $userId,
-                'max_tokens'   => 32000,
+                // 64k, not 32k. A full week is seven days of prescribed sessions
+                // with per-exercise detail PLUS seven days of meals with
+                // structured ingredients, and measured runs land at 22k-31k
+                // output tokens. Against a 32k ceiling that is no headroom at
+                // all — a 31,073-token success is 3% from failure, and two of
+                // six generations were truncated outright. A truncation is not a
+                // degraded plan, it is no plan: the JSON is incomplete, so
+                // nothing can be parsed or persisted. Check with bin/aicalls.php
+                // before lowering this.
+                //
+                // Costs nothing when unused: max_tokens is a ceiling, and output
+                // is billed per token emitted.
+                'max_tokens'   => 64000,
                 'system'       => self::systemPrompt($context),
                 'cache_system' => self::CACHE_SYSTEM,
                 'messages'     => [[
