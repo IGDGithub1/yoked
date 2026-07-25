@@ -11,7 +11,7 @@ holds `config.php` (database password, Anthropic key) while `storage/` holds
 progress photos.
 
 ```
-/home/u742-gnc4zittrdor/www/yoked.lil-boxes.com/
+/home/SG_USER/www/yoked.lil-boxes.com/
     public_html/          ← web root. SPA + api/index.php only.
     src/                  ← app code + config.php
     database/migrations/
@@ -41,7 +41,7 @@ Existing Key**. The private key never leaves your machine.
 Verify:
 
 ```sh
-ssh -p 18765 -i ~/.ssh/yoked_sg u742-gnc4zittrdor@ssh.lil-boxes.com 'php -v'
+ssh -p 18765 -i ~/.ssh/yoked_sg SG_USER@ssh.lil-boxes.com 'php -v'
 ```
 
 ### 2. Local deploy config
@@ -50,18 +50,26 @@ ssh -p 18765 -i ~/.ssh/yoked_sg u742-gnc4zittrdor@ssh.lil-boxes.com 'php -v'
 cp bin/deploy.env.example bin/deploy.env
 ```
 
-Values are pre-filled for this account. Gitignored — but it holds no secrets
-anyway (the key is referenced by path, credentials live server-side).
+Fill in `SG_USER` with the account's SSH username (**Site Tools → Devs → SSH
+Keys Manager**). `bin/deploy.env` is gitignored — it holds no secrets either way
+(the key is referenced by path, credentials live server-side), but the account
+identifier stays out of a public repo.
 
 ### 3. Database
 
-Already created in Site Tools:
+Already created. The real name, user, and password are in **Site Tools → MySQL**
+— read them from there rather than from this file. This repo is public, so it
+carries no account identifiers.
 
 | | |
 |---|---|
-| Name | `dbbyxu3vojvfpa` |
-| User | `umaymc9ugyjmi` |
+| Name | `dbXXXXXXXXXX` (Site Tools → MySQL → Databases) |
+| User | `uXXXXXXXXXXX` (Site Tools → MySQL → Users) |
 | Host | `localhost` |
+
+The user must be **granted on** the database — SiteGround creates users and
+databases separately, and a missing grant produces the same `1045 Access denied`
+error as a wrong password.
 
 ### 4. Ship the code
 
@@ -77,8 +85,8 @@ no credentials to migrate with. The script will tell you this and exit 1.
 Once, by hand. It is never deployed and never overwritten.
 
 ```sh
-ssh -p 18765 -i ~/.ssh/yoked_sg u742-gnc4zittrdor@ssh.lil-boxes.com
-cd /home/u742-gnc4zittrdor/www/yoked.lil-boxes.com
+ssh -p 18765 -i ~/.ssh/yoked_sg SG_USER@ssh.lil-boxes.com
+cd /home/SG_USER/www/yoked.lil-boxes.com
 cp src/config.example.php src/config.php
 chmod 600 src/config.php
 nano src/config.php
@@ -93,10 +101,15 @@ Fill in the database name/user/password, the Anthropic API key, and leave
 bin/setup-remote.sh
 ```
 
-Checks PHP version, `pdo_mysql` / `mbstring` / `curl` / `imagick`, the
-directory layout, that `src/` and `storage/` are outside the web root, database
-reachability, and whether the API key is set. Creates missing directories.
-Idempotent.
+Checks PHP version, required extensions, the directory layout, that `src/` and
+`storage/` are outside the web root, database reachability, and whether the API
+key is set. Creates missing directories. Idempotent.
+
+`php bin/envcheck.php` reports the same environment in more detail, including
+outbound HTTPS reachability to the Claude API. Note that **`imagick` is not
+available to CLI PHP** on this host — `gd` is, and it can re-encode uploads,
+which is the security-relevant part. The image pipeline should prefer imagick and
+fall back to gd.
 
 ### 7. Migrate
 
@@ -107,16 +120,30 @@ bin/deploy.sh
 Or directly:
 
 ```sh
-ssh -p 18765 -i ~/.ssh/yoked_sg u742-gnc4zittrdor@ssh.lil-boxes.com \
-    'cd /home/u742-gnc4zittrdor/www/yoked.lil-boxes.com && php bin/migrate.php'
+ssh -p 18765 -i ~/.ssh/yoked_sg SG_USER@ssh.lil-boxes.com \
+    'cd /home/SG_USER/www/yoked.lil-boxes.com && php bin/migrate.php'
 ```
 
-**This is the first real execution of the schema.** 38 tables have never run
-against MySQL. Expect to fix something.
+Migrations 001–005 are applied: 39 tables, 57 foreign keys, plus the seeded
+exercise library and goal presets. Verify with `php bin/dbcheck.php`.
 
 ---
 
 ## Routine deploys
+
+**On Windows, use the PowerShell script.** `bin/deploy.sh` cannot authenticate:
+Git Bash's `ssh` does not reach the Windows ssh-agent, so a passphrase-protected
+key stalls it. `deploy.ps1` uses the Windows OpenSSH client, which does. Both read
+the same `bin/deploy.env`.
+
+```powershell
+.\bin\deploy.ps1              # ship + migrate
+.\bin\deploy.ps1 -NoMigrate   # ship only
+.\bin\deploy.ps1 -DryRun      # list what would ship, change nothing
+.\bin\deploy.ps1 -Verify      # + envcheck, dbcheck, smoketest, goal tests
+```
+
+From Linux, macOS, or WSL:
 
 ```sh
 bin/deploy.sh              # ship + migrate
@@ -170,7 +197,7 @@ half-migrated database is far worse.
 Once the coaching engine exists, add in **Site Tools → Devs → Cron Jobs**:
 
 ```
-/usr/local/bin/php /home/u742-gnc4zittrdor/www/yoked.lil-boxes.com/bin/cron.php
+/usr/local/bin/php /home/SG_USER/www/yoked.lil-boxes.com/bin/cron.php
 ```
 
 Every 15 minutes. It will own weekly plan generation, weekly check-in
