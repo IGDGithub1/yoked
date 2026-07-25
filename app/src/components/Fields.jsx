@@ -53,7 +53,20 @@ export function Choice({ q, value, onChange }) {
 
 export function Multi({ q, value, onChange }) {
   const selected = Array.isArray(value) ? value : []
+  // An unanswered question and "none of these" are BOTH empty lists, so length
+  // cannot tell them apart — checking it made "None" look pre-selected before
+  // the user had touched anything. The distinction is undefined vs [], and the
+  // server relies on it too: a required section cannot complete on "never asked".
+  const answeredNone = Array.isArray(value) && value.length === 0
 
+  // Picking an option while "none of these" is chosen replaces it rather than
+  // contradicting it.
+  //
+  // De-selecting the LAST option deliberately leaves [] rather than undefined,
+  // which shows "none of these" as chosen. That is a small lie about intent, and
+  // it is the better one: the save path only sends keys that are not undefined,
+  // so clearing to undefined would leave the old value on the server while the
+  // UI showed the question as unanswered. Better to reflect what is stored.
   const toggle = (v) =>
     onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v])
 
@@ -81,10 +94,14 @@ export function Multi({ q, value, onChange }) {
         and a required section cannot complete without the difference.
       */}
       {q.emptyLabel && (
+        // Styled as a chip, not a quiet button: it is one of the answers, and
+        // .btn--quiet had no pressed state at all, so choosing it looked like
+        // nothing had happened. Selecting it also clears the chips above, which
+        // is why it needs to visibly own the answer.
         <button
           type="button"
-          className="btn btn--quiet"
-          aria-pressed={selected.length === 0}
+          className="chip chip--none"
+          aria-pressed={answeredNone}
           onClick={() => onChange([])}
         >
           {q.emptyLabel}
@@ -106,6 +123,9 @@ export function Multi({ q, value, onChange }) {
 export function Tags({ q, value, onChange }) {
   const [draft, setDraft] = useState('')
   const items = Array.isArray(value) ? value : []
+  // undefined = never answered, [] = "none of these". Both are empty lists, so
+  // length cannot tell them apart.
+  const answeredNone = Array.isArray(value) && value.length === 0
 
   const add = () => {
     const parts = draft
@@ -113,9 +133,19 @@ export function Tags({ q, value, onChange }) {
       .map((s) => s.trim())
       .filter(Boolean)
       .filter((s) => !items.some((i) => i.toLowerCase() === s.toLowerCase()))
+    // Adding an item supersedes "none of these" rather than sitting alongside it.
     if (parts.length) onChange([...items, ...parts])
     setDraft('')
   }
+
+  /**
+   * Removing the last item leaves [], which shows as "none of these".
+   *
+   * Not undefined: the save path skips undefined keys, so that would leave the
+   * old list on the server while the UI showed the question as unanswered.
+   * Reflecting what is actually stored is the lesser evil.
+   */
+  const remove = (item) => onChange(items.filter((i) => i !== item))
 
   return (
     <div className="stack-sm">
@@ -128,7 +158,7 @@ export function Tags({ q, value, onChange }) {
                 type="button"
                 className="chip-x"
                 aria-label={`Remove ${item}`}
-                onClick={() => onChange(items.filter((i) => i !== item))}
+                onClick={() => remove(item)}
               >
                 ×
               </button>
@@ -155,11 +185,17 @@ export function Tags({ q, value, onChange }) {
           Add
         </button>
       </div>
-      {q.emptyLabel && items.length === 0 && (
+      {/*
+        Always rendered, and styled as a chip. It used to be a .btn--quiet that
+        disappeared once an item existed, which meant choosing it looked like
+        nothing happened (that class has no pressed state) and un-choosing it was
+        impossible. Adding an item clears it; tapping it clears the items.
+      */}
+      {q.emptyLabel && (
         <button
           type="button"
-          className="btn btn--quiet"
-          aria-pressed={Array.isArray(value) && value.length === 0}
+          className="chip chip--none"
+          aria-pressed={answeredNone}
           onClick={() => onChange([])}
         >
           {q.emptyLabel}
@@ -394,16 +430,20 @@ export function Injuries({ q, value, onChange }) {
         <button type="button" className="btn btn--ghost" onClick={add}>
           Add an injury
         </button>
-        {items.length === 0 && (
-          <button
-            type="button"
-            className="btn btn--quiet"
-            aria-pressed={Array.isArray(value) && value.length === 0}
-            onClick={() => onChange([])}
-          >
-            None
-          </button>
-        )}
+        {/*
+          Always rendered and styled as a chip, matching the other "none of
+          these" answers. It used to be a .btn--quiet — no pressed state, so
+          choosing it looked like nothing happened — and it vanished once an
+          injury existed, so it could not be undone.
+        */}
+        <button
+          type="button"
+          className="chip chip--none"
+          aria-pressed={Array.isArray(value) && value.length === 0}
+          onClick={() => onChange([])}
+        >
+          None
+        </button>
       </div>
     </div>
   )

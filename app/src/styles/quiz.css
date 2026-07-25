@@ -112,6 +112,25 @@
   background: color-mix(in srgb, var(--yolk) 14%, var(--white));
   font-weight: 600;
 }
+/*
+ * "None of these" is an answer, so it gets a pressed state like any other chip.
+ * It sits on its own line and reads quieter when unselected — it is the absence
+ * of a choice, not one of the options — but once chosen it has to look as
+ * chosen as anything else, because it IS the answer and it clears the rest.
+ */
+.chip--none {
+  border-style: dashed;
+  color: var(--muted);
+}
+.chip--none:hover { border-style: solid; }
+.chip--none[aria-pressed='true'] {
+  border-style: solid;
+  border-color: var(--yolk-deep);
+  background: color-mix(in srgb, var(--yolk) 14%, var(--white));
+  color: var(--ink);
+  font-weight: 600;
+}
+
 /* A typed tag is not a toggle — it is removed, not deselected. */
 .chip--fixed {
   cursor: default;
