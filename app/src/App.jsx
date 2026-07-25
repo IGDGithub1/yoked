@@ -3,7 +3,7 @@ import { api } from './api'
 import Auth from './screens/Auth'
 import Quiz from './screens/Quiz'
 import Ready from './screens/Ready'
-import Baseline from './screens/Baseline'
+import Today from './screens/Today'
 import Answers from './screens/Answers'
 import Yolk from './components/Yolk'
 
@@ -76,7 +76,7 @@ export default function App() {
 
   const step = state.next?.step
 
-  // Reviewing answers after onboarding. Kept in App rather than inside Baseline
+  // Reviewing answers after onboarding. Kept in App rather than inside Today
   // so it is reachable from anywhere that grows a link to it later, and so the
   // quiz is loaded fresh — the answers on screen must be what the server holds,
   // not whatever this session last typed.
@@ -108,7 +108,9 @@ export default function App() {
     )
   }
 
-  return <Baseline user={state.user} onSignOut={signOut} onReview={review} />
+  // Past onboarding, the app IS the logging screen. There is no dashboard
+  // between them: a user who is set up came here to log something.
+  return <Today user={state.user} onSignOut={signOut} onReview={review} />
 }
 
 /**

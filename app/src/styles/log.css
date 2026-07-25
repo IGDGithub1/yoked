@@ -1,0 +1,177 @@
+/*
+ * Logging: the check-in scale, meal slots, and the exercise row.
+ *
+ * Every value comes from tokens.css. The pieces here that quiz.css already
+ * defines — .chip, .chips, .field, .input — are reused rather than restyled;
+ * a second definition of a chip is how two things that should match stop
+ * matching.
+ */
+
+/* ---- the day stepper --------------------------------------------------- */
+
+.daynav > .btn {
+  /* Square-ish arrows, so the day itself is the widest thing in the row. */
+  min-width: 44px;
+  padding: 11px 14px;
+  font-size: 20px;
+  line-height: 1;
+}
+
+/* ---- the check-in scale ------------------------------------------------ */
+/*
+ * Five buttons in a row, equal width. A slider was tried in the original and is
+ * wrong for this: a 1-to-5 rating is five discrete answers, and a slider makes
+ * the user aim. Five targets you can hit with a thumb is the whole point.
+ */
+.scale {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.scale-dot {
+  padding: 12px 0;
+  border: 1.5px solid var(--hairline);
+  border-radius: var(--r-input);
+  background: var(--white);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--t-quick), background var(--t-quick);
+}
+.scale-dot:hover:not(:disabled) { border-color: var(--muted); }
+.scale-dot:active:not(:disabled) { transform: translateY(1px); }
+.scale-dot:disabled { opacity: .6; cursor: progress; }
+
+/* The selected rating is the one yellow thing in the card. */
+.scale-dot[aria-checked='true'] {
+  border-color: var(--yolk-deep);
+  background: color-mix(in srgb, var(--yolk) 16%, var(--white));
+}
+
+/* ---- state tags -------------------------------------------------------- */
+/*
+ * A tag states a fact the server decided — "as planned", "optional", "skipped".
+ * Not a chip: a chip is something you press, and pressing these does nothing.
+ * Deliberately not coloured by sentiment. "Skipped" in red would make the app a
+ * scold, and the coach's whole posture is that a missed session is information,
+ * not a verdict.
+ */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--muted) 12%, var(--white));
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
+/* ---- logged rows ------------------------------------------------------- */
+/*
+ * One food or one exercise. Hairline separated rather than carded: these are
+ * items in a list, and a card each turns a meal into a stack of boxes.
+ */
+.entry {
+  padding: 7px 0;
+  border-top: 1px solid var(--hairline);
+}
+.entry:first-of-type { border-top: 0; }
+
+/* ---- the exercise row -------------------------------------------------- */
+
+.exrow {
+  padding: 12px 0;
+  border-top: 1px solid var(--hairline);
+}
+.exrow[data-skipped='true'] {
+  /* Skipped is still legible — it is an answer the coach reads, not a deletion. */
+  opacity: .62;
+}
+
+/*
+ * Sets / reps / kg / RPE. Four across on a phone, because they are four short
+ * numbers and stacking them makes logging one exercise a scroll.
+ * auto-fit with a 62px floor lets them go two-up at 360px rather than squeezing
+ * to unusable.
+ */
+.exrow-inputs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(62px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.exrow-inputs .input {
+  padding: 9px 8px;
+  text-align: center;
+}
+
+/* ---- the manual calorie nudge ------------------------------------------ */
+/*
+ * Label over buttons, not beside them. At 360px "Extra +125 kcal on top" plus
+ * three buttons does not fit one line, and letting it wrap put the unit alone on
+ * the next row.
+ *
+ * The buttons are deliberately quiet. This is a correction to a meal, not the
+ * meal — it was the most-used path in the original precisely because it was
+ * small and always there, and making it loud would invert the hierarchy.
+ */
+.delta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0 2px;
+}
+
+.delta-btns {
+  display: flex;
+  gap: 4px;
+  /* Pulled left to the card edge: .btn--quiet carries 12px of its own padding,
+     and without this the row sits visibly indented from everything above it. */
+  margin-left: -12px;
+}
+.delta-btns .btn { padding: 6px 12px; }
+
+/* ---- adding food ------------------------------------------------------- */
+
+.addfood {
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+/* A search result is a button the size of its content — the whole row is the
+   target, because on a phone a small "add" link is a missed tap. */
+.result {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1.5px solid var(--hairline);
+  border-radius: var(--r-input);
+  background: var(--white);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--t-quick), background var(--t-quick);
+}
+.result:hover:not(:disabled) {
+  border-color: var(--yolk-deep);
+  background: color-mix(in srgb, var(--yolk) 8%, var(--white));
+}
+.result:active:not(:disabled) { transform: translateY(1px); }
+.result:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Manual entry: five small numbers, same reflow logic as the exercise row. */
+.macro-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 8px;
+}
+.macro-grid .input {
+  padding: 9px 8px;
+  text-align: center;
+}

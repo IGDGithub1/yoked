@@ -7,7 +7,8 @@ Small, invite-only, PWA on PHP 8 / MySQL shared hosting.
 
 ## Status
 
-Scope is settled and the coaching engine generates real weeks against the live API.
+A user can sign up, answer the quiz, and log food, training and a daily check-in
+against a generated week.
 
 | | |
 |---|---|
@@ -17,13 +18,13 @@ Scope is settled and the coaching engine generates real weeks against the live A
 | `Goals.php` | ✅ pluggable evaluator; reproduces the original keto rule exactly |
 | `Claude.php` | ✅ API client, prompt caching, constraint-retry loop |
 | `Plans.php` | ✅ week generation, validation, versioned persistence |
-| Onboarding UI | ⬜ next — nothing collects the quiz answers yet |
-| API tier / SPA | ⬜ no `api/index.php`, no front end |
-| Logging, check-ins, nudges | ⬜ schema exists, no code |
+| API tier | ✅ `api/index.php`, global CSRF, session auth |
+| Onboarding UI | ✅ the quiz, tier confirmation, answer review |
+| Logging | ✅ food, training, daily check-in — API and UI |
+| Nudges, chat, weekly check-in | ⬜ schema exists, cron stub only |
 
-Everything so far is driven from the CLI. `bin/test-plans.php` seeds the two users
-from the specs, generates their weeks, and asserts the output against the spec
-decisions — that is currently the only way to see the app work.
+`bin/test-plans.php` seeds the two users from the specs, generates their weeks,
+and asserts the output against the spec decisions.
 
 ## The loop
 
@@ -78,8 +79,24 @@ php bin/dbcheck.php           # connection, table count, FK count
 php bin/smoketest.php         # 22 schema assertions, rolled back
 php bin/test-goals.php        # 46 evaluator assertions incl. keto parity
 php bin/test-claude.php       # API client; --offline for shape checks only
+php bin/test-logging.php      # 45 assertions over real HTTP: food, training, check-in
 php bin/test-plans.php        # end-to-end generation; --seed-only to skip API
 ```
+
+The logging UI is driven in a real browser, because the client/server contract is
+where the interesting failures live and a build only proves it compiles. Seed the
+fixture first — it has to be seeded on the day you run it, since the screen opens
+on today and the fixture's plan week must contain it:
+
+```sh
+php bin/seed-uitest.php       # a user with a plan for TODAY (re-runnable)
+```
+```powershell
+cd app; npm run drive:logging   # 35 checks: log it, reload, confirm it stuck
+```
+
+That suite also guards two things a unit test cannot see: that the page does not
+scroll sideways at 360px, and that the accent stays spent once per view.
 
 ## Load-bearing decisions
 
