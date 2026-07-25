@@ -1,0 +1,17 @@
+# Reference material only — Keto Tracker + Friendspace source, not part of this project.
+# Contains live credentials in friendspace/src/config.php; never commit.
+source-projects/
+
+# Secrets
+src/config.php
+
+# Dependencies / build output
+node_modules/
+dist/
+
+# Uploads (stored outside the web root in production)
+storage/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
