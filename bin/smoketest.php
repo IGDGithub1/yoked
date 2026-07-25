@@ -35,13 +35,16 @@ function check(string $label, callable $fn): void
     }
 }
 
-/** Assert that $fn throws — used to prove a constraint actually rejects. */
+/**
+ * Assert that $fn throws — used to prove a constraint actually rejects.
+ * Catching IS the assertion here, so the exception itself is not needed.
+ */
 function rejects(callable $fn): bool|string
 {
     try {
         $fn();
         return 'expected rejection, but it was accepted';
-    } catch (PDOException $e) {
+    } catch (PDOException) {
         return true;
     }
 }
@@ -173,12 +176,15 @@ try {
 
     // ---- prescriptions -----------------------------------------------------
 
+    // Use a slug that cannot collide with the seeded library (migration 005).
+    // The first version of this test hardcoded 'trap-bar-deadlift' and started
+    // failing the moment the library was seeded.
     $exId = 0;
     check('insert exercise', function () use (&$exId): bool {
         $exId = DB::insert(
             'INSERT INTO exercises (slug, name, category, pattern, load_type, is_system)
-             VALUES (?, ?, ?, ?, ?, 1)',
-            ['trap-bar-deadlift', 'Trap Bar Deadlift', 'strength', 'hinge', 'weight']
+             VALUES (?, ?, ?, ?, ?, 0)',
+            ['smoke-test-lift', 'Smoke Test Lift', 'strength', 'hinge', 'weight']
         );
         return $exId > 0;
     });
@@ -186,8 +192,13 @@ try {
     check('exercise slug is unique', fn() => rejects(fn() => DB::insert(
         'INSERT INTO exercises (slug, name, category, pattern)
          VALUES (?, ?, ?, ?)',
-        ['trap-bar-deadlift', 'Dupe', 'strength', 'hinge']
+        ['smoke-test-lift', 'Dupe', 'strength', 'hinge']
     )));
+
+    check('seeded library is present', function (): bool|string {
+        $n = (int) (DB::one("SELECT COUNT(*) AS n FROM exercises WHERE is_system = 1")['n'] ?? 0);
+        return $n > 0 ?: 'no system exercises — did migration 005 run?';
+    });
 
     check('committed and optional sessions coexist', function () use (&$planId, &$exId): bool {
         $s1 = DB::insert(

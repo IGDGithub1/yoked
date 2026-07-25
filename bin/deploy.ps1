@@ -41,6 +41,32 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# PowerShell 5.1 wraps a native command's stderr in ErrorRecords, and with
+# $ErrorActionPreference = 'Stop' that turns any stderr output - including
+# progress chatter from a command that exits 0 - into a terminating error.
+# ssh and tar both write to stderr routinely, so native calls are wrapped in
+# this helper: it drops the preference for the duration of the call and keys
+# success off the exit code instead, which is the only reliable signal.
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory)][string]$Exe,
+        [string[]]$Arguments = @()
+    )
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $Exe @Arguments 2>&1 | ForEach-Object { "$_" }
+        return [pscustomobject]@{
+            Output   = $out
+            ExitCode = $LASTEXITCODE
+            Ok       = ($LASTEXITCODE -eq 0)
+        }
+    }
+    finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
 # Repo root, regardless of where this was invoked from.
 $AppRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $AppRoot
@@ -111,9 +137,9 @@ try {
         # as a real deploy would.
         $probe = Join-Path $env:TEMP 'yoked-dryrun.tgz'
         if (Test-Path $probe) { Remove-Item $probe -Force }
-        & tar -czf $probe @excludes @present
-        if ($LASTEXITCODE -ne 0) { throw 'tar failed.' }
-        (& tar -tzf $probe) | ForEach-Object { Write-Host "  $_" }
+        $r = Invoke-Native tar (@('-czf', $probe) + $excludes + $present)
+        if (-not $r.Ok) { $r.Output | Write-Host; throw 'tar failed.' }
+        (Invoke-Native tar @('-tzf', $probe)).Output | ForEach-Object { Write-Host "  $_" }
         Write-Host ''
         Write-Host "  ($((Get-Item $probe).Length) bytes)"
         Remove-Item $probe -Force
@@ -125,9 +151,11 @@ try {
     # ---- preflight ---------------------------------------------------------
 
     Write-Host '-> checking ssh ... ' -NoNewline
-    $probe = & ssh -p $sgPort -o BatchMode=yes -o ConnectTimeout=20 `
-                   -o StrictHostKeyChecking=accept-new $target 'echo ok' 2>&1
-    if ($LASTEXITCODE -ne 0 -or $probe -notmatch 'ok') {
+    $r = Invoke-Native ssh @('-p', $sgPort, '-o', 'BatchMode=yes',
+                             '-o', 'ConnectTimeout=20',
+                             '-o', 'StrictHostKeyChecking=accept-new',
+                             $target, 'echo ok')
+    if (-not $r.Ok -or ($r.Output -join ' ') -notmatch 'ok') {
         Write-Host 'FAILED'
         Write-Host ''
         Write-Host 'Cannot authenticate over SSH. If the key is passphrase-protected,'
@@ -148,8 +176,8 @@ try {
     if (Test-Path $tgz) { Remove-Item $tgz -Force }
 
     Write-Host '-> packing ... ' -NoNewline
-    & tar -czf $tgz @excludes @present
-    if ($LASTEXITCODE -ne 0) { throw 'tar failed.' }
+    $r = Invoke-Native tar (@('-czf', $tgz) + $excludes + $present)
+    if (-not $r.Ok) { Write-Host 'FAILED'; $r.Output | Write-Host; throw 'tar failed.' }
     $size = (Get-Item $tgz).Length
     Write-Host "ok ($size bytes)"
 
@@ -159,16 +187,16 @@ try {
     # -AsByteStream and mangles binary in a pipeline.
 
     Write-Host '-> uploading ... ' -NoNewline
-    & scp -P $sgPort -q $tgz "${target}:/tmp/yoked-deploy.tgz"
-    if ($LASTEXITCODE -ne 0) { throw 'scp failed.' }
+    $r = Invoke-Native scp @('-P', $sgPort, '-q', $tgz, "${target}:/tmp/yoked-deploy.tgz")
+    if (-not $r.Ok) { Write-Host 'FAILED'; $r.Output | Write-Host; throw 'scp failed.' }
     Write-Host 'ok'
 
     Write-Host '-> extracting ... ' -NoNewline
     $extract = "mkdir -p '$sgDir' && tar -xzf /tmp/yoked-deploy.tgz -C '$sgDir' && rm -f /tmp/yoked-deploy.tgz && echo done"
-    $out = & ssh -p $sgPort $target $extract 2>&1
-    if ($LASTEXITCODE -ne 0 -or $out -notmatch 'done') {
+    $r = Invoke-Native ssh @('-p', $sgPort, $target, $extract)
+    if (-not $r.Ok -or ($r.Output -join ' ') -notmatch 'done') {
         Write-Host 'FAILED'
-        $out | ForEach-Object { Write-Host "   $_" }
+        $r.Output | ForEach-Object { Write-Host "   $_" }
         throw 'Remote extract failed.'
     }
     Write-Host 'ok'
@@ -176,12 +204,13 @@ try {
 
     # Keep the shell scripts executable - tar preserves modes, but a file added
     # on Windows may arrive without the bit set.
-    & ssh -p $sgPort $target "cd '$sgDir' && chmod +x bin/*.sh 2>/dev/null; chmod 700 storage 2>/dev/null; true" | Out-Null
+    $null = Invoke-Native ssh @('-p', $sgPort, $target,
+        "cd '$sgDir' && chmod +x bin/*.sh 2>/dev/null; chmod 700 storage 2>/dev/null; true")
 
     # ---- config check ------------------------------------------------------
 
-    & ssh -p $sgPort $target "test -f '$sgDir/src/config.php'" 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
+    $r = Invoke-Native ssh @('-p', $sgPort, $target, "test -f '$sgDir/src/config.php'")
+    if (-not $r.Ok) {
         Write-Host ''
         Write-Host 'No src/config.php on the server. Nothing will run without it.'
         Write-Host ''
@@ -200,22 +229,29 @@ try {
         Write-Host '-> migrating'
         # Safe on every deploy: schema_migrations makes it a no-op when there
         # is nothing pending.
-        $mig = & ssh -p $sgPort $target "cd '$sgDir' && php bin/migrate.php" 2>&1
-        $mig | ForEach-Object { Write-Host "   $_" }
-        if ($LASTEXITCODE -ne 0) { throw 'Migration failed.' }
+        $r = Invoke-Native ssh @('-p', $sgPort, $target, "cd '$sgDir' && php bin/migrate.php")
+        $r.Output | ForEach-Object { Write-Host "   $_" }
+        if (-not $r.Ok) { throw 'Migration failed.' }
     }
 
     # ---- verify ------------------------------------------------------------
 
     if ($Verify) {
-        foreach ($script in 'envcheck', 'dbcheck', 'smoketest') {
+        $failed = @()
+        foreach ($script in 'envcheck', 'dbcheck', 'smoketest', 'test-goals') {
             $path = "bin/$script.php"
-            & ssh -p $sgPort $target "test -f '$sgDir/$path'" 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) { continue }
+            if (-not (Invoke-Native ssh @('-p', $sgPort, $target, "test -f '$sgDir/$path'")).Ok) {
+                continue
+            }
             Write-Host ''
             Write-Host "-> $script"
-            $r = & ssh -p $sgPort $target "cd '$sgDir' && php $path" 2>&1
-            $r | ForEach-Object { Write-Host "   $_" }
+            $r = Invoke-Native ssh @('-p', $sgPort, $target, "cd '$sgDir' && php $path")
+            $r.Output | ForEach-Object { Write-Host "   $_" }
+            if (-not $r.Ok) { $failed += $script }
+        }
+        if ($failed.Count -gt 0) {
+            Write-Host ''
+            throw "Verification failed: $($failed -join ', ')"
         }
     }
 
