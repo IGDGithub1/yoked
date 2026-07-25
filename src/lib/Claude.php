@@ -338,7 +338,9 @@ final class Claude
         $raw    = curl_exec($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         $err    = curl_error($ch);
-        curl_close($ch);
+        // curl_close() is a deprecated no-op since PHP 8.0 — the handle is an
+        // object now and frees itself when it goes out of scope.
+        unset($ch);
 
         if ($raw === false) {
             return [$status, '', $err !== '' ? $err : 'cURL failed with no message'];
@@ -495,6 +497,13 @@ final class Claude
     private static function log(array $row): ?int
     {
         try {
+            // This is the first query after a call that may have run for
+            // minutes, and wait_timeout on shared hosting is 60 seconds — so
+            // the connection is probably dead. run() would recover on its own,
+            // but doing it explicitly keeps the "connection lost" noise out of
+            // the error log on every single AI call.
+            DB::ensureConnected();
+
             return DB::insert(
                 'INSERT INTO ai_calls
                  (user_id, purpose, model, input_tokens, output_tokens, cached_tokens,
