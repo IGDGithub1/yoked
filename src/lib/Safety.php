@@ -81,6 +81,7 @@ final class Safety
         $violations = array_merge(
             $violations,
             self::checkMeals($plan, $foodBans),
+            self::checkMealCompleteness($plan),
             self::checkExercises($plan, $movementBans, $cardioBans),
             self::checkFloors($plan, $floors),
             self::checkAvailability($plan, $userId),
@@ -205,6 +206,61 @@ final class Safety
     }
 
     /** Prescribed exercises against hard movement and cardio constraints. */
+    /**
+     * A meal that claims to be fully specified must actually be.
+     *
+     * PlanSchema leaves `ingredients` optional on purpose — target_only and
+     * unplanned slots have no recipe, and making it required would force empty
+     * arrays onto them. The comment there promises this check compensates, and
+     * for a while it did not: a run produced a breakfast with kind 'specified'
+     * and no ingredients, which reaches the user as a meal name and nothing to
+     * shop for or cook.
+     *
+     * Cheap to state as a violation, and a violation is a retry rather than a
+     * failure, so the model gets told precisely what is missing.
+     */
+    private static function checkMealCompleteness(array $plan): array
+    {
+        $violations = [];
+
+        foreach ($plan['days'] ?? [] as $day) {
+            $date = (string) ($day['date'] ?? '?');
+            foreach ($day['meals'] ?? [] as $meal) {
+                if (($meal['kind'] ?? 'specified') !== 'specified') {
+                    continue;   // target_only and unplanned carry no recipe
+                }
+                $slot = (string) ($meal['slot'] ?? '?');
+                $ings = $meal['ingredients'] ?? [];
+
+                if (!is_array($ings) || $ings === []) {
+                    $violations[] = "{$date} {$slot} has kind 'specified' but no "
+                        . 'ingredients. Either list the ingredients, each with an '
+                        . "item and a household measure, or set kind to 'target_only' "
+                        . 'and give a target_note.';
+                    continue;
+                }
+
+                foreach ($ings as $i => $ing) {
+                    if (!is_array($ing) || trim((string) ($ing['item'] ?? '')) === '') {
+                        $violations[] = "{$date} {$slot} ingredient #" . ($i + 1)
+                            . ' has no item name.';
+                        continue;
+                    }
+                    // household is required by the schema, but a blank string
+                    // satisfies the schema and not the user: someone without a
+                    // food scale needs "1 cup", not "".
+                    if (trim((string) ($ing['household'] ?? '')) === '') {
+                        $item = (string) $ing['item'];
+                        $violations[] = "{$date} {$slot}: '{$item}' has no household "
+                            . 'measure. Give an everyday quantity such as "1 cup" or '
+                            . '"6 oz", not grams alone.';
+                    }
+                }
+            }
+        }
+        return $violations;
+    }
+
     private static function checkExercises(array $plan, array $movementBans, array $cardioBans): array
     {
         if ($movementBans === [] && $cardioBans === []) {

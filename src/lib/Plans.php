@@ -520,6 +520,17 @@ final class Plans
             . 'they are validated against allergies, and structure is what makes '
             . '"ate as planned" a one-tap log.',
 
+            // kind and ingredients have to agree. A 'specified' meal with no
+            // ingredients passes the schema and reaches the user as a meal name
+            // with nothing to shop for, so it is stated as a rule here and
+            // enforced in Safety::checkMealCompleteness.
+            "KIND MUST MATCH CONTENT: kind 'specified' REQUIRES a non-empty "
+            . 'ingredients list, and every ingredient needs both an item and a '
+            . 'household measure ("1 cup", "6 oz") — grams alone are useless to '
+            . "someone without a scale. If you do not want to prescribe a recipe, "
+            . "use kind 'target_only' with a target_note instead. Do not mark a "
+            . "meal 'specified' and leave it empty.",
+
             'MACRO TARGETS ARE PER-DAY, not per-week. Training days and rest days '
             . 'differ. Every day in the week needs its own targets.',
 
