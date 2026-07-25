@@ -1,0 +1,375 @@
+/*
+ * Quiz-specific components: questions, choices, chips, the availability grid,
+ * and the tier-confirmation dialog.
+ *
+ * Every value comes from tokens.css.
+ */
+
+/* ---- question ---------------------------------------------------------- */
+
+.q-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.q-num {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: .04em;
+  flex: none;
+}
+/* The number is wayfinding; the question is content. The scale says which. */
+.q-text {
+  font-family: var(--display);
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -.017em;
+  line-height: 1.3;
+}
+.q-help {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 8px 0 16px;
+  max-width: 58ch;
+}
+@media (max-width: 520px) {
+  .q-text { font-size: 19px; }
+}
+
+/* ---- single choice ----------------------------------------------------- */
+
+/* Single column stated explicitly — a bare `display: grid` sizes its tracks to
+   content and can lay children out side by side. See .injury for the bug that
+   caused. */
+.choices { display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; }
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+  border: 1.5px solid var(--hairline);
+  border-radius: var(--r-input);
+  background: var(--white);
+  cursor: pointer;
+  font-size: 15px;
+  text-align: left;
+  transition: border-color var(--t-quick), background var(--t-quick), transform 120ms;
+}
+.choice:hover { border-color: var(--muted); }
+.choice:active { transform: translateY(1px); }
+
+.choice .dot {
+  width: 17px; height: 17px;
+  border-radius: 50%;
+  border: 1.5px solid var(--hairline);
+  flex: none;
+}
+.choice[aria-checked='true'] {
+  border-color: var(--yolk-deep);
+  background: color-mix(in srgb, var(--yolk) 9%, var(--white));
+}
+.choice[aria-checked='true'] .dot {
+  border-color: var(--yolk-deep);
+  background: var(--yolk);
+  /* An inset ring reads as a filled radio without needing a pseudo-element. */
+  box-shadow: inset 0 0 0 3px var(--white);
+}
+.choice-note {
+  margin-left: auto;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: right;
+  flex: none;
+}
+@media (max-width: 480px) {
+  .choice { flex-wrap: wrap; }
+  .choice-note { margin-left: 29px; width: 100%; text-align: left; }
+}
+
+/* ---- chips (multi-select and tags) ------------------------------------- */
+
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1.5px solid var(--hairline);
+  border-radius: var(--r-pill);
+  background: var(--white);
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color var(--t-quick), background var(--t-quick);
+}
+.chip:hover { border-color: var(--muted); }
+.chip[aria-pressed='true'] {
+  border-color: var(--yolk-deep);
+  background: color-mix(in srgb, var(--yolk) 14%, var(--white));
+  font-weight: 600;
+}
+/* A typed tag is not a toggle — it is removed, not deselected. */
+.chip--fixed {
+  cursor: default;
+  border-color: var(--yolk-deep);
+  background: color-mix(in srgb, var(--yolk) 14%, var(--white));
+  padding-right: 6px;
+}
+.chip-x {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+  padding: 0 5px;
+  color: var(--muted);
+  border-radius: 50%;
+}
+.chip-x:hover { color: var(--ink); }
+
+/* ---- toggle ------------------------------------------------------------ */
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14.5px;
+  padding: 4px 0;
+}
+.toggle-track {
+  width: 42px; height: 24px;
+  border-radius: var(--r-pill);
+  background: var(--hairline);
+  padding: 3px;
+  flex: none;
+  transition: background var(--t-quick);
+}
+.toggle-knob {
+  display: block;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--white);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .2);
+  transition: transform var(--t-quick);
+}
+.toggle[aria-checked='true'] .toggle-track { background: var(--yolk-deep); }
+.toggle[aria-checked='true'] .toggle-knob { transform: translateX(18px); }
+
+/* ---- measurements ----------------------------------------------------- */
+
+.measure {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+}
+.measure-item { display: block; }
+.measure-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 5px;
+}
+.measure-label em {
+  font-style: normal;
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 12px;
+}
+.measure input { max-width: 96px; }
+
+/* ---- injuries --------------------------------------------------------- */
+
+.injury {
+  display: grid;
+  /* Stated explicitly, and it matters: without it the tracks size to content
+     and the rows were laid out as narrow side-by-side columns -- the area field
+     collapsed to ~64px, showing "left k" instead of "left knee". `1fr` also
+     needs minmax(0, ...) so a wide child cannot push the track past the
+     container. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 9px;
+  padding: 16px;
+  border: 1.5px solid var(--hairline);
+  border-radius: var(--r-input);
+  background: color-mix(in srgb, var(--shell) 60%, var(--white));
+}
+
+.check { display: flex; align-items: center; gap: 9px; font-size: 14px; }
+.check input { width: 17px; height: 17px; accent-color: var(--yolk-deep); }
+
+/* ---- segmented control ------------------------------------------------ */
+
+.seg { display: flex; gap: 4px; }
+.seg button {
+  flex: 1;
+  font-size: 12.5px;
+  padding: 8px 6px;
+  border: 1.5px solid var(--hairline);
+  background: var(--white);
+  color: var(--muted);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color var(--t-quick), background var(--t-quick), color var(--t-quick);
+}
+.seg button:hover { border-color: var(--muted); }
+.seg button[aria-checked='true'], .seg button[aria-pressed='true'] {
+  border-color: var(--yolk-deep);
+  background: color-mix(in srgb, var(--yolk) 14%, var(--white));
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* ---- availability grid ----------------------------------------------- */
+
+.grid-head, .grid-row {
+  display: grid;
+  /* minmax(0, …) on the flexible tracks: a plain 1fr has an auto minimum, so a
+     wide child (the access <select>) can push the row past its container. */
+  grid-template-columns: 46px minmax(0, 1fr) 88px minmax(0, 1.1fr);
+  gap: 10px;
+  align-items: center;
+}
+.grid-head {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 2px 10px;
+}
+.grid-row {
+  padding: 8px 2px;
+  border-top: 1px solid var(--hairline);
+}
+.day {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: .02em;
+}
+.day--off { color: var(--muted); font-weight: 500; }
+.mins { text-align: right; font-size: 14px; }
+.mins-input { max-width: 76px; text-align: right; padding: 8px 10px; }
+
+/* Below the grid's natural width the columns stop being legible, so each day
+   becomes a stacked block rather than a squeezed row. */
+@media (max-width: 640px) {
+  .grid-head { display: none; }
+  .grid-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas: 'day mins' 'seg seg' 'access access';
+    gap: 8px;
+    padding: 14px 2px;
+  }
+  /* Every one of these MUST stay scoped to .grid-row. `.seg { grid-area: seg }`
+     unscoped leaked onto the segmented control inside .injury, whose parent has
+     no such named area — the stray name created an implicit column and collapsed
+     the injury's other fields to a few characters wide. A grid-area name is
+     global, so placing by name is only ever safe next to the template that
+     defines it. */
+  .grid-row .day    { grid-area: day; font-size: 15px; }
+  .grid-row .mins   { grid-area: mins; }
+  .grid-row .seg    { grid-area: seg; }
+  .grid-row .select { grid-area: access; }
+}
+
+/* ---- constraint list -------------------------------------------------- */
+
+.clist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 9px;
+}
+.clist li { display: flex; gap: 10px; align-items: baseline; font-size: 14.5px; }
+.clist-tier {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  padding: 3px 8px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--hairline);
+  color: var(--muted);
+}
+.clist-tier--hard {
+  border-color: var(--yolk-deep);
+  background: color-mix(in srgb, var(--yolk) 18%, var(--white));
+  color: var(--ink);
+}
+
+/* ---- the tier-confirmation dialog ------------------------------------- */
+/*
+ * The one loud moment. Everywhere else is quiet so this lands: it is the screen
+ * where the app is being genuinely careful with someone, and a standard confirm
+ * modal would undersell it.
+ */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 17, 12, .45);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  z-index: 100;
+  overflow-y: auto;
+}
+
+.careful {
+  background: var(--white);
+  border-radius: var(--r-card);
+  box-shadow: var(--lift-2);
+  overflow: hidden;
+  width: 100%;
+  max-width: 520px;
+}
+.careful-top {
+  /* Inverted: the only dark surface in the app. */
+  background: var(--ink);
+  color: var(--shell);
+  padding: 20px 26px 18px;
+}
+.careful-eyebrow {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .13em;
+  color: var(--yolk);
+  margin: 0 0 8px;
+}
+.careful-title {
+  font-family: var(--display);
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  line-height: 1.25;
+}
+.careful-body { padding: 20px 26px 24px; }
+.careful-body p { font-size: 14.5px; margin: 0 0 16px; }
+.careful-body p.aside { color: var(--muted); font-size: 13.5px; }
+
+.quoted {
+  font-size: 14.5px;
+  background: var(--shell);
+  border-left: 3px solid var(--yolk);
+  border-radius: 0 8px 8px 0;
+  padding: 12px 14px;
+  margin: 0 0 16px;
+}
+.quoted span {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12.5px;
+}

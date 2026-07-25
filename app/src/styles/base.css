@@ -1,0 +1,312 @@
+/*
+ * Base element styles and the shared component vocabulary.
+ *
+ * Deliberately plain CSS rather than a utility framework or CSS-in-JS: the
+ * whole design is a dozen components on eight tokens, and a build-time
+ * abstraction would cost more than it saves.
+ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--shell);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Inputs do not inherit font by default, which is the single most common
+   cause of a form that looks unstyled. */
+button, input, select, textarea { font: inherit; color: inherit; }
+
+h1, h2, h3, h4 { font-family: var(--display); margin: 0; }
+
+a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+/* ---- quality floor -------------------------------------------------------
+ * Not optional. A visible focus ring and honoured reduced-motion are the
+ * difference between usable and merely pretty.
+ */
+:focus-visible {
+  outline: 2.5px solid var(--yolk-deep);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+:focus:not(:focus-visible) { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Screen-reader-only text, for labels a sighted user gets from layout. */
+.sr {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ---- layout ------------------------------------------------------------ */
+
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 20px 80px;
+}
+.wrap--wide { max-width: 940px; }
+
+.stack > * + * { margin-top: 16px; }
+.stack-sm > * + * { margin-top: 8px; }
+.stack-lg > * + * { margin-top: 28px; }
+
+.row { display: flex; align-items: center; gap: 10px; }
+.row--end { justify-content: flex-end; }
+.push { margin-left: auto; }
+
+/* An input in a .row must take the slack and a button must not. Without this
+   the input sizes from its intrinsic width rather than the container, so an
+   input-plus-button row squeezed the field down to a few characters while the
+   button kept its full width ("left knee" rendered as "left k").
+   min-width: 0 is the other half: a flex item will not shrink below its
+   intrinsic minimum, and an input's is stubbornly wide. */
+.row > .input,
+.row > .textarea { flex: 1 1 auto; min-width: 0; }
+.row > .btn { flex: 0 0 auto; }
+
+/* ---- surfaces ---------------------------------------------------------- */
+
+.card {
+  background: var(--white);
+  border-radius: var(--r-card);
+  box-shadow: var(--lift);
+  padding: 24px 26px;
+}
+@media (max-width: 520px) {
+  .card { padding: 20px 18px; }
+}
+
+/* ---- type ------------------------------------------------------------- */
+
+.title {
+  font-family: var(--display);
+  font-size: clamp(26px, 6vw, 34px);
+  font-weight: 800;
+  letter-spacing: -.03em;
+  line-height: 1.12;
+}
+.heading {
+  font-family: var(--display);
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -.017em;
+  line-height: 1.3;
+}
+.subheading {
+  font-family: var(--display);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+.eyebrow {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .13em;
+  color: var(--muted);
+  margin: 0;
+}
+.muted { color: var(--muted); }
+.small { font-size: 14px; }
+.tiny  { font-size: 12.5px; }
+/* Macros, loads and RPE sit in columns; proportional digits make a column
+   of numbers jitter. */
+.num { font-variant-numeric: tabular-nums; }
+
+.prose { max-width: 60ch; }
+
+/* ---- buttons ---------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: var(--body);
+  font-size: 14.5px;
+  font-weight: 600;
+  padding: 11px 20px;
+  border-radius: var(--r-pill);
+  border: 1.5px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background var(--t-quick), border-color var(--t-quick),
+              transform 120ms, opacity var(--t-quick);
+}
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.btn--primary { background: var(--yolk); color: #2A241C; }
+.btn--primary:hover:not(:disabled) { background: var(--yolk-deep); }
+
+.btn--ghost { background: transparent; border-color: var(--hairline); }
+.btn--ghost:hover:not(:disabled) { border-color: var(--muted); }
+
+.btn--quiet {
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 12px;
+  font-weight: 500;
+}
+.btn--quiet:hover:not(:disabled) { color: var(--ink); }
+
+.btn--wide { width: 100%; }
+
+/* ---- fields ---------------------------------------------------------- */
+
+.field { display: block; }
+.field > .label {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.field > .hint {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 6px 0 0;
+}
+
+.input, .select, .textarea {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1.5px solid var(--hairline);
+  border-radius: var(--r-input);
+  background: var(--white);
+  font-size: 15px;
+  transition: border-color var(--t-quick);
+}
+.input:hover, .select:hover, .textarea:hover { border-color: var(--muted); }
+.input:focus, .select:focus, .textarea:focus {
+  border-color: var(--yolk-deep);
+  /* The focus ring is the outline; the border only reinforces it. */
+  outline-offset: 1px;
+}
+.textarea { resize: vertical; min-height: 96px; line-height: 1.5; }
+
+.input[aria-invalid='true'] { border-color: var(--paprika); }
+
+/* ---- messages -------------------------------------------------------- */
+/*
+ * Errors say what happened and what to do. They do not apologise and are never
+ * vague — see the writing rules in DESIGN.md.
+ */
+.error {
+  color: var(--paprika);
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+.error + .error-help { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
+
+.notice {
+  background: color-mix(in srgb, var(--yolk) 12%, var(--white));
+  border-left: 3px solid var(--yolk);
+  border-radius: 0 var(--r-input) var(--r-input) 0;
+  padding: 12px 14px;
+  font-size: 14px;
+}
+
+/* ---- the yolk: mark and progress in one object ------------------------
+ * A yolk is a filled circle inside a ring, which is already a progress ring.
+ * The --pct custom property drives the fill, so the header mark, the favicon
+ * and the loading state are the same component at different values.
+ */
+.yolk {
+  --pct: 0;
+  width: var(--size, 44px);
+  height: var(--size, 44px);
+  border-radius: 50%;
+  flex: none;
+  /* 0.34 ≈ 34/100: at --pct 100 the fill reaches ~34% of the box radius,
+     which is where a yolk sits inside its white.
+     The stops are offset by 0.6% rather than sharing a position: a hard stop in
+     a radial gradient is not antialiased, and rendered the yolk with a visibly
+     scalloped edge. The feather is under a pixel at these sizes. */
+  background:
+    radial-gradient(circle at 50% 50%,
+      var(--yolk) 0 calc(var(--pct) * 0.34% - 0.3%),
+      transparent calc(var(--pct) * 0.34% + 0.3%) 100%),
+    var(--white);
+  border: 2px solid var(--hairline);
+  transition: background var(--t-fill) var(--ease), border-color var(--t-fill);
+}
+.yolk[data-full='true'] { border-color: var(--yolk-deep); }
+
+/* ---- progress rail --------------------------------------------------- */
+
+.rail { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rail .pip {
+  width: 24px; height: 4px;
+  border-radius: 2px;
+  background: var(--hairline);
+  transition: background var(--t-quick), width var(--t-quick);
+}
+.rail .pip[data-state='done'] { background: var(--yolk); }
+.rail .pip[data-state='now']  { background: var(--yolk-deep); width: 38px; }
+.rail .rail-label {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- app chrome ------------------------------------------------------ */
+
+:root {
+  /* The sticky appbar's own height: 18px padding twice plus a 34px yolk.
+     Anything scrolled to must clear it, or it lands underneath. */
+  --appbar-h: 70px;
+}
+
+.appbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--shell);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+/* scrollIntoView aligns an element's top with the viewport top, which puts it
+   behind the sticky appbar — the section heading was being clipped on every
+   section change. scroll-margin-top is the fix, and doing it in CSS covers any
+   future anchor or scroll call rather than just the one in Quiz.jsx. */
+[data-scroll-anchor] {
+  scroll-margin-top: calc(var(--appbar-h) + 12px);
+}
+.appbar .brand {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -.03em;
+}
+
+.centred {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px 20px;
+}
+.centred > * { width: 100%; max-width: 420px; }

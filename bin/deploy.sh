@@ -126,9 +126,14 @@ echo "→ remote PHP: ${REMOTE_PHP}"
 # no dependency on remote tooling beyond tar.
 
 echo -n "→ shipping … "
+# assets/ is cleared first: tar never deletes, and because SPA bundles are
+# content-hashed every deploy would otherwise leave the previous build's files
+# behind forever. Vite owns that directory outright and the tarball always
+# carries a complete set. Chained into one command so the site is never left
+# without assets if the connection drops mid-way. Keep in step with deploy.ps1.
 tar -czf - "${EXCLUDES[@]}" "${PRESENT[@]}" \
     | ssh "${SSH_OPTS[@]}" "${SG_USER}@${SG_HOST}" \
-        "mkdir -p '${SG_APP_DIR}' && tar -xzf - -C '${SG_APP_DIR}'"
+        "mkdir -p '${SG_APP_DIR}' && rm -rf '${SG_APP_DIR}/public_html/assets' && tar -xzf - -C '${SG_APP_DIR}'"
 echo "ok"
 
 # ---- config check ---------------------------------------------------------

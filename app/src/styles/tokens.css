@@ -1,0 +1,82 @@
+/*
+ * Design tokens. The single source of truth is docs/design/DESIGN.md — if a
+ * value changes there, it changes here, and nowhere else.
+ *
+ * No component defines a colour, shadow, or radius of its own.
+ */
+
+:root {
+  /* ---- colour --------------------------------------------------------- */
+  --shell:     #F7F5F0;   /* warm off-white; albumen, not the default cream */
+  --white:     #FFFFFF;
+  --yolk:      #F5B92E;   /* the accent. one per view, earn it */
+  --yolk-deep: #E0A216;   /* hover, pressed, selected borders */
+  --ink:       #2A241C;   /* warm charcoal, never pure black */
+  --muted:     #7A7266;
+  --hairline:  #E4DFD6;
+  --paprika:   #C4402C;   /* errors only */
+
+  /* ---- geometry ------------------------------------------------------- */
+  --r-card:  14px;
+  --r-input: 10px;
+  --r-pill:  999px;
+
+  /* ---- shadow ---------------------------------------------------------
+   * Two levels; more reads as noise. The near shadow is more present than
+   * the far one, which reads as a card resting on paper rather than floating
+   * above it. Neutral black, not tinted — the shell already warms the page,
+   * and tinting too went muddy at these alphas.
+   */
+  --lift:   0 1px 3px rgba(0, 0, 0, .06), 0 6px 16px rgba(0, 0, 0, .04);
+  --lift-2: 0 2px 4px rgba(0, 0, 0, .10), 0 12px 28px rgba(0, 0, 0, .05);
+
+  /* ---- type ----------------------------------------------------------- */
+  --display: 'Bricolage Grotesque', system-ui, -apple-system, sans-serif;
+  --body:    'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* ---- motion ---------------------------------------------------------
+   * Sparing by policy. The yolk filling is the one orchestrated moment;
+   * everything else is control feedback.
+   */
+  --ease:     cubic-bezier(.22, 1, .36, 1);
+  --t-quick:  140ms;
+  --t-fill:   600ms;
+}
+
+/*
+ * Dark mode needs DIFFERENT shadow alphas, not the same ones — a 10% black
+ * shadow is invisible on #17140F. The accent does not change: a yolk is a yolk.
+ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --shell:    #17140F;
+    --white:    #201C16;
+    --ink:      #F2EEE6;
+    --muted:    #9C9385;
+    --hairline: #322C23;
+    --lift:   0 1px 3px rgba(0, 0, 0, .24), 0 6px 16px rgba(0, 0, 0, .18);
+    --lift-2: 0 2px 4px rgba(0, 0, 0, .32), 0 12px 28px rgba(0, 0, 0, .22);
+  }
+}
+
+/* The viewer's explicit choice wins over the system preference, in both
+   directions — hence a light override as well as a dark one. */
+:root[data-theme='dark'] {
+  --shell:    #17140F;
+  --white:    #201C16;
+  --ink:      #F2EEE6;
+  --muted:    #9C9385;
+  --hairline: #322C23;
+  --lift:   0 1px 3px rgba(0, 0, 0, .24), 0 6px 16px rgba(0, 0, 0, .18);
+  --lift-2: 0 2px 4px rgba(0, 0, 0, .32), 0 12px 28px rgba(0, 0, 0, .22);
+}
+
+:root[data-theme='light'] {
+  --shell:    #F7F5F0;
+  --white:    #FFFFFF;
+  --ink:      #2A241C;
+  --muted:    #7A7266;
+  --hairline: #E4DFD6;
+  --lift:   0 1px 3px rgba(0, 0, 0, .06), 0 6px 16px rgba(0, 0, 0, .04);
+  --lift-2: 0 2px 4px rgba(0, 0, 0, .10), 0 12px 28px rgba(0, 0, 0, .05);
+}

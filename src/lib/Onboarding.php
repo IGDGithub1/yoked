@@ -247,11 +247,12 @@ final class Onboarding
             return;
         }
 
-        $progress = self::progress($userId);
-        $target = $progress['all_done'] ? 'in_progress' : 'in_progress';
-
-        if ($state === 'pending' && $target !== 'pending') {
-            DB::run('UPDATE users SET onboarding_state = ? WHERE id = ?', [$target, $userId]);
+        // Answering anything at all moves pending → in_progress, and that is the
+        // only transition here. Completing the quiz deliberately does NOT advance
+        // the state: startBaseline() is the act that does, because the user has to
+        // be told what the two weeks are for and agree to start.
+        if ($state === 'pending') {
+            DB::run("UPDATE users SET onboarding_state = 'in_progress' WHERE id = ?", [$userId]);
         }
     }
 

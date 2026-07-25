@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Yoked">
+  <!--
+    The mark at 100%: the same geometry as the Yolk component in the app, where
+    a full yolk is a disc at 34% of the radius inside a ring. Kept in sync by
+    hand — if the ratio changes in base.css, change it here too.
+  -->
+  <circle cx="32" cy="32" r="29" fill="#FFFFFF" stroke="#E0A216" stroke-width="4"/>
+  <circle cx="32" cy="32" r="19.7" fill="#F5B92E"/>
+</svg>

@@ -192,7 +192,13 @@ try {
     Write-Host 'ok'
 
     Write-Host '-> extracting ... ' -NoNewline
-    $extract = "mkdir -p '$sgDir' && tar -xzf /tmp/yoked-deploy.tgz -C '$sgDir' && rm -f /tmp/yoked-deploy.tgz && echo done"
+    # tar extracts over the existing tree and never deletes; because SPA bundles
+    # are content-hashed, every deploy would otherwise leave the previous build's
+    # assets on disk forever. Clearing assets/ is safe: Vite owns that directory
+    # entirely and the tarball always carries a complete set. It is chained into
+    # the same command as the extract, so the site is never left without assets
+    # if the connection drops between the two.
+    $extract = "mkdir -p '$sgDir' && rm -rf '$sgDir/public_html/assets' && tar -xzf /tmp/yoked-deploy.tgz -C '$sgDir' && rm -f /tmp/yoked-deploy.tgz && echo done"
     $r = Invoke-Native ssh @('-p', $sgPort, $target, $extract)
     if (-not $r.Ok -or ($r.Output -join ' ') -notmatch 'done') {
         Write-Host 'FAILED'

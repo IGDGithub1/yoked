@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+    <title>Yoked</title>
+    <meta name="description" content="A coach that writes your week and adapts it as you go." />
+
+    <!-- theme-color is the yolk in light mode and the shell in dark, so the
+         browser chrome matches the page rather than fighting it. -->
+    <meta name="theme-color" content="#F5B92E" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#17140F" media="(prefers-color-scheme: dark)" />
+
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+
+    <!-- iOS standalone: without these, "Add to Home Screen" opens in Safari
+         chrome rather than as an app. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Yoked" />
+
+    <!--
+      Fonts are self-hosted rather than loaded from a CDN: a third-party request
+      on every page load is a privacy leak and a dependency for no benefit.
+      Subset to Latin. font-display: swap so text renders immediately in the
+      fallback rather than sitting invisible.
+    -->
+    <style>
+      @font-face {
+        font-family: 'Bricolage Grotesque';
+        src: url('/fonts/bricolage-grotesque-latin.woff2') format('woff2');
+        font-weight: 400 800;
+        font-display: swap;
+        unicode-range: U+0000-00FF, U+2000-206F, U+2190-21BB, U+2212;
+      }
+      @font-face {
+        font-family: 'Inter';
+        src: url('/fonts/inter-latin.woff2') format('woff2');
+        font-weight: 400 700;
+        font-display: swap;
+        unicode-range: U+0000-00FF, U+2000-206F, U+2190-21BB, U+2212;
+      }
+      /* Painted before the bundle parses, so a slow connection shows the page
+         colour rather than white. */
+      html { background: #F7F5F0; }
+      @media (prefers-color-scheme: dark) { html { background: #17140F; } }
+    </style>
+    <script type="module" crossorigin src="/assets/index-Co1Eafu1.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-B1gf1tY7.css">
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      <p style="font-family: system-ui, sans-serif; padding: 24px; max-width: 40em">
+        Yoked needs JavaScript to run. Turn it on and reload.
+      </p>
+    </noscript>
+  </body>
+</html>
