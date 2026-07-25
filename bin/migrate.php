@@ -14,6 +14,12 @@ declare(strict_types=1);
  *   php bin/migrate.php            apply pending
  *   php bin/migrate.php --status   list applied/pending, apply nothing
  *   php bin/migrate.php --dry-run  show what would run
+ *   php bin/migrate.php --reset --i-mean-it
+ *                                  DROP every table, then re-apply from
+ *                                  scratch. Development only — it destroys
+ *                                  all data and refuses to run when
+ *                                  config env is 'production' unless
+ *                                  YOKED_ALLOW_RESET=1 is also set.
  *
  * Bootstrap 001 is special: schema_migrations doesn't exist until it runs, so
  * a missing tracker table is treated as "nothing applied yet" rather than an
@@ -27,6 +33,8 @@ $migrationsDir = __DIR__ . '/../database/migrations';
 $args    = array_slice($argv, 1);
 $status  = in_array('--status', $args, true);
 $dryRun  = in_array('--dry-run', $args, true);
+$reset   = in_array('--reset', $args, true);
+$confirm = in_array('--i-mean-it', $args, true);
 
 $files = glob($migrationsDir . '/*.sql') ?: [];
 sort($files, SORT_STRING);   // 001_, 002_, … — zero-padded, so string sort is correct
@@ -54,31 +62,128 @@ function appliedSet(): array
 /**
  * Split a migration file into individual statements.
  *
- * Deliberately simple: strips -- line comments, splits on semicolons. Our
- * migrations are DDL only — no triggers, no stored procedures, no semicolons
- * inside string literals. If that ever changes, this needs a real parser
- * rather than a quiet bug.
+ * A single-pass character scanner, because the naive version (strip lines
+ * beginning with --, explode on ';') breaks on a TRAILING comment that
+ * contains a semicolon:
+ *
+ *     height_cm DECIMAL(5,1) NULL,   -- canonical metric; UI converts
+ *                                                       ^ splits here
+ *
+ * That produced a 1064 on a perfectly valid CREATE TABLE. Handled here:
+ *   * -- and # line comments, inline or full-line
+ *   * C-style block comments
+ *   * single- and double-quoted strings, with backslash escapes
+ *   * backtick-quoted identifiers
+ * Semicolons inside any of those are not statement terminators.
+ *
+ * Still DDL-only: no DELIMITER support, so triggers and stored procedures
+ * would need more than this.
  */
 function splitStatements(string $sql): array
 {
-    $lines = [];
-    foreach (explode("\n", $sql) as $line) {
-        $trimmed = ltrim($line);
-        if (str_starts_with($trimmed, '--')) {
+    $statements = [];
+    $buf   = '';
+    $len   = strlen($sql);
+    $quote = null;      // ', " or ` when inside a quoted run
+    $i     = 0;
+
+    while ($i < $len) {
+        $ch   = $sql[$i];
+        $next = $i + 1 < $len ? $sql[$i + 1] : '';
+
+        if ($quote !== null) {
+            // Inside a quoted run: copy verbatim until the matching close.
+            $buf .= $ch;
+            if ($ch === '\\' && $quote !== '`') {
+                // Escaped character: consume the next one too.
+                if ($next !== '') {
+                    $buf .= $next;
+                    $i += 2;
+                    continue;
+                }
+            } elseif ($ch === $quote) {
+                $quote = null;
+            }
+            $i++;
             continue;
         }
-        $lines[] = $line;
-    }
-    $clean = implode("\n", $lines);
 
-    $out = [];
-    foreach (explode(';', $clean) as $stmt) {
-        $stmt = trim($stmt);
-        if ($stmt !== '') {
-            $out[] = $stmt;
+        // -- comment (SQL requires whitespace after --, but be lenient) or #
+        if (($ch === '-' && $next === '-') || $ch === '#') {
+            while ($i < $len && $sql[$i] !== "\n") {
+                $i++;
+            }
+            $buf .= ' ';   // keep tokens either side apart
+            continue;
         }
+
+        // /* block comment */
+        if ($ch === '/' && $next === '*') {
+            $end = strpos($sql, '*/', $i + 2);
+            $i   = $end === false ? $len : $end + 2;
+            $buf .= ' ';
+            continue;
+        }
+
+        if ($ch === "'" || $ch === '"' || $ch === '`') {
+            $quote = $ch;
+            $buf  .= $ch;
+            $i++;
+            continue;
+        }
+
+        if ($ch === ';') {
+            $stmt = trim($buf);
+            if ($stmt !== '') {
+                $statements[] = $stmt;
+            }
+            $buf = '';
+            $i++;
+            continue;
+        }
+
+        $buf .= $ch;
+        $i++;
     }
-    return $out;
+
+    // Trailing statement with no terminating semicolon.
+    $stmt = trim($buf);
+    if ($stmt !== '') {
+        $statements[] = $stmt;
+    }
+
+    return $statements;
+}
+
+// ---- reset (development only) ----------------------------------------------
+
+if ($reset) {
+    if (!$confirm) {
+        fwrite(STDERR, "--reset destroys every table. Add --i-mean-it to confirm.\n");
+        exit(1);
+    }
+    if (yk_config('env') === 'production' && getenv('YOKED_ALLOW_RESET') !== '1') {
+        fwrite(STDERR, "Refusing to reset: env is 'production'.\n");
+        fwrite(STDERR, "Set YOKED_ALLOW_RESET=1 if this really is a throwaway database.\n");
+        exit(1);
+    }
+
+    // SHOW TABLES returns one column whose name varies by database, so read
+    // the first value of each row. array_map('reset', ...) would work but
+    // warns under PHP 8.4 — reset() needs a reference.
+    $tables = array_map(static fn(array $row): string => (string) current($row),
+                        DB::all('SHOW TABLES'));
+    if ($tables) {
+        echo "dropping " . count($tables) . " table(s)\n";
+        // FK checks off so drop order doesn't matter.
+        DB::pdo()->exec('SET FOREIGN_KEY_CHECKS = 0');
+        foreach ($tables as $t) {
+            DB::pdo()->exec('DROP TABLE IF EXISTS `' . str_replace('`', '', $t) . '`');
+        }
+        DB::pdo()->exec('SET FOREIGN_KEY_CHECKS = 1');
+    } else {
+        echo "no tables to drop\n";
+    }
 }
 
 $applied = appliedSet();
