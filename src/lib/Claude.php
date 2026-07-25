@@ -191,10 +191,12 @@ final class Claude
         array $schema,
         array $opts,
         callable $validator,
-        int $maxAttempts = 3
+        int $maxAttempts = 3,
+        ?callable $merge = null
     ): array {
         $attempts = [];
         $baseMessages = $opts['messages'] ?? [];
+        $best = null;   // the most complete document seen so far
 
         for ($i = 1; $i <= $maxAttempts; $i++) {
             $result = self::json($schema, $opts);
@@ -205,6 +207,19 @@ final class Claude
                 return $result;
             }
 
+            // A retry tends to return LESS than the first attempt: asked to fix
+            // one meal in a 28k-token week, the model answers with a fragment
+            // rather than re-emitting everything. Measured: 28,196 tokens on the
+            // first attempt, then 12,910 and 10,054 on the retries.
+            //
+            // So a caller that knows the document's shape can graft the fragment
+            // onto the best version so far instead of throwing the good work
+            // away. Without a merge hook the old behaviour stands: last answer
+            // wins.
+            if ($merge !== null && $best !== null) {
+                $result['data'] = $merge($best, $result['data']);
+            }
+
             $violations = $validator($result['data']);
             if ($violations === []) {
                 $result['attempts'] = $i;
@@ -212,6 +227,7 @@ final class Claude
                 return $result;
             }
 
+            $best = $result['data'];
             $attempts[] = $violations;
 
             // Record the retry against the call we just logged, so a plan that

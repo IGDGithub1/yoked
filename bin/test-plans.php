@@ -585,16 +585,146 @@ t('accepts a clean minimal plan', function () use ($ids) {
             ],
         ];
     }
+    // Meals are populated rather than left empty. They used to be `[]`, which
+    // was fine while nothing checked for them, but a day with no meals is not a
+    // valid plan for a nutrition coach — Safety::checkWeekIsWhole says so now,
+    // and it is right to. Kept deliberately plain: this test is about the
+    // hard-constraint checks passing on a structurally sound plan, so the meals
+    // exist to be structurally sound and nothing more.
     $days = [];
     for ($i = 0; $i < 7; $i++) {
         $days[] = [
             'date' => date('Y-m-d', strtotime(nextMonday() . " +{$i} days")),
             'target_calories' => 2200, 'target_protein_g' => 180,
-            'target_fat_g' => 70, 'target_carbs_g' => 150, 'meals' => [],
+            'target_fat_g' => 70, 'target_carbs_g' => 150,
+            'meals' => [
+                [
+                    'slot' => 'breakfast', 'kind' => 'specified', 'name' => 'Eggs and oats',
+                    'prep_minutes' => 10,
+                    'calories' => 600, 'protein_g' => 45, 'fat_g' => 22, 'carbs_g' => 50,
+                    'ingredients' => [
+                        ['item' => 'eggs', 'household' => '3 large'],
+                        ['item' => 'rolled oats', 'household' => '1 cup'],
+                    ],
+                ],
+                [
+                    'slot' => 'lunch', 'kind' => 'specified', 'name' => 'Chicken and rice',
+                    'prep_minutes' => 15,
+                    'calories' => 800, 'protein_g' => 70, 'fat_g' => 22, 'carbs_g' => 70,
+                    'ingredients' => [
+                        ['item' => 'chicken breast', 'household' => '6 oz'],
+                        ['item' => 'white rice', 'household' => '1 cup cooked'],
+                    ],
+                ],
+                [
+                    'slot' => 'dinner', 'kind' => 'specified', 'name' => 'Beef and potatoes',
+                    'prep_minutes' => 20,
+                    'calories' => 800, 'protein_g' => 65, 'fat_g' => 26, 'carbs_g' => 30,
+                    'ingredients' => [
+                        ['item' => 'lean ground beef', 'household' => '6 oz'],
+                        ['item' => 'potatoes', 'household' => '2 medium'],
+                    ],
+                ],
+            ],
         ];
     }
     $v = Safety::validatePlan(['sessions' => $sessions, 'days' => $days], $ids['u1']);
     return $v === [] ?: 'clean plan rejected: ' . json_encode($v);
+});
+
+echo "\n4a. retry merge (no API calls)\n";
+
+/** mergePlans is private; it is the retry path's correctness, so test it directly. */
+$merge = function (array $prev, array $next): array {
+    $m = new ReflectionMethod(Plans::class, 'mergePlans');
+    $m->setAccessible(true);
+    return $m->invoke(null, $prev, $next);
+};
+
+t('a partial retry keeps the days it did not mention', function () use ($merge) {
+    // The real failure this exists for: attempt 1 returns a full week, the retry
+    // returns only the day it was asked to fix, and taking the retry wholesale
+    // threw the other six away.
+    $prev = ['days' => [], 'sessions' => []];
+    for ($i = 0; $i < 7; $i++) {
+        $prev['days'][] = ['date' => sprintf('2026-07-%02d', 27 + $i), 'meals' => ['old']];
+    }
+    $next = ['days' => [['date' => '2026-07-28', 'meals' => ['fixed']]]];
+
+    $out = $merge($prev, $next);
+    if (count($out['days']) !== 7) {
+        return 'expected 7 days, got ' . count($out['days']);
+    }
+    foreach ($out['days'] as $d) {
+        $want = $d['date'] === '2026-07-28' ? 'fixed' : 'old';
+        if (($d['meals'][0] ?? null) !== $want) {
+            return "{$d['date']} should carry '{$want}'";
+        }
+    }
+    return true;
+});
+
+t('days come back in date order', function () use ($merge) {
+    $out = $merge(
+        ['days' => [['date' => '2026-07-29'], ['date' => '2026-07-27']]],
+        ['days' => [['date' => '2026-07-28']]]
+    );
+    $dates = array_column($out['days'], 'date');
+    return $dates === ['2026-07-27', '2026-07-28', '2026-07-29']
+        ?: 'wrong order: ' . implode(',', $dates);
+});
+
+t('a committed and an optional session on one date both survive', function () use ($merge) {
+    // Sessions cannot be keyed on date alone (SPEC-coaching §3.3a): keying on
+    // date would silently drop one of the pair, which is data loss that looks
+    // like a smaller week rather than an error.
+    $prev = ['sessions' => [
+        ['date' => '2026-07-27', 'is_committed' => true,  'session_type' => 'strength'],
+        ['date' => '2026-07-27', 'is_committed' => false, 'session_type' => 'conditioning'],
+    ]];
+    $out = $merge($prev, ['sessions' => []]);
+    return count($out['sessions']) === 2
+        ?: 'expected both sessions, got ' . count($out['sessions']);
+});
+
+t('a retry replaces the session it restates, not its sibling', function () use ($merge) {
+    $prev = ['sessions' => [
+        ['date' => '2026-07-27', 'is_committed' => true,  'session_type' => 'strength', 'v' => 'old'],
+        ['date' => '2026-07-27', 'is_committed' => false, 'session_type' => 'conditioning', 'v' => 'old'],
+    ]];
+    $next = ['sessions' => [
+        ['date' => '2026-07-27', 'is_committed' => true, 'session_type' => 'strength', 'v' => 'new'],
+    ]];
+    $out = $merge($prev, $next);
+    if (count($out['sessions']) !== 2) {
+        return 'expected 2 sessions, got ' . count($out['sessions']);
+    }
+    foreach ($out['sessions'] as $s) {
+        $want = ($s['is_committed'] ?? false) ? 'new' : 'old';
+        if (($s['v'] ?? null) !== $want) {
+            return "{$s['session_type']} should be '{$want}'";
+        }
+    }
+    return true;
+});
+
+t('an undated entry is dropped rather than merged under an empty key', function () use ($merge) {
+    $out = $merge(
+        ['days' => [['date' => '2026-07-27', 'meals' => ['keep']]]],
+        ['days' => [['meals' => ['no date']], ['date' => '', 'meals' => ['blank']]]]
+    );
+    return count($out['days']) === 1 && $out['days'][0]['date'] === '2026-07-27'
+        ?: 'undated entries leaked in: ' . json_encode($out['days']);
+});
+
+t('summary fields take the retry value', function () use ($merge) {
+    $out = $merge(
+        ['summary' => 'first', 'expectations' => 'unchanged', 'days' => []],
+        ['summary' => 'corrected']
+    );
+    return ($out['summary'] ?? null) === 'corrected'
+        && ($out['expectations'] ?? null) === 'unchanged'
+        ?: 'scalar merge wrong: ' . json_encode($out);
 });
 
 if ($seedOnly) {

@@ -37,6 +37,67 @@ final class Plans
     public const MAX_OUTPUT_TOKENS = 64000;
 
     /**
+     * Graft a retry's answer onto the previous, more complete one.
+     *
+     * A retry that is told "the Tuesday lunch has no ingredients" answers with
+     * the corrected Tuesday, not with the whole week — measured at 10k-13k
+     * output tokens against the 28k the first attempt produced. Taking the last
+     * answer wholesale therefore throws away six good days to fix one meal, and
+     * the result fails validation for being incomplete, which is a worse outcome
+     * than the single violation it set out to fix.
+     *
+     * So entries are merged by identity: anything the retry supplies wins for
+     * that identity, anything it omits is kept from the previous version. A plan
+     * is a set of dated entries rather than an ordered list, so there is no
+     * positional meaning to lose.
+     *
+     * A day's identity is its date. A SESSION's is not: an optional session sits
+     * alongside a committed one on the same date (SPEC-coaching §3.3a), so date
+     * alone would silently drop one of the pair. Identity is therefore the date
+     * plus the commitment flag plus the type.
+     *
+     * Scalar and summary fields take the retry's value when it gives one, since
+     * a correction may legitimately restate the week's expectations.
+     */
+    private static function mergePlans(array $prev, array $next): array
+    {
+        $merged = array_merge($prev, $next);
+
+        $dayKey = static fn(array $r): string => (string) ($r['date'] ?? '');
+
+        // Committed and optional sessions coexist on one date, and so can a
+        // strength session and a separate conditioning one.
+        $sessionKey = static fn(array $r): string => implode('|', [
+            (string) ($r['date'] ?? ''),
+            ($r['is_committed'] ?? false) ? 'c' : 'o',
+            (string) ($r['session_type'] ?? ''),
+        ]);
+
+        foreach (['days' => $dayKey, 'sessions' => $sessionKey] as $field => $keyOf) {
+            $byId = [];
+            // Entries in $prev then $next, so the retry's version of a given
+            // identity overwrites the earlier one and new identities are added.
+            foreach ([$prev[$field] ?? [], $next[$field] ?? []] as $rows) {
+                foreach ($rows as $row) {
+                    // An undated entry cannot be merged — there is nothing to
+                    // match it on — so it is dropped here and the validator
+                    // reports the resulting gap.
+                    if (!is_array($row) || ($row['date'] ?? '') === '') {
+                        continue;
+                    }
+                    $byId[$keyOf($row)] = $row;
+                }
+            }
+            if ($byId !== []) {
+                ksort($byId);   // chronological; the model's order is not load-bearing
+                $merged[$field] = array_values($byId);
+            }
+        }
+
+        return $merged;
+    }
+
+    /**
      * Generate and persist a week.
      *
      * @param string $weekStart  a Monday, YYYY-MM-DD
@@ -79,7 +140,10 @@ final class Plans
                 ]],
             ],
             fn(array $plan): array => Safety::validatePlan($plan, $userId),
-            3
+            3,
+            // Graft a retry's answer onto the previous one rather than replacing
+            // it. See mergePlans, and the note in Claude::generateValidated.
+            self::mergePlans(...)
         );
 
         if (!$result['ok']) {
