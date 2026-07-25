@@ -7,7 +7,9 @@ Small, invite-only, PWA on PHP 8 / MySQL shared hosting.
 
 ## Status
 
-**Specification.** No implementation yet. Scope is settled; the schema is next.
+**Specification + schema.** Scope is settled. The schema is written (38 tables, four
+migrations) but **has not been executed** — no MySQL in the dev environment yet, so
+running `bin/migrate.php` against a real database is the next step.
 
 ## The loop
 
@@ -31,6 +33,15 @@ Read in this order:
 | [SPEC-safety.md](docs/SPEC-safety.md) | Per-user constraints, hard/soft tiers, enforcement. |
 | [SPEC-coaching.md](docs/SPEC-coaching.md) | Generation, observation, vetoes, chat, adaptation, buddy system. |
 | [sample-week.md](docs/sample-week.md) | A worked example — two paired users, week 5. Review artifact. |
+| [SCHEMA.md](docs/SCHEMA.md) | What the 38 tables are and why. |
+
+## Setup
+
+```sh
+cp src/config.example.php src/config.php   # then fill in db creds + API key
+php bin/migrate.php --status               # what's applied, what's pending
+php bin/migrate.php                        # apply pending migrations
+```
 
 ## Load-bearing decisions
 
