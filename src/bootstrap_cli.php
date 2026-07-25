@@ -51,3 +51,8 @@ set_exception_handler(function (Throwable $e): void {
 });
 
 require YK_SRC . '/lib/DB.php';
+// Scheduling is needed by cron and by every suite that reasons about a user's
+// week, and it has no dependencies of its own.
+require YK_SRC . '/lib/Validate.php';
+require YK_SRC . '/lib/Schedule.php';
+require YK_SRC . '/lib/Baseline.php';

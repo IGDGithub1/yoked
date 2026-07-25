@@ -25,7 +25,22 @@ export default function App() {
         setState({ status: 'anon' })
         return
       }
-      setState({ status: 'in', user: me.user, next: me.next })
+      setState({ status: 'in', user: me.user, next: me.next, baseline: me.baseline })
+
+      /*
+       * Report the timezone, but only when it differs from what is on file.
+       *
+       * The weekly slots fire in local time, so the server needs this to know when
+       * "Saturday 18:00" is. Sent on boot rather than asked in the quiz because
+       * the browser knows it accurately and it self-corrects after a move.
+       *
+       * Fire-and-forget on purpose: this is housekeeping, and a failure must not
+       * stop a user reaching their day. It will be retried on the next boot.
+       */
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+      if (tz && tz !== me.user?.timezone) {
+        api.setTimezone(tz).catch(() => {})
+      }
     } catch {
       setState({ status: 'offline' })
     }
@@ -33,8 +48,22 @@ export default function App() {
 
   useEffect(() => { boot() }, [boot])
 
-  /** After sign-in or sign-up, the response already carries user and next. */
-  const signedIn = (body) => setState({ status: 'in', user: body.user, next: body.next })
+  /**
+   * After sign-in or sign-up.
+   *
+   * The login response carries user and next but NOT the baseline window, so this
+   * re-boots rather than setting state from it directly. Without that, the
+   * countdown was missing for the whole first session and only appeared after a
+   * manual reload — the worst possible time for it to be absent, since a user in
+   * observation has nothing else on screen telling them what is happening.
+   *
+   * Setting the user first means the app renders immediately and boot() fills in
+   * the rest, rather than flashing the loading yolk again after a successful login.
+   */
+  const signedIn = (body) => {
+    setState({ status: 'in', user: body.user, next: body.next })
+    boot()
+  }
 
   async function signOut() {
     try {
@@ -110,7 +139,16 @@ export default function App() {
 
   // Past onboarding, the app IS the logging screen. There is no dashboard
   // between them: a user who is set up came here to log something.
-  return <Today user={state.user} onSignOut={signOut} onReview={review} />
+  return (
+    <Today
+      user={state.user}
+      /* Null unless mid-baseline. Drives the countdown and explains the absence
+         of targets. */
+      baseline={state.baseline}
+      onSignOut={signOut}
+      onReview={review}
+    />
+  )
 }
 
 /**

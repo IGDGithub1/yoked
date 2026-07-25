@@ -171,6 +171,33 @@
   line-height: 1;
 }
 
+/* ---- baseline countdown ------------------------------------------------ */
+/*
+ * Fourteen pips, centred under the date. The onboarding rail's 24px pips would be
+ * 336px of pips before gaps, which overflows a 360px phone — so they shrink and
+ * flex here rather than getting their own shape. Same component, same meaning,
+ * different density.
+ */
+/* Its own block below the day nav rather than wedged between the arrows. */
+.baseline-progress { text-align: center; }
+
+.baseline-progress .rail {
+  justify-content: center;
+  gap: 3px;
+}
+.baseline-progress .rail .pip {
+  width: auto;
+  flex: 1 1 0;
+  max-width: 18px;
+  height: 3px;
+}
+/* The current day stays wider than the rest, which is what makes "where am I"
+   readable at a glance without counting. */
+.baseline-progress .rail .pip[data-state='now'] {
+  width: auto;
+  max-width: 26px;
+}
+
 /* ---- the check-in scale ------------------------------------------------ */
 /*
  * Five buttons in a row, equal width. A slider was tried in the original and is

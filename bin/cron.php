@@ -176,8 +176,9 @@ function releaseStaleClaims(): int
  */
 function usersDueForPlan(?int $onlyUser): array
 {
-    $sql = 'SELECT u.id, u.display_name,
-                   p.plan_generation_weekday, p.plan_generation_hour
+    $sql = 'SELECT u.id, u.display_name, u.onboarding_state,
+                   u.baseline_starts_on, u.baseline_ends_on,
+                   p.plan_generation_weekday, p.plan_generation_hour, p.timezone
             FROM users u
             JOIN profiles p ON p.user_id = u.id
             WHERE u.status = "active"
@@ -191,38 +192,66 @@ function usersDueForPlan(?int $onlyUser): array
     return DB::all($sql, $params);
 }
 
-/** The Monday of the week a plan generated now should cover. */
-function targetWeekStart(): string
+/**
+ * The Monday of the week a plan generated now should cover, in the user's zone.
+ *
+ * Per-user rather than global because the answer differs across zones: at
+ * 2026-07-26 23:00 UTC it is already Monday in Sydney, so "next monday" there is
+ * a week later than it is in London. Getting this from UTC would hand an
+ * Australian user a plan for the week after the one they are about to start.
+ */
+function targetWeekStart(?string $tz): string
 {
     // Generation runs late in the week for the week ahead. On a Monday through
     // Saturday run this is still "next Monday"; on a Sunday run it is tomorrow.
-    return date('Y-m-d', strtotime('next monday'));
+    return Schedule::nextMonday($tz);
 }
 
 function jobWeeklyPlan(?int $onlyUser, bool $dryRun): array
 {
     global $ignoreSchedule;
 
-    $week    = targetWeekStart();
     $due     = usersDueForPlan($onlyUser);
-    $results = ['generated' => 0, 'skipped' => 0, 'failed' => 0];
-
-    $nowWeekday = (int) gmdate('N');
-    $nowHour    = (int) gmdate('G');
+    $results = ['generated' => 0, 'skipped' => 0, 'observing' => 0, 'failed' => 0];
 
     foreach ($due as $user) {
         $userId = (int) $user['id'];
         $name   = $user['display_name'];
+        $tz     = $user['timezone'] ?? null;
 
-        // Is it their slot yet? Compare weekday first, then hour on the day.
+        // Everything below is asked in the USER's local time. 18:00 UTC is
+        // Saturday lunchtime in Chicago and 06:00 Sunday in Sydney, so a slot
+        // picked because it is "late in the weekend" only reads that way in
+        // Europe.
+        $week = targetWeekStart($tz);
+
+        /*
+         * Week 1 of the baseline gets NO plan (§9: "Week 1: pure observation. Log
+         * food, activity, daily check-ins. No prescription.").
+         *
+         * This guard is the whole reason the baseline needed dates. Before it,
+         * cron treated baseline and active users identically and a brand-new user
+         * got a full prescribed week on their first Sunday, which is precisely
+         * what the observation period exists to avoid.
+         */
+        if (Baseline::inObservationWeek($user, $tz)) {
+            $p = Baseline::progress($user, $tz);
+            $where = $p === null
+                ? 'baseline, no dates'
+                : ($p['started'] ? "baseline day {$p['day']} of {$p['total']}" : 'baseline not started');
+            say("  {$name}: observing ({$where}); no plan yet", false);
+            $results['observing']++;
+            continue;
+        }
+
+        // Is it their slot yet, where they are?
         $wantDay  = (int) $user['plan_generation_weekday'];
         $wantHour = (int) $user['plan_generation_hour'];
-        $isTime   = $ignoreSchedule
-                 || $nowWeekday > $wantDay
-                 || ($nowWeekday === $wantDay && $nowHour >= $wantHour);
+        $isTime   = $ignoreSchedule || Schedule::slotPassed($tz, $wantDay, $wantHour);
 
         if (!$isTime) {
-            say("  {$name}: not yet (wants day {$wantDay} hour {$wantHour})", false);
+            say("  {$name}: not yet (wants day {$wantDay} hour {$wantHour} "
+                . ($tz ?? 'UTC') . ')', false);
             $results['skipped']++;
             continue;
         }
@@ -235,8 +264,26 @@ function jobWeeklyPlan(?int $onlyUser, bool $dryRun): array
             continue;
         }
 
+        /*
+         * Which KIND of plan this is.
+         *
+         * 'provisional' for the week-2 plan a baseline user gets so they have
+         * something to follow while the second week sharpens the picture (§9).
+         * 'initial' for a user's genuine first real plan. The enum has had both
+         * values since 003 and nothing ever wrote the second — every generation
+         * was recorded as 'initial', so a week-5 plan was indistinguishable from
+         * a week-1 one in the version history.
+         *
+         * Plans generated FROM a check-in are reason = 'check_in' and are not this
+         * job's business; that path arrives with the check-in conversation.
+         */
+        $isBaseline = ($user['onboarding_state'] ?? '') === 'baseline';
+        $reason     = $isBaseline
+            ? 'provisional'
+            : (Plans::hasEverHadPlan($userId) ? 'check_in' : 'initial');
+
         if ($dryRun) {
-            say("  {$name}: WOULD generate week of {$week}");
+            say("  {$name}: WOULD generate week of {$week} (reason={$reason})");
             $results['generated']++;
             continue;
         }
@@ -249,10 +296,10 @@ function jobWeeklyPlan(?int $onlyUser, bool $dryRun): array
         }
 
         $started = microtime(true);
-        say("  {$name}: generating week of {$week} …");
+        say("  {$name}: generating week of {$week} (reason={$reason}) …");
 
         try {
-            $result = Plans::generateWeek($userId, $week, 'initial');
+            $result = Plans::generateWeek($userId, $week, $reason);
 
             if ($result['ok']) {
                 $secs = round(microtime(true) - $started, 1);
@@ -288,7 +335,87 @@ function jobWeeklyPlan(?int $onlyUser, bool $dryRun): array
 }
 
 // ---------------------------------------------------------------------------
-// Job 2 — weekly check-in creation
+// Job 2 — graduate finished baselines
+// ---------------------------------------------------------------------------
+
+/**
+ * Move users whose two weeks are up from 'baseline' to 'active'.
+ *
+ * Nothing did this before: 'baseline' was a bare flag with no dates, so a user
+ * who finished observing stayed in that state forever. Cron owns the transition
+ * rather than the app doing it on next login, because the whole point of the
+ * schedule is that it works for a user who has not opened the app.
+ *
+ * Runs BEFORE plan generation in the sweep order, deliberately: a user who
+ * graduates this morning should have their first real plan generated by the same
+ * sweep rather than waiting a week for the next one.
+ *
+ * No Claude call, no cron_runs claim. It is one guarded UPDATE whose WHERE clause
+ * is its own idempotency — two concurrent sweeps cannot both win it.
+ */
+function jobBaselineGraduation(?int $onlyUser, bool $dryRun): array
+{
+    $results = ['graduated' => 0, 'waiting' => 0, 'failed' => 0];
+
+    $sql = 'SELECT u.id, u.display_name, u.onboarding_state,
+                   u.baseline_starts_on, u.baseline_ends_on, p.timezone
+            FROM users u
+            JOIN profiles p ON p.user_id = u.id
+            WHERE u.status = "active"
+              AND u.onboarding_state = "baseline"
+              AND u.baseline_ends_on IS NOT NULL';
+    $params = [];
+    if ($onlyUser !== null) {
+        $sql .= ' AND u.id = ?';
+        $params[] = $onlyUser;
+    }
+
+    foreach (DB::all($sql, $params) as $user) {
+        $userId = (int) $user['id'];
+        $name   = $user['display_name'];
+        $tz     = $user['timezone'] ?? null;
+
+        // "Is it over?" is asked in the user's own zone: the window is stored as
+        // local dates, so comparing against a UTC today would graduate an
+        // Australian user a day early and an American one a day late.
+        if (!Baseline::isComplete($user, $tz)) {
+            $p = Baseline::progress($user, $tz);
+            // "day 0 of 14" is not a thing. Before the window opens the honest
+            // report is when it starts, not a clamped day count.
+            $where = ($p !== null && !$p['started'])
+                ? "baseline opens {$p['starts_on']}"
+                : 'baseline day ' . ($p['day'] ?? '?') . ' of ' . ($p['total'] ?? '?');
+            say("  {$name}: {$where}, not finished", false);
+            $results['waiting']++;
+            continue;
+        }
+
+        if ($dryRun) {
+            say("  {$name}: WOULD graduate to active (baseline ended {$user['baseline_ends_on']})");
+            $results['graduated']++;
+            continue;
+        }
+
+        try {
+            if (Baseline::activate($userId)) {
+                say("  {$name}: baseline complete, now active");
+                $results['graduated']++;
+            } else {
+                // Another sweep got there first, which is fine.
+                $results['waiting']++;
+            }
+        } catch (Throwable $e) {
+            say("  {$name}: ERROR — " . $e->getMessage());
+            error_log('[yoked cron] graduation failed for user ' . $userId . ': ' . $e->getMessage());
+            $results['failed']++;
+        }
+    }
+
+    return $results;
+}
+
+// ---------------------------------------------------------------------------
+// Job 3 — weekly check-in creation
 // ---------------------------------------------------------------------------
 
 /**
@@ -401,9 +528,17 @@ if ($released > 0) {
     say("released {$released} stale claim(s) from a cron that died mid-job");
 }
 
+/*
+ * Order matters here, and it is not alphabetical.
+ *
+ * Graduation runs FIRST so a user whose two weeks ended overnight is 'active' by
+ * the time plan generation looks at them, and gets their first real plan in the
+ * same sweep rather than waiting a week for the next one.
+ */
 $jobs = [
-    'weekly_plan'    => fn() => jobWeeklyPlan($onlyUser, $dryRun),
-    'weekly_checkin' => fn() => jobWeeklyCheckin($onlyUser, $dryRun),
+    'baseline_graduation' => fn() => jobBaselineGraduation($onlyUser, $dryRun),
+    'weekly_plan'         => fn() => jobWeeklyPlan($onlyUser, $dryRun),
+    'weekly_checkin'      => fn() => jobWeeklyCheckin($onlyUser, $dryRun),
 ];
 
 $exit = 0;

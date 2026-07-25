@@ -21,7 +21,8 @@ against a generated week.
 | API tier | ✅ `api/index.php`, global CSRF, session auth |
 | Onboarding UI | ✅ the quiz, tier confirmation, answer review |
 | Logging | ✅ food (search, barcode, favorites), training incl. free-logging, check-in |
-| Nudges, chat, weekly check-in | ⬜ schema exists, cron stub only |
+| Baseline lifecycle | ✅ two weeks, Monday-aligned, per-user local time, graduates to active |
+| Weekly check-in, nudges, chat | ⬜ schema exists; cron opens the check-in but nothing answers it |
 
 `bin/test-plans.php` seeds the two users from the specs, generates their weeks,
 and asserts the output against the spec decisions.
@@ -78,6 +79,8 @@ php bin/envcheck.php          # PHP version, extensions, outbound HTTPS
 php bin/dbcheck.php           # connection, table count, FK count
 php bin/smoketest.php         # 22 schema assertions, rolled back
 php bin/test-goals.php        # 46 evaluator assertions incl. keto parity
+php bin/test-schedule.php     # 21 date assertions; no DB, no API
+php bin/test-baseline.php     # 24 lifecycle assertions: observation, graduation
 php bin/test-claude.php       # API client; --offline for shape checks only
 php bin/test-logging.php      # 45 assertions over real HTTP: food, training, check-in
 php bin/test-plans.php        # end-to-end generation; --seed-only to skip API
@@ -85,14 +88,16 @@ php bin/test-plans.php        # end-to-end generation; --seed-only to skip API
 
 The logging UI is driven in a real browser, because the client/server contract is
 where the interesting failures live and a build only proves it compiles. Seed the
-fixture first — it has to be seeded on the day you run it, since the screen opens
-on today and the fixture's plan week must contain it:
+fixtures first. They have to be seeded on the day you run them, since the screen
+opens on today and the plan week must contain it:
 
 ```sh
-php bin/seed-uitest.php       # a user with a plan for TODAY (re-runnable)
+php bin/seed-uitest.php       # two users, re-runnable:
+                              #   uitest_logging  active, plan for TODAY
+                              #   uitest_baseline day 3 of 14, no plan
 ```
 ```powershell
-cd app; npm run drive:logging   # 63 checks: log it, reload, confirm it stuck
+cd app; npm run drive:logging   # 80 checks: log it, reload, confirm it stuck
 ```
 
 Re-seed before each run — the suite mutates the fixture, and it refuses to start

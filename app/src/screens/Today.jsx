@@ -24,7 +24,7 @@ import Yolk from '../components/Yolk'
  * because they are separate concerns server-side, but they are always wanted
  * together, so they are fetched in parallel and rendered as one thing.
  */
-export default function Today({ user, onSignOut, onReview }) {
+export default function Today({ user, baseline, onSignOut, onReview }) {
   const [date, setDate] = useState(todayDate)
   const [nutrition, setNutrition] = useState(null)
   const [training, setTraining] = useState(null)
@@ -114,6 +114,12 @@ export default function Today({ user, onSignOut, onReview }) {
           </button>
         </div>
 
+        {/* Below the day nav, not inside it: sitting between the two arrows the
+            rail ran right up against them and read as part of the control. Only
+            while observing, and only on today, since on an earlier day it would
+            be counting from the wrong end. */}
+        {baseline && isToday && <BaselineProgress baseline={baseline} />}
+
         {!isToday && (
           <button type="button" className="btn btn--quiet" onClick={() => setDate(todayDate())}>
             Back to today
@@ -170,6 +176,52 @@ export default function Today({ user, onSignOut, onReview }) {
         )}
       </div>
     </>
+  )
+}
+
+/**
+ * How far through the two weeks, and when the plan lands.
+ *
+ * The observation period is the least interesting part of the app to be in: you
+ * log, and nothing answers back. A visible finish line is the smallest thing that
+ * makes it feel like progress rather than a void.
+ *
+ * Says when the plan arrives, not why the two weeks matter. The user needs the
+ * date; they do not need the mechanism.
+ */
+function BaselineProgress({ baseline }) {
+  const { day, total, days_left: left, started } = baseline
+
+  if (!started) {
+    // Signed up mid-week. Their logging still counts as practice, and the clock
+    // has not started, so a day count would read as negative.
+    return (
+      <p className="tiny muted" style={{ margin: '4px 0 0' }}>
+        Your two weeks start Monday. Log anything you like before then.
+      </p>
+    )
+  }
+
+  return (
+    <div className="baseline-progress">
+      <div className="rail" aria-hidden="true">
+        {/* One pip per day, echoing the onboarding rail rather than inventing a
+            second progress language. */}
+        {Array.from({ length: total }, (_, i) => (
+          <span
+            key={i}
+            className="pip"
+            data-state={i + 1 < day ? 'done' : i + 1 === day ? 'now' : ''}
+          />
+        ))}
+      </div>
+      <p className="tiny muted num" style={{ margin: '4px 0 0' }}>
+        Day {day} of {total}
+        {left > 0
+          ? ` · your plan arrives in ${left} ${left === 1 ? 'day' : 'days'}`
+          : ' · your plan is being built'}
+      </p>
+    </div>
   )
 }
 

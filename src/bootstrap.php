@@ -94,6 +94,8 @@ session_start();
 require YK_SRC . '/lib/DB.php';
 require YK_SRC . '/lib/Response.php';
 require YK_SRC . '/lib/Validate.php';
+require YK_SRC . '/lib/Schedule.php';
+require YK_SRC . '/lib/Baseline.php';
 require YK_SRC . '/lib/Auth.php';
 require YK_SRC . '/lib/Csrf.php';
 require YK_SRC . '/lib/RateLimit.php';

@@ -1012,6 +1012,22 @@ final class Plans
         );
     }
 
+    /**
+     * Has this user ever had a plan of any kind?
+     *
+     * Decides whether a generation is their genuine first ('initial') or a
+     * subsequent week. Counts superseded and provisional versions too: a user who
+     * had a provisional plan during the baseline is not receiving an "initial"
+     * plan afterwards, and reason is meant to describe what CAUSED the version.
+     */
+    public static function hasEverHadPlan(int $userId): bool
+    {
+        return DB::one(
+            'SELECT 1 AS x FROM plan_versions WHERE user_id = ? LIMIT 1',
+            [$userId]
+        ) !== null;
+    }
+
     /** A full plan, hydrated for display. */
     public static function hydrate(int $planVersionId): ?array
     {

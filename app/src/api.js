@@ -83,6 +83,16 @@ export const api = {
 
   health: () => get('health'),
 
+  /**
+   * Tell the server where the user is.
+   *
+   * Sent on boot rather than asked in the quiz: the browser already knows this
+   * accurately, and it self-corrects when someone travels. It is the only place a
+   * timezone changes behaviour rather than presentation — the weekly slots fire in
+   * local time, so "Saturday 18:00" means Saturday evening where the user is.
+   */
+  setTimezone: (timezone) => put('timezone', { timezone }),
+
   register: (fields) => post('register', fields),
   login: (identifier, password) => post('login', { identifier, password }),
   logout: () => post('logout'),

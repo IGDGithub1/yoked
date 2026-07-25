@@ -91,18 +91,53 @@ $router->add('GET', 'me', function (): void {
 
     Auth::touch((int) $user['id']);
 
+    $userId = (int) $user['id'];
+    $tz     = Baseline::timezoneOf($userId);
+
     Response::json([
         'authenticated' => true,
         'csrf'          => Csrf::token(),
         'user' => [
-            'id'               => (int) $user['id'],
+            'id'               => $userId,
             'username'         => $user['username'],
             'display_name'     => $user['display_name'],
             'email'            => $user['email'],
             'role'             => $user['role'],
             'onboarding_state' => $user['onboarding_state'],
+            // Echoed back so the client can tell whether the zone it detected is
+            // the one on file, and skip the PUT when it already matches.
+            'timezone'         => $tz,
         ],
         // The SPA routes on this: where to send the user next.
-        'next' => Onboarding::nextStep((int) $user['id'], $user['onboarding_state']),
+        'next' => Onboarding::nextStep($userId, $user['onboarding_state']),
+        // Null unless the user is mid-baseline. Drives the countdown, and tells
+        // the client why there are no targets yet.
+        'baseline' => Baseline::progress($user, $tz),
     ]);
+});
+
+/**
+ * PUT /api/timezone — the browser tells us where the user is.
+ *
+ * Not an onboarding question: the browser already knows this accurately and a
+ * 10-section quiz does not need an eleventh thing to ask. Sent on every boot
+ * rather than once, so it self-corrects when someone travels or moves.
+ *
+ * This is the only place a timezone changes behaviour rather than presentation.
+ * Storage stays UTC everywhere; the zone decides WHEN a weekly slot fires, and
+ * "Saturday 18:00" has to mean Saturday evening where the user actually is.
+ */
+$router->add('PUT', 'timezone', function (): void {
+    $user = Auth::require();
+    $b    = Response::body();
+
+    $tz = Validate::timezone($b['timezone'] ?? null);
+    if ($tz === null) {
+        // A name PHP cannot construct a DateTimeZone from is no better than no
+        // name at all, and storing it would break every schedule read later.
+        Response::error('That is not a timezone this server recognises.', 422);
+    }
+
+    DB::run('UPDATE profiles SET timezone = ? WHERE user_id = ?', [$tz, (int) $user['id']]);
+    Response::json(['ok' => true, 'timezone' => $tz]);
 });

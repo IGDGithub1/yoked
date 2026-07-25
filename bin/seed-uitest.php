@@ -21,16 +21,27 @@ require __DIR__ . '/../src/bootstrap_cli.php';
 const UI_USER = 'uitest_logging';
 const UI_PASS = 'a-long-enough-passphrase';
 
+/**
+ * A second fixture, mid-baseline, so the observation UI can be driven too.
+ *
+ * The main fixture is 'active' with a live plan, which is the right shape for
+ * logging but shows none of the baseline countdown. This one sits on day 3 of 14
+ * with no plan at all, which is what a real user's first week actually looks like.
+ */
+const UI_BASE_USER = 'uitest_baseline';
+
 $drop = in_array('--drop', array_slice($argv, 1), true);
 
 // ON DELETE CASCADE from users carries the plan, the logged days and the rest.
-DB::run('DELETE FROM users WHERE username = ?', [UI_USER]);
+DB::run('DELETE FROM users WHERE username IN (?, ?)', [UI_USER, UI_BASE_USER]);
 // Login is rate limited per identifier, and a re-seed mid-testing would
 // otherwise inherit the previous run's failed attempts.
-DB::run("DELETE FROM rate_limits WHERE bucket LIKE ?", ['login:%' . UI_USER . '%']);
+foreach ([UI_USER, UI_BASE_USER] as $u) {
+    DB::run('DELETE FROM rate_limits WHERE bucket LIKE ?', ['login:%' . $u . '%']);
+}
 
 if ($drop) {
-    echo "removed " . UI_USER . "\n";
+    echo 'removed ' . UI_USER . ' and ' . UI_BASE_USER . "\n";
     exit(0);
 }
 
@@ -137,4 +148,40 @@ $seed = DB::tx(function () use ($today, $monday): array {
 printf(
     "seeded %s / %s — user #%d, plan #%d, prescribed for %s\n",
     UI_USER, UI_PASS, $seed['user_id'], $seed['plan_id'], $today
+);
+
+// ---- the baseline fixture --------------------------------------------------
+
+// Day 3 of 14: far enough in that the countdown has something to show, still
+// inside week 1 where nothing is prescribed.
+$blStart = date('Y-m-d', strtotime($today . ' -2 days'));
+$blEnd   = date('Y-m-d', strtotime($blStart . ' +14 days'));
+
+$blUser = DB::tx(function () use ($blStart, $blEnd): int {
+    $userId = DB::insert(
+        'INSERT INTO users (username, display_name, email, password_hash,
+                            onboarding_state, baseline_starts_on, baseline_ends_on)
+         VALUES (?, ?, ?, ?, "baseline", ?, ?)',
+        [UI_BASE_USER, 'Baseline Test', UI_BASE_USER . '@example.test',
+         password_hash(UI_PASS, PASSWORD_DEFAULT), $blStart, $blEnd]
+    );
+    // A timezone, so the schedule reads local rather than falling back to UTC.
+    DB::run(
+        'INSERT INTO profiles (user_id, timezone) VALUES (?, "America/New_York")',
+        [$userId]
+    );
+    $preset = DB::one("SELECT id FROM goal_presets WHERE slug = 'recomp'");
+    DB::run(
+        'INSERT INTO goals (user_id, primary_goal, goal_preset_id, success_statement, status)
+         VALUES (?, "recomp", ?, "Seeded for UI testing.", "active")',
+        [$userId, $preset === null ? null : (int) $preset['id']]
+    );
+    // Deliberately NO plan_versions row: week 1 is pure observation (§9), and the
+    // absence is the thing being tested.
+    return $userId;
+});
+
+printf(
+    "seeded %s / %s — user #%d, baseline %s to %s (day 3 of 14, no plan)\n",
+    UI_BASE_USER, UI_PASS, $blUser, $blStart, $blEnd
 );

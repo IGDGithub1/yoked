@@ -270,11 +270,37 @@ final class Onboarding
             return ['ok' => false, 'error' => 'Some required questions are still unanswered.',
                     'progress' => $progress];
         }
+
+        /*
+         * The window is stamped here, Monday-aligned in the user's own timezone.
+         *
+         * Not the signup day: someone who finishes the quiz on a Thursday would
+         * otherwise have a "week 1" of four days, and week 1 is the week that gets
+         * no prescription at all (§9). A short one distorts the whole baseline.
+         * The Thursday-to-Sunday logging still happens and is still stored, it
+         * just does not count toward the two weeks.
+         *
+         * Local zone matters because "next Monday" differs by up to a day across
+         * zones, and this date drives when the first plan appears.
+         */
+        $tz     = Baseline::timezoneOf($userId);
+        $starts = Schedule::nextMonday($tz);
+        $ends   = date('Y-m-d', strtotime($starts . ' +' . Baseline::DAYS . ' days'));
+
+        // Guarded on the current state so a double-tap cannot restart the clock
+        // of a user who is already observing.
         DB::run(
-            'UPDATE users SET onboarding_state = "baseline" WHERE id = ? AND onboarding_state = "in_progress"',
-            [$userId]
+            'UPDATE users
+                SET onboarding_state = "baseline",
+                    baseline_starts_on = ?, baseline_ends_on = ?
+              WHERE id = ? AND onboarding_state = "in_progress"',
+            [$starts, $ends, $userId]
         );
-        return ['ok' => true, 'error' => null, 'progress' => $progress];
+
+        return [
+            'ok' => true, 'error' => null, 'progress' => $progress,
+            'baseline' => ['starts_on' => $starts, 'ends_on' => $ends],
+        ];
     }
 
     // ---- projection --------------------------------------------------------

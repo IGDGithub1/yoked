@@ -927,6 +927,139 @@ await check('the console is clean', async () => {
 
 await page.screenshot({ path: shot('logging-today.png'), fullPage: true })
 
+// ---- timezone and the baseline countdown -----------------------------------
+
+console.log('\n11. timezone and baseline')
+
+await check('the browser timezone reaches the server', async () => {
+  // Sent on boot, not asked in the quiz. The weekly slots fire in local time, so
+  // without this "Saturday 18:00" would mean Saturday in London for everyone.
+  const me = await page.evaluate(async () => {
+    const res = await fetch('/api/me', {
+      headers: { accept: 'application/json' }, credentials: 'same-origin',
+    })
+    return res.json()
+  })
+  const wanted = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone)
+  return me.user?.timezone === wanted
+    ? true
+    : `server has "${me.user?.timezone}", browser reports "${wanted}"`
+})
+
+await check('an active user gets no baseline countdown', async () => {
+  const me = await page.evaluate(async () => {
+    const res = await fetch('/api/me', {
+      headers: { accept: 'application/json' }, credentials: 'same-origin',
+    })
+    return res.json()
+  })
+  if (me.baseline !== null) return `baseline payload was ${JSON.stringify(me.baseline)}`
+  const body = await page.locator('body').innerText()
+  return /Day \d+ of 14/.test(body) ? 'a countdown was shown to an active user' : true
+})
+
+// The observing user is a separate fixture: the main one is 'active' with a live
+// plan, which shows none of this.
+const obs = await ctx.newPage()
+await obs.goto(BASE, { waitUntil: 'networkidle' })
+await obs.evaluate(() => {
+  localStorage.removeItem('yoked.sections')
+  localStorage.removeItem('yoked.theme')
+})
+
+await check('a mid-baseline user signs in', async () => {
+  // Sign out of the active fixture's session first: the context shares cookies.
+  await obs.evaluate(async () => {
+    const csrf = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
+    await fetch('/api/logout', {
+      method: 'POST',
+      headers: { 'x-csrf-token': csrf.csrf, accept: 'application/json' },
+      credentials: 'same-origin',
+    })
+  })
+  await obs.reload({ waitUntil: 'networkidle' })
+
+  const form = obs.locator('form.card')
+  await form.waitFor({ timeout: 20000 })
+  await form.locator('input[type="text"]').first().fill('uitest_baseline')
+  await form.locator('input[type="password"]').first().fill(PASS)
+  await form.getByRole('button', { name: /^sign in$/i }).click()
+  await obs.getByRole('heading', { name: /how are you today/i }).waitFor({ timeout: 20000 })
+})
+
+await check('the countdown shows the day and when the plan arrives', async () => {
+  const body = await obs.locator('body').innerText()
+  if (!/Day 3 of 14/.test(body)) return `no day count: ${body.slice(0, 300)}`
+
+  // Days remaining is asserted against the server rather than hardcoded: "day 3
+  // of 14" leaves 12 days, not 11, because day 3 has not finished yet. Deriving
+  // it here keeps the test honest whichever day the fixture is seeded on.
+  const me = await obs.evaluate(async () => {
+    const r = await fetch('/api/me', {
+      headers: { accept: 'application/json' }, credentials: 'same-origin',
+    })
+    return r.json()
+  })
+  const left = me.baseline?.days_left
+  return new RegExp(`plan arrives in ${left} days`).test(body)
+    ? true
+    : `server says ${left} days left, screen says "${body.match(/Day 3 of 14[^\n]*/)?.[0]}"`
+})
+
+await check('the countdown rail marks the days elapsed', async () => {
+  const done = await obs.locator('.baseline-progress .pip[data-state="done"]').count()
+  const now = await obs.locator('.baseline-progress .pip[data-state="now"]').count()
+  const all = await obs.locator('.baseline-progress .pip').count()
+  if (all !== 14) return `${all} pips, expected 14`
+  // Exactly one "now" pip is what makes "where am I" readable without counting.
+  if (now !== 1) return `${now} current-day pips, expected 1`
+
+  // Elapsed = day - 1, derived from the server so the fixture can be seeded on
+  // any day without this needing an edit.
+  const me = await obs.evaluate(async () => {
+    const r = await fetch('/api/me', {
+      headers: { accept: 'application/json' }, credentials: 'same-origin',
+    })
+    return r.json()
+  })
+  const expected = (me.baseline?.day ?? 1) - 1
+  return done === expected ? true : `${done} completed pips, expected ${expected}`
+})
+
+await check('an observing user has no targets and is told so', async () => {
+  const body = await obs.locator('body').innerText()
+  // Week 1 is pure observation, so no plan exists. The absence is the design and
+  // has to read as such rather than as a broken screen.
+  if (/\/ 2400/.test(body)) return 'targets were shown during observation'
+  return /No targets yet/.test(body) ? true : 'nothing explained the missing targets'
+})
+
+await check('the observing copy avoids "fortnight" and em dashes', async () => {
+  const found = await obs.evaluate(() => {
+    const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+    const hits = []
+    while (walk.nextNode()) {
+      const t = walk.currentNode.nodeValue || ''
+      if (t.includes('—') || /fortnight/i.test(t)) hits.push(t.trim().slice(0, 70))
+    }
+    return hits
+  })
+  return found.length === 0 ? true : `found: ${found.join(' ;; ')}`
+})
+
+await obs.setViewportSize({ width: 360, height: 780 })
+await obs.waitForTimeout(300)
+
+await check('the 14-pip rail does not overflow at 360px', async () => {
+  const over = await obs.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+  )
+  return over <= 1 ? true : `overflows by ${over}px`
+})
+
+await obs.screenshot({ path: shot('logging-baseline.png'), fullPage: true })
+await obs.close()
+
 // ---- dark mode -------------------------------------------------------------
 
 const dark = await ctx.newPage()
@@ -937,6 +1070,18 @@ await dark.emulateMedia({ colorScheme: 'dark' })
 await dark.goto(BASE, { waitUntil: 'domcontentloaded' })
 await dark.evaluate(() => localStorage.removeItem('yoked.theme'))
 await dark.reload({ waitUntil: 'networkidle' })
+
+// The baseline block above signed this shared context in as the OTHER fixture, and
+// both users render a Food section — so waiting on the heading alone would pass
+// while screenshotting the wrong user's day. Sign back in explicitly.
+{
+  const form = dark.locator('form.card')
+  if (await form.count()) {
+    await form.locator('input[type="text"]').first().fill(USER)
+    await form.locator('input[type="password"]').first().fill(PASS)
+    await form.getByRole('button', { name: /^sign in$/i }).click()
+  }
+}
 await dark.getByRole('heading', { name: /^Food$/ }).waitFor({ timeout: 20000 })
 await check('dark mode picks up the dark shell', async () => {
   const bg = await dark.evaluate(() => getComputedStyle(document.body).backgroundColor)

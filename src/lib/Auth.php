@@ -38,8 +38,12 @@ final class Auth
         }
 
         $user = DB::one(
+            // The baseline dates come along because Baseline::progress() reads
+            // them off this row: every request already loads the user, and a
+            // second query for two DATE columns on the same row is waste.
             'SELECT id, username, display_name, email, avatar_media_id, role,
-                    status, onboarding_state, created_at
+                    status, onboarding_state, baseline_starts_on, baseline_ends_on,
+                    created_at
              FROM users WHERE id = ?',
             [$id]
         );
