@@ -17,6 +17,79 @@
   line-height: 1;
 }
 
+/* ---- the "?" explainer -------------------------------------------------- */
+/*
+ * Available rather than present. Explaining every term inline is how a form
+ * becomes an essay, and "Session RPE" needs defining twice and then never again.
+ */
+.help {
+  position: relative;
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+.help-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 20px is small, so the tap target is padded out below via ::after rather than
+     by making the circle itself thumb-sized and loud. */
+  width: 20px;
+  height: 20px;
+  margin-left: 5px;
+  border: 1.5px solid var(--hairline);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--t-quick), border-color var(--t-quick);
+}
+.help-btn:hover { color: var(--ink); border-color: var(--muted); }
+.help-btn[aria-expanded='true'] {
+  color: var(--ink);
+  border-color: var(--yolk-deep);
+  background: color-mix(in srgb, var(--yolk) 14%, var(--white));
+}
+
+/* An invisible 44px target around a 20px circle: the WCAG floor, without a
+   20px button that looks like a 44px one. */
+.help-btn::after {
+  content: '';
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+
+.help-bubble {
+  position: absolute;
+  /* Anchored to the RIGHT edge and above. These sit at the end of a label near
+     the right side of a narrow card, so left-anchoring pushed the bubble off
+     screen. */
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  width: max-content;
+  max-width: min(19rem, calc(100vw - 48px));
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-input);
+  background: var(--white);
+  box-shadow: var(--lift-2);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+  /* The label it hangs off may be uppercase or bold; the explanation is neither. */
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: normal;
+}
+
 /* ---- chips used as radios ----------------------------------------------- */
 /*
  * quiz.css styles .chip[aria-pressed] because its chips are toggles. The session

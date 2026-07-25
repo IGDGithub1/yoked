@@ -488,7 +488,8 @@ final class Nutrition
     {
         $out = [];
         foreach (DB::all(
-            'SELECT id, name, serving_g, calories, protein_g, fat_g, carbs_g
+            'SELECT id, name, serving_g, calories, protein_g, fat_g, carbs_g,
+                    fiber_g, total_carbs_g
              FROM favorite_foods WHERE user_id = ? ORDER BY name',
             [$userId]
         ) as $f) {
@@ -499,7 +500,14 @@ final class Nutrition
                 'calories'  => (float) $f['calories'],
                 'protein'   => (float) $f['protein_g'],
                 'fat'       => (float) $f['fat_g'],
+                // `carbs` is NET, as everywhere else in this API. fiber and
+                // total_carbs come along (008) so re-logging a favorite produces
+                // an entry identical to the one it was starred from — before
+                // that, starring a food silently discarded its fiber.
                 'carbs'     => (float) $f['carbs_g'],
+                'fiber'     => $f['fiber_g'] === null ? null : (float) $f['fiber_g'],
+                'total_carbs' => $f['total_carbs_g'] === null
+                                 ? null : (float) $f['total_carbs_g'],
             ];
         }
         return $out;
@@ -516,9 +524,19 @@ final class Nutrition
         try {
             $id = DB::insert(
                 'INSERT INTO favorite_foods
-                    (user_id, name, serving_g, calories, protein_g, fat_g, carbs_g)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)',
-                [$userId, $name, $m['serving_g'], $m['calories'], $m['protein'], $m['fat'], $m['carbs']]
+                    (user_id, name, serving_g, calories, protein_g, fat_g, carbs_g,
+                     fiber_g, total_carbs_g)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [
+                    $userId, $name, $m['serving_g'], $m['calories'],
+                    $m['protein'], $m['fat'], $m['carbs'],
+                    // normaliseMacros() has already derived net from
+                    // total - fiber; these keep the inputs so the favorite can
+                    // reproduce the entry rather than only its net result.
+                    $m['fiber'],
+                    // No total given (a hand-typed favorite, say): net IS total.
+                    $m['total_carbs'] ?? $m['carbs'],
+                ]
             );
         } catch (PDOException $e) {
             if ((int) ($e->errorInfo[1] ?? 0) !== 1062) {
@@ -543,13 +561,34 @@ final class Nutrition
         // Same key-presence rule as updateEntry, for the same reason.
         $pick = static fn(string $k, $fallback) => array_key_exists($k, $food) ? $food[$k] : $fallback;
 
+        /*
+         * Carbs need care here (008).
+         *
+         * normaliseMacros() derives net from total - fiber when BOTH are present,
+         * and the stored carbs_g is already net. So handing it the existing net
+         * carbs alongside a fiber figure would subtract the fiber a second time
+         * and quietly shrink the favorite on every edit.
+         *
+         * So: fall back on the stored TOTAL, which is the pre-netting input, and
+         * only fall back to net when there is no total (a row from before 008).
+         */
+        $carbsIn = array_key_exists('total_carbs', $food)
+            ? ['total_carbs' => $food['total_carbs'], 'fiber' => $pick('fiber', $existing['fiber_g'])]
+            : (array_key_exists('carbs', $food)
+                // An explicit net carbs value wins outright, and passing fiber
+                // with it would re-net it.
+                ? ['carbs' => $food['carbs']]
+                : [
+                    'total_carbs' => $existing['total_carbs_g'] ?? $existing['carbs_g'],
+                    'fiber'       => $pick('fiber', $existing['fiber_g']),
+                ]);
+
         $m = self::normaliseMacros([
             'calories'  => $pick('calories', $existing['calories']),
             'protein'   => $pick('protein', $existing['protein_g']),
             'fat'       => $pick('fat', $existing['fat_g']),
-            'carbs'     => $pick('carbs', $existing['carbs_g']),
             'serving_g' => $pick('serving_g', $existing['serving_g']),
-        ]);
+        ] + $carbsIn);
         $name = array_key_exists('name', $food)
             ? Validate::str($food['name'], 1, 200)
             : (string) $existing['name'];
@@ -560,9 +599,11 @@ final class Nutrition
         try {
             DB::run(
                 'UPDATE favorite_foods
-                 SET name = ?, serving_g = ?, calories = ?, protein_g = ?, fat_g = ?, carbs_g = ?
+                 SET name = ?, serving_g = ?, calories = ?, protein_g = ?, fat_g = ?,
+                     carbs_g = ?, fiber_g = ?, total_carbs_g = ?
                  WHERE id = ? AND user_id = ?',
-                [$name, $m['serving_g'], $m['calories'], $m['protein'], $m['fat'], $m['carbs'],
+                [$name, $m['serving_g'], $m['calories'], $m['protein'], $m['fat'],
+                 $m['carbs'], $m['fiber'], $m['total_carbs'] ?? $m['carbs'],
                  $favId, $userId]
             );
         } catch (PDOException $e) {
@@ -615,6 +656,16 @@ final class Nutrition
             $net = max(0.0, $total - $fiber);   // fiber can exceed carbs in bad data
         } elseif ($net === null && $total !== null) {
             $net = $total;                      // no fiber figure: total IS net
+        }
+        // An explicit net `carbs` with a fiber figure and NO total means "this is
+        // already net, and here is the fiber for the record". Keeping the fiber
+        // while leaving net alone is the point: deriving net - fiber here would
+        // subtract it twice, which is exactly how a 50g net breakfast became 44g
+        // when it was starred as a favorite. Prescribed carbs arrive this way,
+        // because a prescribed meal's carbs_g is already net.
+
+        if ($total === null && $net !== null && $fiber !== null) {
+            $total = $net + $fiber;   // reconstruct, so the row is self-consistent
         }
 
         return [

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
+import Help from './Help'
 
 /**
  * Training logs for one day.
@@ -45,14 +46,14 @@ export default function Training({ day, date, onDay }) {
     <>
       {sessions.length === 0 && !freeLogging && (
         <div className="card stack-sm">
+          {/*
+            An empty state is an invitation (DESIGN.md), and during the baseline
+            this is the normal state and the only way data gets in. But it does not
+            need to explain how plan generation works: the user needs to know they
+            CAN log, not why it helps.
+          */}
           <p className="small muted" style={{ margin: 0 }}>
-            {/*
-              An empty state is an invitation (DESIGN.md). During the baseline
-              fortnight this is the NORMAL state and the only way data gets in, so
-              it must not read as "nothing to do here".
-            */}
-            Nothing prescribed today. If you trained anyway, log it — during the
-            baseline that is exactly what the first plan gets built from.
+            Nothing prescribed today. If you trained anyway, log it.
           </p>
           <button type="button" className="btn btn--primary" onClick={() => setFreeLogging(true)}>
             Log a workout
@@ -287,7 +288,7 @@ function SessionForm({ session, date, onCancel, onLogged }) {
       })
       if (r?.day) onLogged(r.day)
     } catch (err) {
-      setError(err.message || 'That did not save. Nothing was logged — try again.')
+      setError(err.message || 'That did not save, so nothing was logged. Try again.')
     } finally {
       setBusy(false)
     }
@@ -316,6 +317,7 @@ function SessionForm({ session, date, onCancel, onLogged }) {
       ))}
 
       <SessionMeta
+        idPrefix={`ps-${session.prescribed_session_id}`}
         minutes={minutes} setMinutes={setMinutes}
         rpe={rpe} setRpe={setRpe}
         buddy={buddy} setBuddy={setBuddy}
@@ -398,7 +400,7 @@ function FreeSessionForm({ date, onCancel, onLogged }) {
       })
       if (r?.day) onLogged(r.day)
     } catch (err) {
-      setError(err.message || 'That did not save. Nothing was logged — try again.')
+      setError(err.message || 'That did not save, so nothing was logged. Try again.')
     } finally {
       setBusy(false)
     }
@@ -434,11 +436,12 @@ function FreeSessionForm({ date, onCancel, onLogged }) {
 
       {rows.length === 0 && (
         <p className="tiny muted" style={{ margin: 0 }}>
-          Exercises are optional — "walked 40 minutes" is a perfectly good log.
+          Exercises are optional. "Walked 40 minutes" is a fine log on its own.
         </p>
       )}
 
       <SessionMeta
+        idPrefix="free"
         minutes={minutes} setMinutes={setMinutes}
         rpe={rpe} setRpe={setRpe}
         buddy={buddy} setBuddy={setBuddy}
@@ -496,7 +499,7 @@ function ExercisePicker({ onPick }) {
     <div className="stack-sm">
       <input
         className="input"
-        placeholder="Add an exercise — try &ldquo;bench&rdquo; or &ldquo;squat&rdquo;"
+        placeholder="Add an exercise, try &ldquo;bench&rdquo; or &ldquo;squat&rdquo;"
         aria-label="Search exercises"
         value={q}
         onChange={(e) => { setQ(e.target.value); setOpen(true) }}
@@ -519,8 +522,7 @@ function ExercisePicker({ onPick }) {
       ))}
       {open && q.trim().length >= 2 && results.length === 0 && (
         <p className="tiny muted" style={{ margin: 0 }}>
-          Nothing in the library matches that. Log the session and put it in the
-          notes — the coach reads those.
+          Nothing matches that. Put it in the notes instead and log the session.
         </p>
       )}
     </div>
@@ -529,7 +531,9 @@ function ExercisePicker({ onPick }) {
 
 /* ---- shared bits --------------------------------------------------------- */
 
-function SessionMeta({ minutes, setMinutes, rpe, setRpe, buddy, setBuddy, notes, setNotes }) {
+function SessionMeta({
+  idPrefix, minutes, setMinutes, rpe, setRpe, buddy, setBuddy, notes, setNotes,
+}) {
   return (
     <>
       <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
@@ -538,11 +542,23 @@ function SessionMeta({ minutes, setMinutes, rpe, setRpe, buddy, setBuddy, notes,
           <input className="input num" type="number" inputMode="numeric" min="1" max="600"
             value={minutes} onChange={(e) => setMinutes(e.target.value)} />
         </label>
-        <label className="field" style={{ maxWidth: '8em' }}>
-          <span className="tiny muted">Session RPE</span>
+        <div className="field" style={{ maxWidth: '10em' }}>
+          {/* Not a <label>: it contains a button, and clicking the help would
+              focus the input instead of opening the explanation. Wired up with
+              aria-labelledby instead. The id is scoped because both session
+              forms render this. */}
+          <span className="tiny muted" id={`${idPrefix}-rpe`}>
+            Session RPE
+            {/* Standard in training, meaningless outside it. */}
+            <Help label="Session RPE">
+              How hard the whole session felt, 1 to 10. 1 is barely any effort,
+              10 is all you had. Around 7 or 8 is a solid working session.
+            </Help>
+          </span>
           <input className="input num" type="number" inputMode="numeric" min="1" max="10"
+            aria-labelledby={`${idPrefix}-rpe`}
             value={rpe} onChange={(e) => setRpe(e.target.value)} />
-        </label>
+        </div>
       </div>
 
       <label className="row" style={{ gap: 8 }}>
@@ -585,7 +601,7 @@ function ExerciseRow({ row, onChange, onRemove }) {
             aria-pressed={row.skipped}
             onClick={() => onChange({ skipped: !row.skipped })}
           >
-            {row.skipped ? 'Skipped — undo' : 'Skip'}
+            {row.skipped ? 'Skipped, undo' : 'Skip'}
           </button>
         )}
       </div>

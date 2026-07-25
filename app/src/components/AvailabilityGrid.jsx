@@ -110,14 +110,14 @@ export default function AvailabilityGrid({ value, onChange }) {
             <strong>
               {committed} committed {committed === 1 ? 'day' : 'days'}
             </strong>{' '}
-            — that is your week. Hit those and the week is a success, even if you skip
+            . That is your week. Hit those and the week is a success, even if you skip
             everything else. Anything extra is a bonus and never counts against you.
           </>
         )}
       </div>
 
       <p className="tiny muted prose" style={{ margin: 0 }}>
-        <strong>Some</strong> means the day is usable but not promised — your coach
+        <strong>Some</strong> means the day is usable but not promised. Your coach
         puts the session it can most afford to lose there.
       </p>
     </div>

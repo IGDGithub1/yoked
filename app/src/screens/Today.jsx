@@ -130,7 +130,7 @@ export default function Today({ user, onSignOut, onReview }) {
           <div className="card stack">
             <p className="error">{error}</p>
             <p className="error-help">
-              Nothing you logged is lost — it is saved as you go.
+              Nothing you logged is lost, it saves as you go.
             </p>
             <button className="btn btn--primary" onClick={() => load(date)}>Try again</button>
           </div>
@@ -159,11 +159,11 @@ export default function Today({ user, onSignOut, onReview }) {
 
             {/* Baseline week 1 is pure observation and has no prescription, so the
                 absence of targets is the design rather than a gap. Saying so stops
-                it reading as a broken screen. */}
+                it reading as a broken screen, without explaining the machinery. */}
             {!nutrition.target && (
               <p className="tiny muted prose">
-                No targets yet — the baseline fortnight is observation. Log what you
-                normally eat and do, and the first plan is built from it.
+                No targets yet. Log what you normally eat and do, and your first
+                plan will follow.
               </p>
             )}
           </>

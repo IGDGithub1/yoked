@@ -395,6 +395,153 @@ await check('logging from usuals adds the food', async () => {
   )
 })
 
+/*
+ * Fiber must survive the round trip through a favorite.
+ *
+ * favorite_foods used to store net carbs only, so starring a food discarded its
+ * fiber for good and every later re-log produced an entry with no fiber figure.
+ * Migration 008 gave favorites the same three carb columns as an entry.
+ */
+await check('a favorite keeps the fiber it was starred with', async () => {
+  const card = page.locator('.card', { hasText: 'Dinner' }).first()
+  await card.getByRole('button', { name: /^Add food$/i }).click()
+  await card.getByRole('tab', { name: /by hand/i }).click()
+
+  await card.locator('input[aria-label="Food name"]').fill('Fiber Test Bread')
+  await card.locator('.macro-grid input').nth(0).fill('200')   // kcal
+  await card.locator('.macro-grid input').nth(1).fill('8')     // protein
+  await card.locator('.macro-grid input').nth(2).fill('3')     // fat
+  await card.locator('.macro-grid input').nth(3).fill('40')    // total carbs
+  await card.locator('.macro-grid input').nth(4).fill('12')    // fiber
+  await card.getByRole('button', { name: /^Add it$/i }).click()
+
+  // Net is derived server-side: 40 - 12 = 28.
+  const row = page.locator('.entry', { hasText: 'Fiber Test Bread' }).first()
+  await row.waitFor({ timeout: 20000 })
+
+  // Star it, then read the favorite back and confirm the fiber came with it.
+  await row.locator('.star').click()
+  await row.locator('.star[aria-pressed="true"]').waitFor({ timeout: 15000 })
+
+  const favs = await page.evaluate(async () => {
+    const res = await fetch('/api/nutrition/favorites', {
+      headers: { accept: 'application/json' },
+      credentials: 'same-origin',
+    })
+    return res.json()
+  })
+  const fav = (favs.favorites || []).find((f) => f.name === 'Fiber Test Bread')
+  if (!fav) return 'the favorite was not saved'
+  if (fav.fiber !== 12) return `fiber came back as ${fav.fiber}, expected 12`
+  if (fav.total_carbs !== 40) return `total_carbs came back as ${fav.total_carbs}, expected 40`
+  if (fav.carbs !== 28) return `net carbs came back as ${fav.carbs}, expected 28`
+  return true
+})
+
+await check('re-logging that favorite reproduces the fiber', async () => {
+  const card = page.locator('.card', { hasText: 'Dinner' }).first()
+  await card.getByRole('button', { name: /^Add food$/i }).click()
+  await card.getByRole('tab', { name: /Usual/i }).click()
+  await card.locator('.result', { hasText: 'Fiber Test Bread' }).first().click()
+
+  // Two of them now. Read the day back and check the newest entry's fiber, which
+  // before 008 came back null even though the original had 12g.
+  const day = await page.evaluate(async () => {
+    const d = new Date()
+    const p = (n) => String(n).padStart(2, '0')
+    const date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+    const res = await fetch(`/api/nutrition/day/${date}`, {
+      headers: { accept: 'application/json' },
+      credentials: 'same-origin',
+    })
+    return res.json()
+  })
+  const entries = (day.meals || [])
+    .flatMap((m) => m.entries)
+    .filter((e) => e.name === 'Fiber Test Bread')
+  if (entries.length < 2) return `expected 2 entries, found ${entries.length}`
+  const relogged = entries[entries.length - 1]
+  if (relogged.fiber !== 12) return `re-logged fiber was ${relogged.fiber}, expected 12`
+  if (relogged.carbs !== 28) return `re-logged net carbs was ${relogged.carbs}, expected 28`
+  return true
+})
+
+/*
+ * Starring a PRESCRIBED entry must not shrink its carbs.
+ *
+ * A prescribed meal's carbs are already net, so that entry has net + fiber but no
+ * total. Sending net-as-total alongside the fiber made the server subtract the
+ * fiber a second time: the 50g net breakfast came back as 44g in the favorite,
+ * and again on every re-log. Double-netting, in a new place.
+ */
+await check('starring a prescribed meal keeps its net carbs unchanged', async () => {
+  const day = await page.evaluate(async () => {
+    const d = new Date()
+    const p = (n) => String(n).padStart(2, '0')
+    const res = await fetch(
+      `/api/nutrition/day/${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
+      { headers: { accept: 'application/json' }, credentials: 'same-origin' }
+    )
+    return res.json()
+  })
+  const breakfast = (day.meals || []).find((m) => m.slot === 'breakfast')
+  const entry = breakfast?.entries?.[0]
+  if (!entry) return 'no breakfast entry to compare against'
+
+  const favs = await page.evaluate(async () => {
+    const res = await fetch('/api/nutrition/favorites', {
+      headers: { accept: 'application/json' }, credentials: 'same-origin',
+    })
+    return res.json()
+  })
+  const fav = (favs.favorites || []).find(
+    (f) => f.name.toLowerCase() === entry.name.toLowerCase()
+  )
+  if (!fav) return `"${entry.name}" was starred earlier but is not in favorites`
+
+  return fav.carbs === entry.carbs
+    ? true
+    : `entry net carbs ${entry.carbs} became ${fav.carbs} in the favorite`
+})
+
+// ---- snacks as one card ----------------------------------------------------
+
+await check('snacks are one card, not three slots', async () => {
+  const body = await page.locator('body').innerText()
+  if (/Morning snack|Afternoon snack|Evening snack/.test(body)) {
+    return 'the individual snack slots are still shown as separate cards'
+  }
+  return /Snacks/.test(body) ? true : 'no Snacks card at all'
+})
+
+await check('a snack logs without asking which time of day', async () => {
+  const card = page.locator('.card', { hasText: 'Snacks' }).first()
+  await card.getByRole('button', { name: /add a snack/i }).click()
+  await card.getByRole('tab', { name: /by hand/i }).click()
+  await card.locator('input[aria-label="Food name"]').fill('Test Almonds')
+  await card.locator('.macro-grid input').nth(0).fill('90')
+  await card.getByRole('button', { name: /^Add it$/i }).click()
+  await page.locator('.entry', { hasText: 'Test Almonds' }).first().waitFor({ timeout: 20000 })
+  // And it counted toward the day.
+  const txt = await page.locator('.card', { hasText: 'Snacks' }).first().innerText()
+  return /1 logged/.test(txt) ? true : `snacks card read: ${txt.replace(/\n/g, ' | ')}`
+})
+
+await check('a second snack joins the same card', async () => {
+  const card = page.locator('.card', { hasText: 'Snacks' }).first()
+  await card.getByRole('button', { name: /add a snack/i }).click()
+  await card.getByRole('tab', { name: /by hand/i }).click()
+  await card.locator('input[aria-label="Food name"]').fill('Test Yoghurt')
+  await card.locator('.macro-grid input').nth(0).fill('120')
+  await card.getByRole('button', { name: /^Add it$/i }).click()
+  await page.locator('.entry', { hasText: 'Test Yoghurt' }).first().waitFor({ timeout: 20000 })
+  const txt = await page.locator('.card', { hasText: 'Snacks' }).first().innerText()
+  if (!/2 logged/.test(txt)) return `snacks card read: ${txt.replace(/\n/g, ' | ')}`
+  // Both are in ONE card, so there is exactly one Snacks card on screen.
+  const n = await page.locator('.card', { hasText: 'Snacks' }).count()
+  return n === 1 ? true : `${n} snack cards`
+})
+
 await check('the search placeholder matches the meal', async () => {
   const card = page.locator('.card', { hasText: 'Dinner' }).first()
   await card.getByRole('button', { name: /^Add food$/i }).click()
@@ -441,6 +588,10 @@ await check('a barcode lookup reaches the server', async () => {
 
 console.log('\n8. sections and theme')
 
+// Read the total BEFORE collapsing, so the assertion does not depend on how much
+// food earlier checks happened to log.
+const totalBeforeCollapse = await page.locator('.sec-summary').first().innerText()
+
 await check('the food section collapses', async () => {
   const toggle = page.getByRole('button', { name: /^Food$/ })
   await toggle.click()
@@ -454,8 +605,12 @@ await check('the food section collapses', async () => {
 })
 
 await check('a collapsed section still shows the day total', async () => {
-  const body = await page.locator('body').innerText()
-  return /1325/.test(body) ? true : 'the total vanished with the section'
+  // The whole point of the summary living in the heading: a shut section still
+  // says where the day stands.
+  const after = await page.locator('.sec-summary').first().innerText()
+  return after.trim() === totalBeforeCollapse.trim()
+    ? true
+    : `summary was "${totalBeforeCollapse.trim()}" open, "${after.trim()}" closed`
 })
 
 await check('the collapse survives a reload', async () => {
@@ -666,7 +821,8 @@ await check('no verdict is shown for a day still in progress', async () => {
  */
 await check('a selected chip is visually distinct from an unselected one', async () => {
   // The free-log type chips: "Lifting" is chosen by default, "Cardio" is not.
-  await page.getByRole('button', { name: /log something else you did/i }).click()
+  const open = page.getByRole('button', { name: /log something else you did/i })
+  if (await open.count()) await open.click()
   const chosen = page.locator('.chip[aria-checked="true"]').first()
   await chosen.waitFor({ timeout: 15000 })
   const unchosen = page.locator('.chip[aria-checked="false"]').first()
@@ -690,6 +846,61 @@ await check('the four ways into a meal show which one is open', async () => {
   const a = await style(on)
   const b = await style(off)
   return a !== b ? true : `the open and closed tabs share a background: ${a}`
+})
+
+// ---- copy and explanations -------------------------------------------------
+
+await check('jargon is explained by a "?" rather than inline prose', async () => {
+  // Training may be collapsed by the section checks above, and the free-log form
+  // lives inside it.
+  const section = page.getByRole('button', { name: /^Training$/ })
+  if ((await section.getAttribute('aria-expanded')) === 'false') await section.click()
+
+  // The chip check just above may already have opened it.
+  const open = page.getByRole('button', { name: /log something else you did/i })
+  if (await open.count()) await open.click({ timeout: 20000 })
+
+  const help = page.getByRole('button', { name: /what is session rpe/i })
+  await help.waitFor({ timeout: 15000 })
+
+  // Closed by default: available, not present.
+  let bubbles = await page.locator('.help-bubble').count()
+  if (bubbles !== 0) return 'the explanation was showing before being asked for'
+
+  await help.click()
+  const bubble = page.locator('.help-bubble').first()
+  await bubble.waitFor({ timeout: 10000 })
+  const txt = await bubble.innerText()
+  if (!/1 to 10/.test(txt)) return `bubble read: ${txt}`
+
+  // Escape closes it. A popover you can only dismiss by re-finding a 20px button
+  // is a trap on a touchscreen.
+  await page.keyboard.press('Escape')
+  await page.waitForFunction(
+    () => document.querySelectorAll('.help-bubble').length === 0,
+    { timeout: 10000 }
+  )
+  return true
+})
+
+await check('no "fortnight" anywhere a user can read it', async () => {
+  const body = await page.locator('body').innerText()
+  return /fortnight/i.test(body) ? 'the word "fortnight" is on screen' : true
+})
+
+await check('no em dashes in the visible copy', async () => {
+  // Long dashes read as machine-written. Hyphens and the "not applicable" glyph
+  // are fine; U+2014 is what is being kept out.
+  const found = await page.evaluate(() => {
+    const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+    const hits = []
+    while (walk.nextNode()) {
+      const t = walk.currentNode.nodeValue || ''
+      if (t.includes('—')) hits.push(t.trim().slice(0, 70))
+    }
+    return hits
+  })
+  return found.length === 0 ? true : `em dashes in: ${found.join(' ;; ')}`
 })
 
 await check('no horizontal scroll at 390px', async () => {

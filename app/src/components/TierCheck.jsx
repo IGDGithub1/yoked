@@ -61,7 +61,7 @@ export default function TierCheck({ item, onUpgrade, onKeep, busy }) {
           </p>
 
           <p className="aside">
-            Either is fine — you know your body. We ask because “{item.matched}” came
+            Either is fine, you know your body. We ask because “{item.matched}” came
             up, and the two settings behave very differently.
           </p>
 

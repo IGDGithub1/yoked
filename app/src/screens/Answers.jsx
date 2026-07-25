@@ -135,7 +135,7 @@ export default function Answers({ onClose }) {
         </ul>
 
         <p className="tiny muted prose">
-          Changing a hard limit — an allergy, an injury you told us to avoid — takes
+          Changing a hard limit, like an allergy or an injury you told us to avoid, takes
           effect the moment you save it. Nothing your coach writes after that can
           contradict it.
         </p>

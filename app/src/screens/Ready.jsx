@@ -48,9 +48,9 @@ export default function Ready({ onStarted, onReview }) {
       <div style={{ textAlign: 'center' }}>
         <h1 className="title">That is everything.</h1>
         <p className="muted prose" style={{ margin: '10px auto 0' }}>
-          Next is two weeks of logging what you normally eat and do. Week one your
-          coach only watches — no plan, no targets. A provisional plan arrives after
-          it, and the real one once the fortnight is done.
+          Next is two weeks of logging what you normally eat and do. Week one has no
+          plan and no targets, your coach is just watching. You get a first plan
+          after seven days, and a sharper one at the end of the two weeks.
         </p>
       </div>
 

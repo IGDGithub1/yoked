@@ -260,7 +260,7 @@ export default function Quiz({ initial, onDone, onExit, startAt, reviewing = fal
         {error && (
           <div role="alert">
             <p className="error">{error}</p>
-            <p className="error-help">Your answers are still here — try saving again.</p>
+            <p className="error-help">Your answers are still here. Try saving again.</p>
           </div>
         )}
 

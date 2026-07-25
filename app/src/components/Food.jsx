@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { foodPlaceholder } from '../foodExamples'
 import Scanner from './Scanner'
+import Help from './Help'
 
 /**
  * Food logging for one day.
@@ -40,6 +41,27 @@ const SLOT_LABELS = {
   snack_eve: 'Evening snack',
 }
 
+/*
+ * The three snack slots are presented as ONE "Snacks" card.
+ *
+ * They exist in the schema because the plan can prescribe a specific one, and
+ * that stays true. But making a user decide whether a 4pm handful of almonds is
+ * an "afternoon" or "evening" snack is a question with no right answer and no
+ * consequence, and three near-empty cards for it crowds out the meals that
+ * matter. So the card holds all three slots' entries together, and adding a
+ * snack picks the first free slot.
+ *
+ * A prescribed snack still shows the time it was planned for, because that IS
+ * information the coach put there.
+ */
+const SNACK_SLOTS = ['snack_am', 'snack_pm', 'snack_eve']
+
+const SNACK_TIME = {
+  snack_am: 'morning',
+  snack_pm: 'afternoon',
+  snack_eve: 'evening',
+}
+
 const ADHERENCE_LABELS = {
   as_planned: 'as planned',
   substituted: 'substituted',
@@ -66,20 +88,18 @@ export default function Food({ day, date, isToday, onDay }) {
     return () => { live = false }
   }, [])
 
-  // An untouched snack slot is not an empty state worth showing — it is the
-  // normal condition of most slots on most days. Prescribed and logged slots
-  // always show; the rest collapse behind one button.
   const prescribedSlots = new Set((day.prescribed || []).map((p) => p.slot))
   const meals = day.meals || []
-  const interesting = (m) =>
-    m.entries.length > 0 || prescribedSlots.has(m.slot) || m.adherence === 'skipped'
-  const [showAll, setShowAll] = useState(false)
-  const hidden = meals.filter((m) => !interesting(m))
-  const shown = showAll ? meals : meals.filter(interesting)
+  const prescribedFor = (slot) => (day.prescribed || []).find((p) => p.slot === slot) || null
 
-  // The first prescribed slot with nothing logged, in eating order. SLOTS is
-  // already ordered server-side, so array order IS eating order.
-  const nextSlot = shown.find(
+  // The three real meals, always shown. Skipping breakfast is a fact about the
+  // day, not a slot to hide.
+  const mainMeals = meals.filter((m) => !SNACK_SLOTS.includes(m.slot))
+  const snacks = meals.filter((m) => SNACK_SLOTS.includes(m.slot))
+
+  // The first prescribed meal with nothing logged, in eating order. The server
+  // returns slots in eating order, so array order IS eating order.
+  const nextSlot = mainMeals.find(
     (m) => m.entries.length === 0 && m.adherence !== 'skipped' && prescribedSlots.has(m.slot)
   )?.slot
 
@@ -93,14 +113,14 @@ export default function Food({ day, date, isToday, onDay }) {
       */}
       {day.verdict && !isToday && <Verdict verdict={day.verdict} />}
 
-      {shown.map((meal) => (
+      {mainMeals.map((meal) => (
         <Meal
           key={meal.slot}
           meal={meal}
           date={date}
-          prescribed={(day.prescribed || []).find((p) => p.slot === meal.slot) || null}
-          /* The accent goes to the NEXT unlogged meal only. A column of six
-             identical yellow buttons is not six primary actions, it is none. */
+          prescribed={prescribedFor(meal.slot)}
+          /* The accent goes to the NEXT unlogged meal only. A column of yellow
+             buttons is not several primary actions, it is none. */
           primary={meal.slot === nextSlot}
           favorites={favorites}
           onFavorites={setFavorites}
@@ -108,11 +128,14 @@ export default function Food({ day, date, isToday, onDay }) {
         />
       ))}
 
-      {!showAll && hidden.length > 0 && (
-        <button type="button" className="btn btn--quiet" onClick={() => setShowAll(true)}>
-          Add another meal ({hidden.length} more slot{hidden.length === 1 ? '' : 's'})
-        </button>
-      )}
+      <Snacks
+        snacks={snacks}
+        date={date}
+        prescribedFor={prescribedFor}
+        favorites={favorites}
+        onFavorites={setFavorites}
+        onDay={onDay}
+      />
     </>
   )
 }
@@ -156,7 +179,7 @@ function Verdict({ verdict }) {
   if (verdict.short_but_ok) {
     return (
       <p className="notice small" style={{ margin: 0 }}>
-        Macros landed, calories came in short. That counts — noted, not a miss.
+        Macros landed, calories came in short. That still counts.
       </p>
     )
   }
@@ -167,6 +190,143 @@ function Verdict({ verdict }) {
     <p className="small muted" style={{ margin: 0 }}>
       {verdict.failure_count === 1 ? 'One macro was off' : `${verdict.failure_count} macros were off`}.
     </p>
+  )
+}
+
+/* ---- snacks, as one card ------------------------------------------------- */
+
+/**
+ * All three snack slots in one card.
+ *
+ * The slots stay in the data because a plan can prescribe a specific one, but the
+ * user is not asked to classify their own snacks: "is a 4pm handful of almonds
+ * afternoon or evening" has no right answer and no consequence, and three
+ * mostly-empty cards for it pushed the actual meals off the screen.
+ *
+ * Adding fills the first free slot. That is arbitrary and deliberately invisible
+ * — the slot only matters when the COACH chose it, and those are labelled.
+ */
+function Snacks({ snacks, date, prescribedFor, favorites, onFavorites, onDay }) {
+  const [adding, setAdding] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+
+  // Flattened across the three slots, each entry remembering which one it came
+  // from so it can still be deleted and starred individually.
+  const entries = snacks.flatMap((m) => m.entries.map((e) => ({ ...e, slot: m.slot })))
+
+  const total = snacks.reduce(
+    (acc, m) => ({
+      calories: acc.calories + (m.total?.calories || 0),
+      protein: acc.protein + (m.total?.protein || 0),
+      fat: acc.fat + (m.total?.fat || 0),
+      carbs: acc.carbs + (m.total?.carbs || 0),
+    }),
+    { calories: 0, protein: 0, fat: 0, carbs: 0 }
+  )
+
+  // Prescribed snacks keep their time, because that is the coach's choice rather
+  // than bookkeeping.
+  const planned = SNACK_SLOTS
+    .map((s) => ({ slot: s, p: prescribedFor(s) }))
+    .filter((x) => x.p !== null)
+
+  // First slot with nothing in it. Falls back to the last so a fourth snack still
+  // logs rather than being silently refused.
+  const freeSlot =
+    SNACK_SLOTS.find((s) => !snacks.find((m) => m.slot === s)?.entries.length)
+    || 'snack_eve'
+
+  const run = async (fn) => {
+    setError(null)
+    setBusy(true)
+    try {
+      const r = await fn()
+      if (r?.day) onDay(r.day)
+      return r
+    } catch (e) {
+      setError(e.message || 'That did not save.')
+      return null
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="card stack-sm">
+      <div className="row">
+        <h3 className="subheading">Snacks</h3>
+        <span className="tiny muted push num">
+          {entries.length === 0
+            ? 'none yet'
+            : `${entries.length} logged · ${Math.round(total.calories)} kcal`}
+        </span>
+      </div>
+
+      {planned.map(({ slot, p }) => (
+        <p className="tiny muted" key={slot} style={{ margin: 0 }}>
+          Planned {SNACK_TIME[slot]}: {p.name}
+          {' · '}
+          <span className="num">{Math.round(p.calories)} kcal</span>
+        </p>
+      ))}
+
+      {entries.map((e) => (
+        <Entry
+          key={e.id}
+          entry={e}
+          busy={busy}
+          run={run}
+          favorites={favorites}
+          onFavorites={onFavorites}
+        />
+      ))}
+
+      {entries.length > 1 && (
+        <div className="row">
+          <span className="tiny muted">All snacks</span>
+          <span className="tiny num push">
+            {Math.round(total.calories)} kcal · P {Math.round(total.protein)}
+            {' · '}F {Math.round(total.fat)} · net C {Math.round(total.carbs)}
+          </span>
+        </div>
+      )}
+
+      {!adding && (
+        <div className="row" style={{ flexWrap: 'wrap' }}>
+          {planned.length > 0 && (
+            <button
+              type="button"
+              className="btn btn--ghost"
+              disabled={busy}
+              onClick={() => run(() => api.nutrition.asPlanned(date, planned[0].slot))}
+            >
+              Ate the planned one
+            </button>
+          )}
+          <button type="button" className="btn btn--ghost" disabled={busy}
+            onClick={() => setAdding(true)}>
+            Add a snack
+          </button>
+        </div>
+      )}
+
+      {error && <p className="error">{error}</p>}
+
+      {adding && (
+        <AddFood
+          date={date}
+          slot={freeSlot}
+          favorites={favorites}
+          onFavorites={onFavorites}
+          onClose={() => setAdding(false)}
+          onAdded={(dayPayload) => {
+            onDay(dayPayload)
+            setAdding(false)
+          }}
+        />
+      )}
+    </div>
   )
 }
 
@@ -330,13 +490,20 @@ function Entry({ entry, busy, run, favorites, onFavorites }) {
           protein: entry.protein,
           fat: entry.fat,
           /*
-           * favorite_foods has carbs_g and NO fiber column, so a favorite stores
-           * NET carbs. entry.carbs is already net (derived at intake), so it is
-           * sent as `carbs` — sending total_carbs+fiber here would net it a
-           * second time and quietly shrink the carbs every time the favorite is
-           * reused.
+           * The entry's carb figures go across intact (008), which before this
+           * was impossible: favorite_foods had no fiber column, so starring a
+           * food threw its fiber away for good.
+           *
+           * The two shapes must not be mixed. An entry logged from a PRESCRIBED
+           * meal has net carbs and a fiber figure but NO total (prescribed carbs
+           * are already net), so sending net-as-total alongside the fiber makes
+           * the server subtract it a second time: a 50g net breakfast came back
+           * as 44g. Only send the pair when a real total exists; otherwise net is
+           * already the answer and travels alone.
            */
-          carbs: entry.carbs,
+          ...(entry.total_carbs != null
+            ? { total_carbs: entry.total_carbs, fiber: entry.fiber }
+            : { carbs: entry.carbs, fiber: entry.fiber }),
         })
         onFavorites(r.favorites || favorites)
       }
@@ -452,12 +619,16 @@ function AddFood({ date, slot, favorites, onFavorites, onClose, onAdded }) {
   /**
    * The one place an entry is written, whichever way found the food.
    *
-   * `netCarbs` distinguishes the two shapes that arrive here, and it matters:
-   * search and barcode results carry total_carbs + fiber and the server derives
-   * net at intake, while a favorite already holds net. Sending a favorite's
-   * carbs as total_carbs would subtract fiber from an already-netted number.
+   * Every source now speaks the same shape: total_carbs + fiber, with the server
+   * deriving net at intake so that rule lives in exactly one place. Favorites
+   * used to be the exception — they stored net only, so they needed a special
+   * case here and lost their fiber on the way in. Migration 008 gave them the
+   * same three columns as an entry, which is what removed the exception.
+   *
+   * The `?? food.carbs` fallback covers favorites saved before 008, where net is
+   * genuinely all that was recorded.
    */
-  async function add(food, { netCarbs = false } = {}) {
+  async function add(food) {
     setError(null)
     setBusy(true)
     try {
@@ -467,9 +638,8 @@ function AddFood({ date, slot, favorites, onFavorites, onClose, onAdded }) {
         calories: food.calories,
         protein: food.protein,
         fat: food.fat,
-        ...(netCarbs
-          ? { carbs: food.carbs }
-          : { total_carbs: food.total_carbs, fiber: food.fiber }),
+        total_carbs: food.total_carbs ?? food.carbs,
+        fiber: food.fiber,
         source: food.source || 'manual',
         source_ref: food.source_ref || null,
         favorite_id: food.favorite_id || null,
@@ -508,7 +678,7 @@ function AddFood({ date, slot, favorites, onFavorites, onClose, onAdded }) {
         <Favorites
           favorites={favorites}
           busy={busy}
-          onPick={(f) => add({ ...f, source: 'favorite', favorite_id: f.id }, { netCarbs: true })}
+          onPick={(f) => add({ ...f, source: 'favorite', favorite_id: f.id })}
           onRemove={async (id) => {
             const r = await api.nutrition.deleteFavorite(id)
             onFavorites(r.favorites || favorites.filter((f) => f.id !== id))
@@ -542,8 +712,7 @@ function Favorites({ favorites, busy, onPick, onRemove }) {
   if (favorites.length === 0) {
     return (
       <p className="small muted" style={{ margin: 0 }}>
-        No usuals yet. Star anything you log and it lands here — that is how this
-        list gets useful without you managing it.
+        No usuals yet. Star anything you log and it will show up here.
       </p>
     )
   }
@@ -576,6 +745,10 @@ function Favorites({ favorites, busy, onPick, onRemove }) {
             <span className="small">{f.name}</span>
             <span className="tiny muted num">
               {Math.round(f.calories)} kcal · P {f.protein} · F {f.fat} · net C {f.carbs}
+              {/* Shown when it is known. A favorite saved before 008 has no
+                  fiber figure, and printing "0g fiber" would assert something
+                  nobody recorded. */}
+              {f.fiber ? ` (−${f.fiber} fiber)` : ''}
               {f.serving_g ? ` · ${f.serving_g}g` : ''}
             </span>
           </button>
@@ -649,8 +822,8 @@ function BarcodeLookup({ busy, onAdd, onDone }) {
           worthwhile rather than mysterious. */}
       {meta.guessed && (
         <p className="notice small" style={{ margin: 0 }}>
-          Not in the barcode database. These numbers are the coach's best guess
-          from the barcode — check them before logging.
+          Not in the barcode database, so these numbers are a best guess. Check
+          them before logging.
         </p>
       )}
 
@@ -779,8 +952,20 @@ function ManualFood({ busy, onSubmit }) {
         <NumBox label="Protein" value={f.protein} onChange={set('protein')} />
         <NumBox label="Fat" value={f.fat} onChange={set('fat')} />
         {/* Total carbs and fiber, not net — the server does the subtraction, and
-            asking for net here would mean two places knowing the rule. */}
-        <NumBox label="Carbs" value={f.total_carbs} onChange={set('total_carbs')} />
+            asking for net here would mean two places knowing the rule. The help
+            is on Carbs because "which number off the packet" is the actual
+            question people get wrong. */}
+        <NumBox
+          label="Carbs"
+          value={f.total_carbs}
+          onChange={set('total_carbs')}
+          help={(
+            <Help label="Carbs">
+              The total carbs off the label, before taking fiber off. Put the
+              fiber in the next box and your net carbs are worked out for you.
+            </Help>
+          )}
+        />
         <NumBox label="Fiber" value={f.fiber} onChange={set('fiber')} />
         <NumBox label="Grams" value={f.serving_g} onChange={set('serving_g')} />
       </div>
@@ -791,19 +976,36 @@ function ManualFood({ busy, onSubmit }) {
   )
 }
 
-function NumBox({ label, value, onChange }) {
+function NumBox({ label, value, onChange, help }) {
+  const input = (
+    <input
+      className="input num"
+      type="number"
+      inputMode="decimal"
+      min="0"
+      step="any"
+      value={value}
+      onChange={onChange}
+    />
+  )
+
+  // With help, this cannot be a <label>: clicking the "?" inside one focuses the
+  // input instead of opening the explanation.
+  if (help) {
+    const id = `mf-${label.toLowerCase()}`
+    return (
+      <div className="field">
+        <span className="tiny muted" id={id}>{label}{help}</span>
+        {/* aria-labelledby rather than a wrapping label, same reason. */}
+        <input {...input.props} aria-labelledby={id} />
+      </div>
+    )
+  }
+
   return (
     <label className="field">
       <span className="tiny muted">{label}</span>
-      <input
-        className="input num"
-        type="number"
-        inputMode="decimal"
-        min="0"
-        step="any"
-        value={value}
-        onChange={onChange}
-      />
+      {input}
     </label>
   )
 }
