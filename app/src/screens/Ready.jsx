@@ -9,7 +9,7 @@ import Yolk from '../components/Yolk'
  * the user is told what the fortnight is for and agrees to start it. Starting it
  * silently would mean two weeks of logging with no explanation of why.
  */
-export default function Ready({ onStarted }) {
+export default function Ready({ onStarted, onReview }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [constraints, setConstraints] = useState(null)
@@ -116,6 +116,19 @@ export default function Ready({ onStarted }) {
       <button className="btn btn--primary btn--wide" onClick={start} disabled={busy}>
         {busy ? 'Starting…' : 'Start logging'}
       </button>
+
+      {/* This screen is where a wrong answer is most likely to be noticed — it
+          shows what the answers produced — so the way back has to be here. */}
+      {onReview && (
+        <button
+          type="button"
+          className="btn btn--quiet btn--wide"
+          onClick={onReview}
+          disabled={busy}
+        >
+          Change an answer first
+        </button>
+      )}
     </div>
   )
 }

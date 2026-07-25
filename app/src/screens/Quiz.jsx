@@ -13,13 +13,19 @@ import Yolk from '../components/Yolk'
  * thinks in, and it keeps the request count sane while still meaning nothing is
  * lost if they close the tab mid-quiz.
  */
-export default function Quiz({ initial, onDone }) {
+export default function Quiz({ initial, onDone, onExit, startAt, reviewing = false }) {
   const [answers, setAnswers] = useState(initial?.answers || {})
   const [progress, setProgress] = useState(initial?.progress || null)
-  const [sectionId, setSectionId] = useState(() => firstIncomplete(initial?.progress))
+  const [sectionId, setSectionId] = useState(
+    () => startAt || firstIncomplete(initial?.progress)
+  )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [tierChecks, setTierChecks] = useState([])
+  // Confirmation for "save and come back later". Without it the button flipped
+  // `busy` for 200ms and changed nothing else, so a successful save was
+  // indistinguishable from a dead control.
+  const [saved, setSaved] = useState(false)
   const topRef = useRef(null)
 
   const section = sectionById(sectionId) || SECTIONS[0]
@@ -43,7 +49,11 @@ export default function Quiz({ initial, onDone }) {
     topRef.current?.scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' })
   }, [sectionId])
 
-  const set = (key) => (value) => setAnswers((a) => ({ ...a, [key]: value }))
+  const set = (key) => (value) => {
+    // A "saved" note next to an answer the user has since changed is a lie.
+    setSaved(false)
+    setAnswers((a) => ({ ...a, [key]: value }))
+  }
 
   /** Which required questions in this section are still unanswered. */
   const missing = useMemo(() => {
@@ -57,9 +67,14 @@ export default function Quiz({ initial, onDone }) {
     })
   }, [progress, section.id, answers])
 
-  async function saveSection({ advance = true } = {}) {
+  /**
+   * @param advance  move to the next section on success
+   * @param exit     hand control back to the shell — the "come back later" path
+   */
+  async function saveSection({ advance = true, exit = false } = {}) {
     setBusy(true)
     setError(null)
+    setSaved(false)
 
     // Only this section's answers, so a save cannot resurrect a value the user
     // cleared in a section they have since left.
@@ -87,7 +102,16 @@ export default function Quiz({ initial, onDone }) {
     // rather than sent and allowed to 422.
     if (Object.keys(payload).length === 0) {
       if (advance) goNext()
+      // Leaving with nothing to save is still leaving: the button must act even
+      // when the section was untouched, or it reads as broken.
+      if (exit) {
+        onExit?.()
+        return
+      }
       setBusy(false)
+      // Nothing was sent, but nothing was lost either, and saying so is kinder
+      // than a control that appears to do nothing.
+      setSaved(true)
       return
     }
 
@@ -105,7 +129,15 @@ export default function Quiz({ initial, onDone }) {
         return
       }
 
-      if (advance) goNext(res.progress)
+      if (exit) {
+        onExit?.()
+        return   // leave `busy` set: the screen is going away
+      }
+      if (advance) {
+        goNext(res.progress)
+      } else {
+        setSaved(true)
+      }
       setBusy(false)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not save. Check your connection.')
@@ -157,9 +189,24 @@ export default function Quiz({ initial, onDone }) {
       <header className="appbar">
         <Yolk pct={pct} size={34} label={`${doneCount} of ${SECTIONS.length - 1} sections done`} />
         <span className="brand">Yoked</span>
-        <span className="push tiny muted num">
-          {index + 1} / {SECTIONS.length}
-        </span>
+        {reviewing ? (
+          // A "3 / 10" counter would be a lie here: the user came to change one
+          // section, not to walk the quiz. Offer the way out instead — and save
+          // on the way, because leaving via the header should not quietly
+          // discard an edit the user just made.
+          <button
+            type="button"
+            className="btn btn--quiet push"
+            onClick={() => saveSection({ advance: false, exit: true })}
+            disabled={busy}
+          >
+            All answers
+          </button>
+        ) : (
+          <span className="push tiny muted num">
+            {index + 1} / {SECTIONS.length}
+          </span>
+        )}
       </header>
 
       <div className="wrap stack-lg" ref={topRef} data-scroll-anchor>
@@ -223,6 +270,12 @@ export default function Quiz({ initial, onDone }) {
           </p>
         )}
 
+        {saved && (
+          <p className="saved-note" role="status">
+            Saved. You can close this and pick up where you left off.
+          </p>
+        )}
+
         <div className="row" style={{ flexWrap: 'wrap' }}>
           {index > 0 && (
             <button
@@ -236,15 +289,19 @@ export default function Quiz({ initial, onDone }) {
           )}
 
           <div className="push row" style={{ flexWrap: 'wrap' }}>
-            {/* Saving without advancing is the resume affordance: it makes
-                leaving mid-quiz an explicit, safe action rather than a gamble. */}
+            {/*
+              Saves this section and LEAVES. It used to save without advancing
+              and without any acknowledgement, so it looked like a dead control:
+              nothing moved, nothing said anything, and the user was still in the
+              quiz they had just asked to leave.
+            */}
             <button
               type="button"
               className="btn btn--quiet"
-              onClick={() => saveSection({ advance: false })}
+              onClick={() => saveSection({ advance: false, exit: true })}
               disabled={busy}
             >
-              Save and come back later
+              {reviewing ? 'Done' : 'Save and finish later'}
             </button>
             <button
               type="button"

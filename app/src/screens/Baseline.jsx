@@ -7,13 +7,18 @@ import Yolk from '../components/Yolk'
  * about that rather than showing an empty dashboard that implies otherwise. An
  * empty state is an invitation to act — but only if there is something to act on.
  */
-export default function Baseline({ user, onSignOut }) {
+export default function Baseline({ user, onSignOut, onReview }) {
   return (
     <>
       <header className="appbar">
         <Yolk pct={100} size={34} />
         <span className="brand">Yoked</span>
-        <button type="button" className="btn btn--quiet push" onClick={onSignOut}>
+        {/* The way back into the quiz. Without it a question left blank stays
+            blank forever, and a wrong answer cannot be corrected. */}
+        <button type="button" className="btn btn--quiet push" onClick={onReview}>
+          Your answers
+        </button>
+        <button type="button" className="btn btn--quiet" onClick={onSignOut}>
           Sign out
         </button>
       </header>

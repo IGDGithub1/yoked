@@ -4,6 +4,7 @@ import Auth from './screens/Auth'
 import Quiz from './screens/Quiz'
 import Ready from './screens/Ready'
 import Baseline from './screens/Baseline'
+import Answers from './screens/Answers'
 import Yolk from './components/Yolk'
 
 /**
@@ -75,11 +76,39 @@ export default function App() {
 
   const step = state.next?.step
 
-  if (step === 'onboarding' || step === 'start_baseline') {
-    return <QuizFlow user={state.user} initialStep={step} onRefresh={boot} onSignOut={signOut} />
+  // Reviewing answers after onboarding. Kept in App rather than inside Baseline
+  // so it is reachable from anywhere that grows a link to it later, and so the
+  // quiz is loaded fresh — the answers on screen must be what the server holds,
+  // not whatever this session last typed.
+  if (state.reviewing) {
+    return (
+      <Answers
+        onClose={() => {
+          // Re-boot on the way out: editing an answer can change what the
+          // server says comes next, and reusing the old `next` would strand the
+          // user on a screen that no longer applies.
+          setState((s) => ({ ...s, reviewing: false }))
+          boot()
+        }}
+      />
+    )
   }
 
-  return <Baseline user={state.user} onSignOut={signOut} />
+  const review = () => setState((s) => ({ ...s, reviewing: true }))
+
+  if (step === 'onboarding' || step === 'start_baseline') {
+    return (
+      <QuizFlow
+        user={state.user}
+        initialStep={step}
+        onRefresh={boot}
+        onSignOut={signOut}
+        onReview={review}
+      />
+    )
+  }
+
+  return <Baseline user={state.user} onSignOut={signOut} onReview={review} />
 }
 
 /**
@@ -88,7 +117,7 @@ export default function App() {
  * Fetching here rather than in App keeps the boot path to a single request for
  * users who are past onboarding.
  */
-function QuizFlow({ user, initialStep, onRefresh, onSignOut }) {
+function QuizFlow({ user, initialStep, onRefresh, onSignOut, onReview }) {
   const [phase, setPhase] = useState(initialStep === 'start_baseline' ? 'ready' : 'loading')
   const [data, setData] = useState(null)
 
@@ -114,13 +143,16 @@ function QuizFlow({ user, initialStep, onRefresh, onSignOut }) {
   }
 
   if (phase === 'ready') {
-    return <Ready onStarted={onRefresh} />
+    return <Ready onStarted={onRefresh} onReview={onReview} />
   }
 
   return (
     <Quiz
       initial={data}
       onDone={(progress) => setPhase(progress?.all_done ? 'ready' : 'quiz')}
+      // "Save and finish later" mid-onboarding: land on the summary, which is
+      // both the receipt that it saved and the way back in.
+      onExit={onReview}
     />
   )
 }
