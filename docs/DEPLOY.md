@@ -13,11 +13,19 @@ progress photos.
 ```
 /home/SG_USER/www/yoked.lil-boxes.com/
     public_html/          ← web root. SPA + api/index.php only.
+        index.html        ← BUILT from app/, committed
+        assets/           ← BUILT, content-hashed, committed
+        api/index.php     ← front controller
+        sw.js + sw.php    ← service worker; registered as /sw.php
+        fonts/ icons/     ← self-hosted, no CDN
     src/                  ← app code + config.php
     database/migrations/
     bin/
     storage/uploads/      ← progress photos, chmod 700
 ```
+
+`app/` holds the SPA **source** and is not deployed — there is no Node on the
+server. It compiles into `public_html/`, and that output is committed.
 
 `setup-remote.sh` fails the check if `src/` or `storage/` ends up under
 `public_html`.
@@ -131,6 +139,28 @@ exercise library and goal presets. Verify with `php bin/dbcheck.php`.
 
 ## Routine deploys
 
+### Build the SPA first, if you changed it
+
+There is no Node on the server, so the client is compiled locally and the build
+output is committed. `public_html/index.html` and `public_html/assets/` ARE the
+deployed app — editing anything under `app/src/` has no effect until you rebuild.
+
+```sh
+cd app
+npm install     # first time, or after package.json changes
+npm run build   # writes ../public_html/index.html + ../public_html/assets/
+cd ..
+```
+
+The build clears `public_html/assets/` before writing (a Vite plugin in
+`app/vite.config.js`), because bundles are content-hashed and would otherwise
+pile up. It does NOT empty the rest of `public_html` — `api/`, `icons/`,
+`fonts/`, `sw.js`, `sw.php` and `.htaccess` all live there and Vite knows
+nothing about them.
+
+`npm run dev` proxies `/api` to the live host, so the client is always developed
+against the real contract rather than a mock.
+
 **On Windows, use the PowerShell script.** `bin/deploy.sh` cannot authenticate:
 Git Bash's `ssh` does not reach the Windows ssh-agent, so a passphrase-protected
 key stalls it. `deploy.ps1` uses the Windows OpenSSH client, which does. Both read
@@ -242,3 +272,43 @@ the DDL note above.
 
 **`tar: command not found`** on the remote — unexpected on SiteGround; would
 mean falling back to SFTP upload.
+
+**A code change did not appear in the browser** — did you rebuild? `app/src/`
+is source; `public_html/assets/` is what ships. See "Build the SPA first" above.
+
+**An `.htaccess` header or rewrite rule has no effect on a `.js`, `.css`,
+image, or font file** — expected, and not fixable there. nginx sits in front of
+Apache and serves those extensions straight off disk with its own one-year
+`Expires`, so Apache never sees the request. Diagnose by looking at the response
+headers: Apache-handled responses carry `X-Httpd-Modphp: 1`; nginx-served ones
+show `Expires` + `X-Proxy-Cache-Info` and nginx's own ETag format. `.html`,
+`.webmanifest` and `.php` DO reach Apache, so rules for those work.
+
+This is why the service worker is registered as **`/sw.php`**, not `/sw.js`. A
+worker cached for a year cannot be recalled and it governs every other cache, so
+`sw.php` reads `sw.js` off disk and sets `Cache-Control: no-cache` plus
+`Service-Worker-Allowed: /` itself. Rewriting `^sw\.js$` does not work either —
+nginx matches the URI before Apache is consulted. Leave this alone.
+
+**A stale asset still 200s after deploy** — the deploy clears the server's
+`assets/` directory, but nginx's proxy cache may briefly still serve a deleted
+file. It expires on its own, and it is mildly useful: a user mid-session on the
+old bundle does not break. Confirm against the filesystem, not curl, if you need
+the truth.
+
+**`Too many attempts. Try again in a few minutes.`** during testing — the login
+and register limits are 5/hour by design. `php bin/clear-limits.php` clears the
+auth buckets (`--all` also clears the AI call cap, which is a cost control, so
+be deliberate).
+
+**Registration says the invite is invalid and there are no users yet** — the
+invite gate has no first-user exception, on purpose. Bootstrap on the CLI:
+`php bin/make-invite.php --owner` prints a code, then
+`php bin/make-invite.php --clean-bootstrap` after you have registered.
+`--list` shows users and unused invites.
+
+**Do not run `bin/test-plans.php` twice concurrently.** Its teardown deletes
+test users by name prefix, not by the ids it created, so overlapping runs delete
+each other's users mid-flight. It surfaces as an FK violation on `plan_versions`
+or `No such user: <id>`, both of which look like a bug in the code under test.
+The suite makes live API calls and runs for several minutes.
