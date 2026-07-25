@@ -12,8 +12,10 @@ declare(strict_types=1);
  * Usage:
  *   php bin/make-invite.php                      issue a code (owner is issuer)
  *   php bin/make-invite.php <username>           issue a code from that user
- *   php bin/make-invite.php --owner <username> <email>
- *                                                create the first account
+ *   php bin/make-invite.php --owner              create the first account
+ *   php bin/make-invite.php --list               show users and unused invites
+ *   php bin/make-invite.php --clean-bootstrap    remove the placeholder
+ *   php bin/make-invite.php --drop <username>    delete a user and their data
  *
  * The owner's password is not taken as an argument — arguments land in shell
  * history and `ps`. A one-time setup code is printed instead; the user sets
@@ -72,6 +74,58 @@ if (($args[0] ?? '') === '--owner') {
     echo "Register at / with that code, using whatever username and email you want.\n";
     echo "Then remove the placeholder:\n";
     echo "  php bin/make-invite.php --clean-bootstrap\n";
+    exit(0);
+}
+
+// ---- list who exists -------------------------------------------------------
+
+if (($args[0] ?? '') === '--list') {
+    $users = DB::all('SELECT id, username, email, onboarding_state, created_at
+                      FROM users ORDER BY id');
+    echo "users (" . count($users) . "):\n";
+    foreach ($users as $u) {
+        printf("  #%-4d %-22s %-14s %s\n",
+            $u['id'], $u['username'], $u['onboarding_state'], $u['email']);
+    }
+
+    $invites = DB::all('SELECT code, created_by FROM invites WHERE used_by IS NULL');
+    echo "\nunused invites (" . count($invites) . "):\n";
+    foreach ($invites as $i) {
+        echo "  {$i['code']}  (from #{$i['created_by']})\n";
+    }
+    exit(0);
+}
+
+// ---- drop a single user ----------------------------------------------------
+
+if (($args[0] ?? '') === '--drop') {
+    $name = $args[1] ?? null;
+    if ($name === null) {
+        fwrite(STDERR, "Usage: php bin/make-invite.php --drop <username>\n");
+        exit(1);
+    }
+    $u = DB::one('SELECT id, username FROM users WHERE username = ?', [$name]);
+    if ($u === null) {
+        fwrite(STDERR, "No such user: {$name}\n");
+        exit(1);
+    }
+
+    $id = (int) $u['id'];
+
+    // Most user data cascades from users.id, but both invites FKs are RESTRICT,
+    // so those rows block the delete until they are dealt with — and the two
+    // directions need opposite treatment:
+    //   created_by  → the row must go; it cannot outlive its issuer.
+    //   used_by     → only detached, because the row may have been created by
+    //                 someone who still exists, and deleting it would destroy
+    //                 their record rather than the dropped user's.
+    DB::tx(function () use ($id): void {
+        DB::run('UPDATE invites SET used_by = NULL, used_at = NULL
+                 WHERE used_by = ? AND created_by <> ?', [$id, $id]);
+        DB::run('DELETE FROM invites WHERE created_by = ?', [$id]);
+        DB::run('DELETE FROM users WHERE id = ?', [$id]);
+    });
+    echo "Dropped {$u['username']} (#{$id}).\n";
     exit(0);
 }
 
