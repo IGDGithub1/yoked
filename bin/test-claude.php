@@ -150,11 +150,13 @@ t('plan generation asks for enough output tokens', function () {
     // degraded plan — the JSON is incomplete, so nothing parses and the user
     // gets nothing. Asserted here because the value is easy to "tidy" downward
     // and the failure only shows up as an occasional dead generation.
-    $src = file_get_contents(YK_SRC . '/lib/Plans.php');
-    if (!preg_match("/'max_tokens'\s*=>\s*(\d+)/", (string) $src, $m)) {
-        return 'could not find max_tokens in Plans.php';
+    if (!class_exists('Plans')) {
+        require YK_SRC . '/lib/Goals.php';
+        require YK_SRC . '/lib/PlanSchema.php';
+        require YK_SRC . '/lib/Safety.php';
+        require YK_SRC . '/lib/Plans.php';
     }
-    $n = (int) $m[1];
+    $n = Plans::MAX_OUTPUT_TOKENS;
     return $n >= 48000
         ?: "plan generation max_tokens is {$n}; needs >= 48000 for headroom "
            . 'over the 31k observed maximum';

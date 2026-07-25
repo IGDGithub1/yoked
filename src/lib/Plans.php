@@ -20,6 +20,23 @@ final class Plans
     private const CACHE_SYSTEM = true;
 
     /**
+     * Output ceiling for a week.
+     *
+     * A week is seven days of prescribed sessions with per-exercise detail PLUS
+     * seven days of meals with structured ingredients, and measured runs land at
+     * 22k-31k output tokens. This was 32000, which truncated two of six recorded
+     * generations — and a truncation is not a degraded plan, it is no plan: the
+     * JSON is incomplete, so nothing parses and nothing persists.
+     *
+     * Public so bin/aicalls.php can report headroom and test-claude can assert
+     * the value, rather than either of them hardcoding a copy that drifts.
+     *
+     * Costs nothing when unused: max_tokens is a ceiling, and output is billed
+     * per token actually emitted. Check bin/aicalls.php before lowering it.
+     */
+    public const MAX_OUTPUT_TOKENS = 64000;
+
+    /**
      * Generate and persist a week.
      *
      * @param string $weekStart  a Monday, YYYY-MM-DD
@@ -53,19 +70,7 @@ final class Plans
             [
                 'purpose'      => $purpose,
                 'user_id'      => $userId,
-                // 64k, not 32k. A full week is seven days of prescribed sessions
-                // with per-exercise detail PLUS seven days of meals with
-                // structured ingredients, and measured runs land at 22k-31k
-                // output tokens. Against a 32k ceiling that is no headroom at
-                // all — a 31,073-token success is 3% from failure, and two of
-                // six generations were truncated outright. A truncation is not a
-                // degraded plan, it is no plan: the JSON is incomplete, so
-                // nothing can be parsed or persisted. Check with bin/aicalls.php
-                // before lowering this.
-                //
-                // Costs nothing when unused: max_tokens is a ceiling, and output
-                // is billed per token emitted.
-                'max_tokens'   => 64000,
+                'max_tokens'   => self::MAX_OUTPUT_TOKENS,
                 'system'       => self::systemPrompt($context),
                 'cache_system' => self::CACHE_SYSTEM,
                 'messages'     => [[
