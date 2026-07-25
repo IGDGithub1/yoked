@@ -484,18 +484,43 @@ final class CheckIn
         // What the user said.
         $out[] = '';
         $out[] = '--- Their own report ---';
+
+        /*
+         * Rendered in the USER's units, not the storage units.
+         *
+         * The columns are metric and the conversion on the way IN was right, but this
+         * prompt handed Claude "113.85 kg" for an imperial user and the review came
+         * back quoting kilograms at someone who thinks in pounds. Converting on input
+         * and forgetting the output is a whole-round-trip mistake: the numbers were
+         * correct and the coach still sounded like it was talking about someone else.
+         */
+        $units  = (string) (DB::one('SELECT units FROM profiles WHERE user_id = ?', [$userId])['units']
+                            ?? 'imperial');
+        $metric = $units === 'metric';
+        $wUnit  = $metric ? 'kg' : 'lb';
+        $lUnit  = $metric ? 'cm' : 'in';
+
+        $toW = static fn(float $kg): float => round($metric ? $kg : $kg / 0.45359237, 1);
+        $toL = static fn(float $cm): float => round($metric ? $cm : $cm / 2.54, 1);
+
         if (($checkin['weight_kg'] ?? null) !== null) {
-            $out[] = "Weight: {$checkin['weight_kg']} kg";
+            $out[] = "Weight: {$toW((float) $checkin['weight_kg'])} {$wUnit}";
         }
         $ms = [];
         foreach (self::MEASUREMENTS as $m) {
             if (($checkin[$m] ?? null) !== null) {
-                $ms[] = str_replace('_cm', '', $m) . ": {$checkin[$m]} cm";
+                $ms[] = str_replace('_cm', '', $m)
+                    . ': ' . $toL((float) $checkin[$m]) . " {$lUnit}";
             }
         }
         if ($ms !== []) {
             $out[] = 'Measurements: ' . implode(', ', $ms);
         }
+
+        // Stated explicitly, because the model will otherwise reach for whichever
+        // unit the numbers look like they belong to.
+        $out[] = "(This user thinks in {$units} units. Use {$wUnit} and {$lUnit} "
+               . 'throughout, and never mention the other system.)';
         $out[] = ($checkin['self_report'] ?? null) !== null
             ? "They said: {$checkin['self_report']}"
             : 'They left the written report blank.';
@@ -520,9 +545,11 @@ final class CheckIn
                 . 'there is no trend yet and you must not invent one.';
         } else {
             foreach ($hist as $h) {
-                $bits = ["{$h['week_start']}: {$h['weight_kg']} kg"];
+                // Same conversion as above: the history is stored metric and read in
+                // whatever the user thinks in.
+                $bits = ["{$h['week_start']}: " . $toW((float) $h['weight_kg']) . " {$wUnit}"];
                 if ($h['waist_cm'] !== null) {
-                    $bits[] = "waist {$h['waist_cm']}";
+                    $bits[] = 'waist ' . $toL((float) $h['waist_cm']) . " {$lUnit}";
                 }
                 $out[] = '  ' . implode(', ', $bits);
             }

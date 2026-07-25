@@ -484,7 +484,8 @@ function jobWeeklyCheckin(?int $onlyUser, bool $dryRun): array
 {
     $results = ['created' => 0, 'skipped' => 0, 'failed' => 0];
 
-    $sql = 'SELECT u.id, u.display_name,
+    $sql = 'SELECT u.id, u.display_name, u.onboarding_state,
+                   u.baseline_starts_on, u.baseline_ends_on,
                    p.checkin_weekday, p.checkin_hour, p.timezone
             FROM users u
             JOIN profiles p ON p.user_id = u.id
@@ -503,6 +504,25 @@ function jobWeeklyCheckin(?int $onlyUser, bool $dryRun): array
         $userId = (int) $user['id'];
         $name   = $user['display_name'];
         $tz     = $user['timezone'] ?? null;
+
+        /*
+         * No check-in during the observation week.
+         *
+         * A user whose baseline has not started, or is still in week 1, has nothing to
+         * report ON: there is no plan to have adhered to and no targets to have hit.
+         * Asking anyway produced a real "Your coach on last week" card for an account
+         * created the same day, reviewing a week the user was not present for. The
+         * same guard already governs plan generation, and it belongs here too.
+         */
+        if (Baseline::inObservationWeek($user, $tz)) {
+            $p = Baseline::progress($user, $tz);
+            $where = ($p !== null && !$p['started'])
+                ? "baseline opens {$p['starts_on']}"
+                : 'baseline week 1';
+            say("  {$name}: observing ({$where}); no check-in yet", false);
+            $results['skipped']++;
+            continue;
+        }
 
         // The week ENDING, in the user's own zone. On a Saturday that is the
         // Monday five days back.

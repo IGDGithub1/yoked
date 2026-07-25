@@ -405,9 +405,123 @@ t('nudge bookkeeping starts at zero', function () use ($userId, $thisWeek) {
         ?: 'a fresh check-in already had nudges';
 });
 
+// ---- the observation week --------------------------------------------------
+
+echo "\n6. no check-in during observation\n";
+
+t('a user in baseline week 1 gets no check-in', function () {
+    /*
+     * Reported from a real account: a user who created it the same day received a
+     * "your coach on last week" review for a week they were not present for, because
+     * the check-in job accepted any baseline user. Plan generation had this guard from
+     * the start; the check-in job did not.
+     *
+     * There is nothing to report ON during observation: no plan to have adhered to and
+     * no targets to have hit.
+     */
+    DB::run("DELETE FROM users WHERE username IN ('citest_obs', 'citest_soon')");
+    $u = DB::insert(
+        'INSERT INTO users (username, display_name, email, password_hash,
+                            onboarding_state, baseline_starts_on, baseline_ends_on)
+         VALUES ("citest_obs", "CI obs", "citest_obs@example.test", "x", "baseline",
+                 CURDATE(), DATE_ADD(CURDATE(), INTERVAL 14 DAY))'
+    );
+    DB::run('INSERT INTO profiles (user_id, timezone) VALUES (?, "UTC")', [$u]);
+
+    $row = DB::one(
+        'SELECT id, onboarding_state, baseline_starts_on, baseline_ends_on FROM users WHERE id = ?',
+        [$u]
+    );
+    return Baseline::inObservationWeek($row, 'UTC') === true
+        ?: 'a day-one baseline user was not treated as observing';
+});
+
+t('a user whose baseline has not started yet is also observing', function () {
+    // The exact case from the report: baseline_starts_on is in the FUTURE, so the
+    // check-in job must not open anything for the week just gone.
+    $u = DB::insert(
+        'INSERT INTO users (username, display_name, email, password_hash,
+                            onboarding_state, baseline_starts_on, baseline_ends_on)
+         VALUES ("citest_soon", "CI soon", "citest_soon@example.test", "x", "baseline",
+                 DATE_ADD(CURDATE(), INTERVAL 2 DAY), DATE_ADD(CURDATE(), INTERVAL 16 DAY))'
+    );
+    DB::run('INSERT INTO profiles (user_id, timezone) VALUES (?, "UTC")', [$u]);
+
+    $row = DB::one(
+        'SELECT id, onboarding_state, baseline_starts_on, baseline_ends_on FROM users WHERE id = ?',
+        [$u]
+    );
+    return Baseline::inObservationWeek($row, 'UTC') === true
+        ?: 'a user whose baseline starts in two days was not treated as observing';
+});
+
+// ---- units round-trip ------------------------------------------------------
+
+echo "\n7. the review speaks the user's units\n";
+
+/** The rendered prompt, which is private, reached through reflection. */
+function renderedPrompt(int $userId, array $checkin): string
+{
+    $ref = new ReflectionMethod(CheckIn::class, 'userPrompt');
+    $ref->setAccessible(true);
+    return (string) $ref->invoke(null, $userId, $checkin, null, false);
+}
+
+t('an imperial user\'s weight round-trips through the prompt as pounds', function () use ($userId) {
+    /*
+     * Reported from a real account: the review said "Weight at 113.85kg" to a user who
+     * had chosen imperial. The conversion on the way IN was correct all along; the
+     * prompt then handed Claude the raw stored metric with "kg" hardcoded.
+     *
+     * Converting on input and forgetting the output is a whole-round-trip mistake: the
+     * numbers were right and the coach still sounded like it was describing someone
+     * else.
+     */
+    DB::run('UPDATE profiles SET units = "imperial" WHERE user_id = ?', [$userId]);
+
+    $week = date('Y-m-d', strtotime('monday this week -49 days'));
+    $c = CheckIn::open($userId, $week);
+    // 251 lb, which stores as ~113.85 kg: the exact number from the report.
+    $r = CheckIn::answer($userId, (int) $c['id'], ['weight_kg' => 251.0], 'UTC');
+    if (!$r['ok']) {
+        return 'answer failed: ' . $r['error'];
+    }
+
+    $stored = (float) CheckIn::find($userId, $week)['weight_kg'];
+    if (abs($stored - 113.85) > 0.2) {
+        return "251 lb stored as {$stored} kg, expected ~113.85";
+    }
+
+    $prompt = renderedPrompt($userId, CheckIn::find($userId, $week));
+    if (str_contains($prompt, ' kg')) {
+        return 'the prompt still quotes kilograms to an imperial user';
+    }
+    if (!str_contains($prompt, ' lb')) {
+        return 'the prompt does not quote pounds';
+    }
+    // And it says so explicitly, because the model otherwise reaches for whichever
+    // unit the numbers look like they belong to.
+    return str_contains($prompt, 'imperial units')
+        ?: 'the prompt does not state which unit system to use';
+});
+
+t('a metric user still gets kilograms', function () use ($userId) {
+    DB::run('UPDATE profiles SET units = "metric" WHERE user_id = ?', [$userId]);
+
+    $week = date('Y-m-d', strtotime('monday this week -56 days'));
+    $c = CheckIn::open($userId, $week);
+    CheckIn::answer($userId, (int) $c['id'], ['weight_kg' => 80.0], 'UTC');
+
+    $prompt = renderedPrompt($userId, CheckIn::find($userId, $week));
+    if (!str_contains($prompt, ' kg')) {
+        return 'a metric user was not given kilograms';
+    }
+    return str_contains($prompt, 'metric units') ?: 'the prompt does not state metric';
+});
+
 // ---- the profile schedule --------------------------------------------------
 
-echo "\n6. the schedule itself\n";
+echo "\n8. the schedule itself\n";
 
 t('the check-in slot defaults a day before the plan slot', function () use ($userId) {
     // Saturday 18:00 against Sunday 18:00: the whole point is that the user gets
@@ -440,8 +554,11 @@ t('the check-in slot fires before the plan slot in the same week', function () {
 
 if (!$keep) {
     DB::run('DELETE FROM users WHERE id = ?', [$userId]);
+    // The observation fixtures, which are separate users rather than states of the
+    // main one: inObservationWeek() reads the row, so it needs real rows.
+    DB::run("DELETE FROM users WHERE username LIKE 'citest_%'");
     @unlink($cookieJar);
-    echo "\n  test user removed\n";
+    echo "\n  test users removed\n";
 } else {
     echo "\n  test user kept: {$username}\n";
 }
