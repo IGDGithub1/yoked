@@ -1,0 +1,41 @@
+# Yoked — public web root (SiteGround / Apache)
+# Carried over from Friendspace: the cache rules below are the fix for the
+# "users do not see updates" problem, so do not relax them.
+# See ROADMAP_NOTES in that project for the history.
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # API → PHP front controller
+    RewriteRule ^api(/.*)?$ api/index.php [L,QSA]
+    # SPA fallback: non-file, non-API → index.html
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ index.html [L]
+</IfModule>
+
+# Hashed build assets can be cached hard; index.html must not be.
+<IfModule mod_headers.c>
+    <FilesMatch "\.(js|css|woff2?|png|jpg|jpeg|gif|webp|svg)$">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </FilesMatch>
+    <FilesMatch "index\.html$">
+        Header set Cache-Control "no-cache, must-revalidate"
+    </FilesMatch>
+    # The service worker must never be cached hard, or updates won't propagate.
+    <FilesMatch "^sw\.js$">
+        Header set Cache-Control "no-cache, must-revalidate"
+    </FilesMatch>
+    # The manifest should update promptly when we rebrand/change icons.
+    <FilesMatch "\.webmanifest$">
+        Header set Cache-Control "no-cache, must-revalidate"
+    </FilesMatch>
+</IfModule>
+
+<IfModule mod_mime.c>
+    AddType application/manifest+json .webmanifest
+</IfModule>
+
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
