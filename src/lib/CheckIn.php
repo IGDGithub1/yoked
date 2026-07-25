@@ -328,7 +328,7 @@ final class CheckIn
         // Store the review. The user sees this whether or not the plan changed.
         DB::run(
             'UPDATE weekly_checkins SET claude_review = ?, completed_at = NOW() WHERE id = ?',
-            [(string) ($data['review'] ?? ''), $checkinId]
+            [Tone::clean((string) ($data['review'] ?? '')), $checkinId]
         );
 
         // The emphasis request, granted or not. Declined ones are kept: a user with
@@ -352,7 +352,7 @@ final class CheckIn
         return [
             'ok'          => true,
             'error'       => null,
-            'review'      => (string) ($data['review'] ?? ''),
+            'review'      => Tone::clean((string) ($data['review'] ?? '')),
             'alter_plan'  => $canAlter && (bool) ($data['alter_plan'] ?? false),
             'alter_reason' => $data['alter_reason'] ?? null,
             'usage'       => $result['usage'] ?? [],

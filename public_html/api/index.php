@@ -66,6 +66,7 @@ require YK_SRC . '/routes/nutrition.php';
 // date="weekly". First match wins, so the more specific file goes first.
 require YK_SRC . '/routes/checkin.php';
 require YK_SRC . '/routes/training.php';
+require YK_SRC . '/routes/notifications.php';
 
 // ---- Resolve path ----------------------------------------------------------
 

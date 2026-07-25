@@ -6,9 +6,15 @@ declare(strict_types=1);
  *
  *   /usr/local/bin/php /home/customer/www/yoked.lil-boxes.com/bin/cron.php
  *
- * Jobs, each independently guarded:
- *   1. weekly_plan     — generate next week's plan for users who are due
- *   2. weekly_checkin  — open a check-in for the week that just ended
+ * Jobs, each independently guarded, in the order the sweep runs them:
+ *   1. baseline_graduation — move finished two-week baselines to 'active'
+ *   2. weekly_checkin      — open a check-in at the user's Saturday slot
+ *   3. checkin_review      — send answered check-ins to Claude; act on late ones
+ *   4. weekly_plan         — generate next week, using the check-in if answered
+ *   5. drift_sweep         — classify recent days; ask questions only on real drift
+ *   6. checkin_nudge       — chase an unanswered check-in
+ *
+ * The order is load-bearing and commented at the $jobs array.
  *
  * Design constraints that came from actually running this:
  *
@@ -48,6 +54,9 @@ require YK_SRC . '/lib/Safety.php';
 require YK_SRC . '/lib/Plans.php';
 require YK_SRC . '/lib/Nutrition.php';
 require YK_SRC . '/lib/CheckIn.php';
+require YK_SRC . '/lib/Notify.php';
+require YK_SRC . '/lib/Drift.php';
+require YK_SRC . '/lib/Nudge.php';
 
 $args   = array_slice($argv, 1);
 $dryRun = in_array('--dry-run', $args, true);
@@ -685,7 +694,131 @@ function jobCheckinReview(?int $onlyUser, bool $dryRun): array
 }
 
 // ---------------------------------------------------------------------------
-// Job 5 — nudge unanswered check-ins
+// Job 5 — daily drift sweep and absence nudges
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify every active user's recent days, and act only when it is warranted.
+ *
+ * This is the main cost-control mechanism in the app (SPEC-coaching §4.2), and the
+ * important thing about it is how OFTEN it does nothing. An on-track user produces no
+ * model call, no notification, and no row. A user with minor drift produces the same
+ * nothing, deliberately: one missed session aggregates for the weekly check-in rather
+ * than becoming a conversation now.
+ *
+ * Only two states act:
+ *   significant  → Claude asks a question (§7.1), once per rough patch
+ *   absent       → a nudge, escalating per the user's own settings (§9)
+ *
+ * Claimed per user per DAY rather than per week, since this is the daily pass. The
+ * claim is what stops a sweep running every 15 minutes from asking 96 times.
+ */
+function jobDriftSweep(?int $onlyUser, bool $dryRun): array
+{
+    $results = ['on_track' => 0, 'minor' => 0, 'asked' => 0, 'nudged' => 0,
+                'quiet' => 0, 'failed' => 0];
+
+    $sql = 'SELECT u.id, u.display_name, u.onboarding_state,
+                   u.baseline_starts_on, u.baseline_ends_on, p.timezone
+            FROM users u
+            JOIN profiles p ON p.user_id = u.id
+            WHERE u.status = "active"
+              AND u.onboarding_state IN ("baseline", "active")
+              AND p.coaching_paused = 0';
+    $params = [];
+    if ($onlyUser !== null) {
+        $sql .= ' AND u.id = ?';
+        $params[] = $onlyUser;
+    }
+
+    foreach (DB::all($sql, $params) as $user) {
+        $userId = (int) $user['id'];
+        $name   = $user['display_name'];
+        $tz     = $user['timezone'] ?? null;
+
+        try {
+            $a = Drift::assess($user, $tz);
+
+            // The quiet majority. Reported only in verbose mode, because a line per
+            // user per sweep is how a log becomes unreadable.
+            if ($a['state'] === Drift::ON_TRACK) {
+                say("  {$name}: on track ({$a['reason']})", false);
+                $results['on_track']++;
+                continue;
+            }
+
+            if ($a['state'] === Drift::MINOR) {
+                // Real, noted, and deliberately not acted on: §4.2 aggregates minor
+                // drift for the weekly check-in. The check-in prompt reads the same
+                // logged_days rows, so nothing has to be stored for it to land.
+                say("  {$name}: minor drift ({$a['reason']}) — noted for the check-in", false);
+                $results['minor']++;
+                continue;
+            }
+
+            if ($a['state'] === Drift::ABSENT) {
+                if ($dryRun) {
+                    say("  {$name}: WOULD nudge — {$a['reason']}");
+                    $results['nudged']++;
+                    continue;
+                }
+                $id = Nudge::forAbsence($userId, $a);
+                if ($id === null) {
+                    // Below their threshold, past their ceiling, or already sent
+                    // today. All three are correct silences.
+                    say("  {$name}: absent ({$a['reason']}) but no nudge due", false);
+                    $results['quiet']++;
+                } else {
+                    say("  {$name}: nudged — {$a['reason']}");
+                    $results['nudged']++;
+                }
+                continue;
+            }
+
+            // Significant. The one path that spends money.
+            if (Drift::alreadyAsked($userId)) {
+                say("  {$name}: significant drift, already asked this week", false);
+                $results['quiet']++;
+                continue;
+            }
+
+            if ($dryRun) {
+                say("  {$name}: WOULD ask about drift — {$a['reason']}");
+                $results['asked']++;
+                continue;
+            }
+
+            $period = Schedule::today($tz);
+            $runId  = claim('drift_sweep', $userId, $period);
+            if ($runId === false) {
+                $results['quiet']++;
+                continue;
+            }
+
+            $started = microtime(true);
+            $turnId  = Drift::ask($userId, $a);
+            if ($turnId === null) {
+                say("  {$name}: drift question FAILED to generate");
+                finish($runId, 'failed', 'generation failed', $started);
+                $results['failed']++;
+            } else {
+                say("  {$name}: asked about drift — {$a['reason']}");
+                finish($runId, 'ok', "chat_turn {$turnId}: {$a['reason']}", $started);
+                $results['asked']++;
+            }
+        } catch (Throwable $e) {
+            say("  {$name}: ERROR — " . $e->getMessage());
+            error_log('[yoked cron] drift sweep failed for user ' . $userId
+                . ': ' . $e->getMessage());
+            $results['failed']++;
+        }
+    }
+
+    return $results;
+}
+
+// ---------------------------------------------------------------------------
+// Job 6 — nudge unanswered check-ins
 // ---------------------------------------------------------------------------
 
 /**
@@ -703,14 +836,6 @@ function jobCheckinReview(?int $onlyUser, bool $dryRun): array
 function jobCheckinNudge(?int $onlyUser, bool $dryRun): array
 {
     $results = ['nudged' => 0, 'quiet' => 0];
-
-    // Per-intensity ceiling on how many times we will ask.
-    $maxNudges = [
-        'leave_me_alone' => 1,
-        'gentle'         => 2,
-        'persistent'     => 4,
-        'relentless'     => 7,
-    ];
 
     $sql = 'SELECT c.id, c.user_id, c.week_start, c.nudge_count, c.last_nudged_at,
                    u.display_name, p.nudge_intensity, p.timezone
@@ -730,7 +855,9 @@ function jobCheckinNudge(?int $onlyUser, bool $dryRun): array
         $name      = $row['display_name'];
         $count     = (int) $row['nudge_count'];
         $intensity = (string) ($row['nudge_intensity'] ?? 'gentle');
-        $ceiling   = $maxNudges[$intensity] ?? 2;
+        // Shared with the absence ladder rather than a second copy of the numbers:
+        // a user who asked to be left alone means it for both kinds of chasing.
+        $ceiling   = Tone::nudgeCeiling($intensity);
 
         if ($count >= $ceiling) {
             $results['quiet']++;
@@ -758,6 +885,21 @@ function jobCheckinNudge(?int $onlyUser, bool $dryRun): array
               WHERE id = ? AND status = "pending"',
             [(int) $row['id']]
         );
+
+        // A real notification now that Notify exists, rather than only a counter the
+        // UI had to infer from. Plain rather than generated: unlike an absence nudge
+        // this is a reminder about a form, and a tone-matched line about paperwork is
+        // effort spent in the wrong place.
+        Notify::create(
+            (int) $row['user_id'],
+            'checkin_open',
+            'Your weekly check-in is waiting. It shapes next week, so it is worth two '
+            . 'minutes.',
+            'weekly_checkin',
+            (int) $row['id'],
+            20
+        );
+
         say("  {$name}: nudged for {$row['week_start']} (" . ($count + 1) . " of {$ceiling})");
         $results['nudged']++;
     }
@@ -806,6 +948,8 @@ if ($released > 0) {
  *   review      before plan, so an answered check-in has been through Claude and
  *               any emphasis grant is on file when the plan is built.
  *   plan        then generation, with whatever input arrived.
+ *   drift       after plan, so a user who just received a week is assessed against
+ *               the week they actually lived rather than one that arrived seconds ago.
  *   nudge       last: it is bookkeeping, and chasing a check-in that this sweep
  *               just answered would be absurd.
  */
@@ -814,6 +958,7 @@ $jobs = [
     'weekly_checkin'      => fn() => jobWeeklyCheckin($onlyUser, $dryRun),
     'checkin_review'      => fn() => jobCheckinReview($onlyUser, $dryRun),
     'weekly_plan'         => fn() => jobWeeklyPlan($onlyUser, $dryRun),
+    'drift_sweep'         => fn() => jobDriftSweep($onlyUser, $dryRun),
     'checkin_nudge'       => fn() => jobCheckinNudge($onlyUser, $dryRun),
 ];
 

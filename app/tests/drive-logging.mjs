@@ -927,9 +927,60 @@ await check('the console is clean', async () => {
 
 await page.screenshot({ path: shot('logging-today.png'), fullPage: true })
 
+// ---- nudges ----------------------------------------------------------------
+
+console.log('\n11. nudges and coach questions')
+
+await check('a nudge is shown, and it addresses absence rather than a bad day', async () => {
+  const nudges = page.locator('.nudge')
+  await nudges.first().waitFor({ timeout: 20000 })
+  const txt = await page.locator('body').innerText()
+
+  if (!/Three days quiet/.test(txt)) return 'the absence nudge did not render'
+  /*
+   * The tone rule, asserted rather than trusted: "Nudges never shame a bad day. They
+   * address absence." A nudge that reaches for blame is worse than no nudge, because
+   * it teaches people to stop logging the hard weeks.
+   */
+  const shaming = /you failed|fell off|disappoint|let yourself down|excuses/i.test(txt)
+  return shaming ? 'the nudge copy contains shaming language' : true
+})
+
+await check('a drift question reads as a conversation, not a nudge', async () => {
+  // Different treatment on purpose: one addresses silence, the other opens a
+  // conversation and expects an answer.
+  const notice = page.locator('.notice.nudge')
+  await notice.waitFor({ timeout: 15000 })
+  const txt = await notice.innerText()
+  return /What happened/.test(txt) ? true : `notice read: ${txt}`
+})
+
+await check('a nudge can be dismissed and stays dismissed', async () => {
+  const before = await page.locator('.nudge').count()
+  await page.locator('.nudge').first().getByRole('button', { name: /dismiss/i }).click()
+  await page.waitForFunction(
+    (n) => document.querySelectorAll('.nudge').length < n,
+    before,
+    { timeout: 15000 }
+  )
+  // And it does not come back on the next boot, which is the whole point of
+  // dismissing rather than hiding.
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.getByRole('heading', { name: /^Food$/ }).waitFor({ timeout: 20000 })
+  const after = await page.locator('.nudge').count()
+  return after < before ? true : `${after} nudges after dismissing one of ${before}`
+})
+
+await check('nudges do not claim the accent', async () => {
+  // A nudge is a line someone did not ask for. It gets less presence than the things
+  // they came here to do, so it must never be the yellow thing on the screen.
+  const n = await page.locator('.nudge .btn--primary').count()
+  return n === 0 ? true : `${n} primary buttons inside a nudge`
+})
+
 // ---- the weekly check-in ---------------------------------------------------
 
-console.log('\n11. the weekly check-in')
+console.log('\n12. the weekly check-in')
 
 await check('an open check-in is surfaced with its week', async () => {
   const card = page.locator('.checkin-weekly')

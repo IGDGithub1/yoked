@@ -23,7 +23,8 @@ baseline, and report their week back to the coach that plans the next one.
 | Logging | ✅ food (search, barcode, favorites), training incl. free-logging, check-in |
 | Baseline lifecycle | ✅ two weeks, Monday-aligned, per-user local time, graduates to active |
 | Weekly check-in | ✅ Sat 18:00 local, shapes Sunday's plan, late answers reviewed |
-| Nudges, chat, vetoes | ⬜ check-in nudges work; §9 absence nudges and §6 chat are next |
+| Drift and nudges | ✅ §4.2 escalation, pure SQL on track; §9 absence ladder, tone-matched |
+| Chat, vetoes, Next Day Review | ⬜ §6 interjections, §5 vetoes, §4.1a are next |
 
 `bin/test-plans.php` seeds the two users from the specs, generates their weeks,
 and asserts the output against the spec decisions.
@@ -83,6 +84,7 @@ php bin/test-goals.php        # 46 evaluator assertions incl. keto parity
 php bin/test-schedule.php     # 21 date assertions; no DB, no API
 php bin/test-baseline.php     # 24 lifecycle assertions: observation, graduation
 php bin/test-checkin.php      # 29 assertions: opening, lateness, skipping
+php bin/test-drift.php        # 32 assertions: escalation ladder, nudges, notifications
 php bin/test-claude.php       # API client; --offline for shape checks only
 php bin/test-logging.php      # 46 assertions over real HTTP: food, training, check-in
 php bin/test-plans.php        # end-to-end generation; --seed-only to skip API
@@ -100,7 +102,7 @@ php bin/seed-uitest.php       # two users, re-runnable:
                               # plus an open weekly check-in and a reviewed one
 ```
 ```powershell
-cd app; npm run drive:logging   # 90 checks: log it, reload, confirm it stuck
+cd app; npm run drive:logging   # 94 checks: log it, reload, confirm it stuck
 ```
 
 Re-seed before each run — the suite mutates the fixture, and it refuses to start
@@ -125,8 +127,13 @@ nothing change.
   is fine. Persistent substitution means the menu is wrong, not the user.
 - **The user supplies facts; Claude decides.** Chat cannot dictate terms, and there is
   no code path from user text to plan mutation.
-- **Quiet by default.** On-track days make no Claude call at all. Nudges address
-  absence, never a bad day.
+- **Quiet by default.** On-track days make no Claude call at all, and neither does
+  minor drift: one missed session aggregates for the weekly check-in rather than
+  becoming a conversation. Only significant drift asks a question.
+- **Nudges address absence, never a bad day.** A logged bad day is a success. There
+  is deliberately no notification type for a missed session, because absence is what
+  ends a coaching relationship and scolding teaches people to stop logging the hard
+  weeks.
 - **Everything is stored UTC**, converted client-side. The one exception is
   *scheduling*: `profiles.timezone` decides when a weekly slot fires, because
   "Saturday 18:00" has to mean Saturday evening where the user actually lives.

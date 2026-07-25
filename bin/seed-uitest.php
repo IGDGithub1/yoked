@@ -231,3 +231,34 @@ printf(
     "seeded an open check-in #%d for week %s, plus a reviewed one for %s\n",
     $ciId, $ciWeek, $oldWeek
 );
+
+// ---- a nudge and a coach question ------------------------------------------
+
+/*
+ * Seeded directly rather than waiting for the drift sweep, which needs a user who has
+ * genuinely gone quiet for days. Both types are represented because they render
+ * differently: a nudge is a dismissible card, a drift question is a notice, and the
+ * distinction is that one addresses absence while the other opens a conversation.
+ */
+DB::run(
+    'INSERT INTO notifications (user_id, type, body) VALUES (?, "absence", ?)',
+    [$seed['user_id'],
+     'Three days quiet. No judgement, just log whatever you remember and we pick it '
+     . 'back up.']
+);
+$turnId = DB::insert(
+    'INSERT INTO chat_turns (user_id, role, body, outcome, drift_state)
+     VALUES (?, "assistant", ?, "question", "significant")',
+    [$seed['user_id'],
+     'Two sessions went missing this week and Thursday ran well over. Not a problem, '
+     . 'but I would rather know what happened before I write next week. Busy, unwell, '
+     . 'or something else?']
+);
+DB::run(
+    'INSERT INTO notifications (user_id, type, subject_type, subject_id, body)
+     VALUES (?, "drift_question", "chat_turn", ?, ?)',
+    [$seed['user_id'], $turnId,
+     'Two sessions went missing this week and Thursday ran well over. What happened?']
+);
+
+printf("seeded a nudge and a drift question (chat_turn #%d)\n", $turnId);

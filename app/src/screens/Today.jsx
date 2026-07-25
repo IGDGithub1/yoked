@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, today as todayDate, shiftDate } from '../api'
 import CheckIn from '../components/CheckIn'
 import WeeklyCheckIn from '../components/WeeklyCheckIn'
+import Notifications from '../components/Notifications'
 import Food, { FoodSummary } from '../components/Food'
 import Training, { TrainingSummary } from '../components/Training'
 import Section from '../components/Section'
@@ -44,6 +45,17 @@ export default function Today({ user, baseline, onSignOut, onReview }) {
     api.weekly.load().then(setWeekly).catch(() => setWeekly(null))
   }, [])
   useEffect(() => { loadWeekly() }, [loadWeekly])
+
+  /*
+   * Nudges, on the same footing: not a property of the day being viewed, and a
+   * failure here must not take the day down. Most days this fetches an empty list,
+   * which is the design rather than a waste.
+   */
+  const [notes, setNotes] = useState(null)
+  const loadNotes = useCallback(() => {
+    api.notifications.load().then(setNotes).catch(() => setNotes(null))
+  }, [])
+  useEffect(() => { loadNotes() }, [loadNotes])
 
   const load = useCallback(async (d) => {
     setStatus('loading')
@@ -158,6 +170,12 @@ export default function Today({ user, baseline, onSignOut, onReview }) {
 
         {status === 'ready' && nutrition && training && (
           <>
+            {/* Nudges first, because a nudge exists precisely because the user has
+                NOT been here. Renders nothing on a normal day. */}
+            {notes && isToday && (
+              <Notifications data={notes} onChanged={loadNotes} />
+            )}
+
             {/* Above the daily check-in, and only when there is something to
                 answer or read: an open weekly check-in is time-boxed, and it
                 shapes the coming week. The daily one can wait a scroll. */}

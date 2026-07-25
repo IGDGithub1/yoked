@@ -156,6 +156,17 @@ export const api = {
    * The WEEKLY check-in, which is a different thing from the daily one above:
    * weight, measurements, and the user's read on the week that just ended.
    */
+  /*
+   * Nudges and coach messages. In-app only: §9 weighed web push and declined it,
+   * since VAPID keys plus iOS home-screen installation is real work for a handful of
+   * users who open the app anyway.
+   */
+  notifications: {
+    load: () => get('notifications'),
+    read: (ids) => post('notifications/read', { ids }),
+    readAll: () => post('notifications/read', { all: true }),
+  },
+
   weekly: {
     load: () => get('checkin/weekly'),
     answer: (id, fields) => put(`checkin/weekly/${id}`, fields),

@@ -56,3 +56,4 @@ require YK_SRC . '/lib/DB.php';
 require YK_SRC . '/lib/Validate.php';
 require YK_SRC . '/lib/Schedule.php';
 require YK_SRC . '/lib/Baseline.php';
+require YK_SRC . '/lib/Tone.php';

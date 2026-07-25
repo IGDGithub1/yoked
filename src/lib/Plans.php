@@ -626,26 +626,16 @@ final class Plans
         ]));
     }
 
-    /** Tone brief for the prompt. The label is how a user picks; this is what works. */
+    /**
+     * Tone brief for the prompt. The label is how a user picks; this is what works.
+     *
+     * Delegates to Tone so plans, nudges, and check-in reviews all speak with the
+     * same voice. It lived here first and was copied nowhere, which was fine until
+     * nudges needed it too — two copies of a character brief is two voices.
+     */
     private static function toneBrief(string $tone): string
     {
-        return match ($tone) {
-            'sarcastic_hardass' =>
-                'Dry, teasing, profane-adjacent. Roast excuses, never the person — '
-                . "the joke is always at the situation's expense. This applies to "
-                . 'food and body too; there is no carve-out.',
-            'high_school_coach' =>
-                'Results-driven and relentlessly pushing for more. Never satisfied, '
-                . 'always in their corner. "Good. Now do it again heavier."',
-            'motivational_speaker' =>
-                'Big energy, stakes-raising, aspirational. Every session is The Session.',
-            'funny_positive' =>
-                'Light, warm, genuinely silly. Celebrate small wins without irony.',
-            'direct_no_fluff' =>
-                'Say the thing and stop. No jokes, no pep, no padding.',
-            default =>
-                'Calm, patient, supportive. Encouraging without being saccharine.',
-        };
+        return Tone::brief($tone);
     }
 
     /**

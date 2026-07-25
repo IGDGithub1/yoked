@@ -17,6 +17,25 @@
   line-height: 1;
 }
 
+/* ---- nudges ------------------------------------------------------------- */
+/*
+ * Quieter than a card that holds content. A nudge is a line someone did not ask for,
+ * so it gets less presence than the things they came here to do.
+ */
+.nudge { padding: 12px 14px; }
+.nudge .prose { flex: 1 1 auto; }
+
+/*
+ * The passive indicator at two quiet days: a fact, not a message.
+ * Deliberately not in a card and deliberately not the error colour — it is not a
+ * problem, it is a note.
+ */
+.passive-quiet {
+  margin: 0;
+  text-align: center;
+  font-style: italic;
+}
+
 /* ---- the "?" explainer -------------------------------------------------- */
 /*
  * Available rather than present. Explaining every term inline is how a form
