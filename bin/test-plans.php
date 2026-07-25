@@ -310,6 +310,13 @@ function cleanup(): void
 {
     // FKs cascade from users, so this clears profiles, goals, availability,
     // constraints, plans and prescriptions in one go.
+    //
+    // DO NOT RUN TWO COPIES OF THIS SUITE AT ONCE. The match is by prefix, not
+    // by this run's own ids, so a second run's teardown deletes the first run's
+    // users mid-flight. That surfaces as a bewildering FK violation on
+    // plan_versions, or "No such user: 46" from a generation that was working
+    // fine — hunted twice already. This suite makes live API calls and takes
+    // several minutes, which makes the overlap easy to cause by accident.
     DB::run("DELETE FROM users WHERE username LIKE 'plantest_%'");
 }
 

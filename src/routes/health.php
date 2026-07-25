@@ -29,6 +29,45 @@ $router->add('GET', 'health', function (): void {
 });
 
 /**
+ * GET /api/env — what the WEB SAPI actually has.
+ *
+ * bin/envcheck.php can only report the CLI binary, and the two differ here:
+ * imagick is absent from CLI PHP on this host. Since uploads are processed by
+ * the web SAPI, that is the one whose answer matters, and this is the only way
+ * to see it.
+ *
+ * Admin-only, and deliberately not folded into /api/health: that endpoint is
+ * unauthenticated, and an extension inventory is reconnaissance.
+ */
+$router->add('GET', 'env', function (): void {
+    $user = Auth::require();
+    if (($user['role'] ?? '') !== 'admin') {
+        Response::error('Not permitted.', 403);
+    }
+
+    $imagick = extension_loaded('imagick');
+    $gd      = extension_loaded('gd');
+
+    Response::json([
+        'sapi'       => PHP_SAPI,
+        'php'        => PHP_VERSION,
+        'extensions' => [
+            'imagick'  => $imagick,
+            'gd'       => $gd,
+            'curl'     => extension_loaded('curl'),
+            'pdo_mysql' => extension_loaded('pdo_mysql'),
+            'mbstring' => extension_loaded('mbstring'),
+        ],
+        // The only thing the answer changes: whether uploads can be re-encoded
+        // to strip EXIF and any embedded payload. Either library can do it.
+        'can_reencode_uploads' => $imagick || $gd,
+        'upload_max_filesize'  => ini_get('upload_max_filesize'),
+        'post_max_size'        => ini_get('post_max_size'),
+        'memory_limit'         => ini_get('memory_limit'),
+    ]);
+});
+
+/**
  * GET /api/me — current session state.
  *
  * Always 200, even when logged out: the SPA calls this on boot to decide what
