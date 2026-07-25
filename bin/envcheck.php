@@ -57,6 +57,17 @@ foreach ($imaging as $ext => $why) {
 $canReencode = extension_loaded('imagick') || extension_loaded('gd');
 printf("\nre-encode uploads: %s\n", $canReencode ? 'yes' : 'NO — uploads cannot be sanitised');
 
+// This script runs under the CLI binary, and on SiteGround the two SAPIs differ:
+// imagick is absent here but PRESENT under apache2handler, which is the SAPI that
+// actually processes uploads. Confirmed 2026-07-25 via GET /api/runtime:
+//   {"sapi":"apache2handler","extensions":{"imagick":true,"gd":true}, ...}
+// So an 'imagick --' above is a fact about the CLI, not about the web server.
+if (PHP_SAPI === 'cli' && !extension_loaded('imagick')) {
+    echo "\nNOTE: imagick is missing from CLI PHP but present under the web SAPI on\n"
+       . "      this host, and uploads run there. Check the SAPI that matters with\n"
+       . "      GET /api/runtime (admin-only) rather than trusting this line.\n";
+}
+
 if (extension_loaded('imagick')) {
     $v = Imagick::getVersion();
     printf("imagick:           %s\n", $v['versionString'] ?? '?');
