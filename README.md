@@ -20,7 +20,7 @@ against a generated week.
 | `Plans.php` | ✅ week generation, validation, versioned persistence |
 | API tier | ✅ `api/index.php`, global CSRF, session auth |
 | Onboarding UI | ✅ the quiz, tier confirmation, answer review |
-| Logging | ✅ food, training, daily check-in — API and UI |
+| Logging | ✅ food (search, barcode, favorites), training incl. free-logging, check-in |
 | Nudges, chat, weekly check-in | ⬜ schema exists, cron stub only |
 
 `bin/test-plans.php` seeds the two users from the specs, generates their weeks,
@@ -92,11 +92,18 @@ on today and the fixture's plan week must contain it:
 php bin/seed-uitest.php       # a user with a plan for TODAY (re-runnable)
 ```
 ```powershell
-cd app; npm run drive:logging   # 35 checks: log it, reload, confirm it stuck
+cd app; npm run drive:logging   # 63 checks: log it, reload, confirm it stuck
 ```
 
-That suite also guards two things a unit test cannot see: that the page does not
-scroll sideways at 360px, and that the accent stays spent once per view.
+Re-seed before each run — the suite mutates the fixture, and it refuses to start
+against a dirty one rather than producing a screenful of misleading failures.
+
+It also guards three things a unit test cannot see: that the page never scrolls
+sideways at 360px, that the accent stays spent once per view, and that **every
+selected control looks selected**. That last one has shipped broken twice — both
+times a chip using `role="radio"`/`aria-checked` against CSS that only styled
+`aria-pressed`, so a screen reader announced the choice while a sighted user saw
+nothing change.
 
 ## Load-bearing decisions
 

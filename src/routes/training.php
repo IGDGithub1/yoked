@@ -19,11 +19,16 @@ $router->add('GET', 'training/day/{date}', function (array $p): void {
  * POST /api/training/sessions — log a session and its exercises together.
  *
  * Body: {
- *   date, status, prescribed_session_id?, actual_minutes?, session_rpe?,
- *   notes?, trained_with_buddy?,
+ *   date, status, prescribed_session_id?, session_type?, actual_minutes?,
+ *   session_rpe?, notes?, trained_with_buddy?,
  *   exercises: [{slug|exercise_id, sets_completed, actual_reps,
- *                actual_weight_kg, rpe, skipped?, notes?}, ...]
+ *                actual_weight_kg, actual_seconds?, actual_distance_m?,
+ *                rpe, skipped?, notes?}, ...]
  * }
+ *
+ * session_type applies only when prescribed_session_id is absent — a free-logged
+ * session (baseline week 1, or "I just went for a run") carries its own type,
+ * while a prescribed one reads it off the plan.
  *
  * One request, not a session POST followed by N exercise POSTs: the user taps
  * "done" once, and a half-written session after a dropped connection is worse
@@ -62,6 +67,25 @@ $router->add('DELETE', 'training/sessions/{id}', function (array $p): void {
         Response::error((string) $r['error'], 404);
     }
     Response::json($r);
+});
+
+/**
+ * GET /api/training/exercises?q=… — typeahead for free-logging.
+ *
+ * Needed because a user logging a workout that was never prescribed has to be
+ * able to FIND an exercise: POST /training/sessions resolves an exact slug,
+ * alias, or name, which is no help to someone typing "leg pr".
+ *
+ * Not rate limited — it is one indexed LIKE against a 90-row table, unlike food
+ * search which is a paid model call.
+ */
+$router->add('GET', 'training/exercises', function (): void {
+    Auth::require();
+    $q = (string) ($_GET['q'] ?? '');
+
+    // An empty query returns nothing rather than the whole library: this feeds a
+    // typeahead, and 90 rows on first focus is a wall, not a suggestion.
+    Response::json(['exercises' => Training::searchExercises($q)]);
 });
 
 /**
@@ -119,23 +143,43 @@ $router->add('PUT', 'checkin/{date}', function (array $p): void {
 
     $b = Response::body();
 
-    // 1..5 scales throughout, which is what the columns are sized for.
+    /*
+     * 1..5 scales throughout, which is what the columns are sized for.
+     *
+     * An explicit null CLEARS the rating. A rating you can change but never undo
+     * is a trap: the check-in is optional by design, and a mis-tap otherwise
+     * becomes permanent data the coach reads as fact. The columns are all
+     * nullable, so "answered 3" and "did not answer" were always distinct
+     * states — there just was no way back to the second one.
+     *
+     * array_key_exists, not isset: isset() is false for null, which is exactly
+     * the case being handled here.
+     */
     $fields = [];
     foreach (['energy', 'sleep_quality', 'soreness', 'mood'] as $k) {
-        if (array_key_exists($k, $b)) {
-            $v = Validate::intRange($b[$k], 1, 5);
-            if ($v === null) {
-                Response::error("{$k} must be a whole number from 1 to 5.", 422);
-            }
-            $fields[$k] = $v;
+        if (!array_key_exists($k, $b)) {
+            continue;
         }
+        if ($b[$k] === null) {
+            $fields[$k] = null;
+            continue;
+        }
+        $v = Validate::intRange($b[$k], 1, 5);
+        if ($v === null) {
+            Response::error("{$k} must be a whole number from 1 to 5, or null to clear it.", 422);
+        }
+        $fields[$k] = $v;
     }
     if (array_key_exists('sleep_hours', $b)) {
-        $v = Validate::floatRange($b['sleep_hours'], 0, 24);
-        if ($v === null) {
-            Response::error('sleep_hours must be between 0 and 24.', 422);
+        if ($b['sleep_hours'] === null) {
+            $fields['sleep_hours'] = null;
+        } else {
+            $v = Validate::floatRange($b['sleep_hours'], 0, 24);
+            if ($v === null) {
+                Response::error('sleep_hours must be between 0 and 24, or null to clear it.', 422);
+            }
+            $fields['sleep_hours'] = round($v, 1);
         }
-        $fields['sleep_hours'] = round($v, 1);
     }
     if (array_key_exists('notes', $b)) {
         $fields['notes'] = Validate::str($b['notes'], 1, 2000);
@@ -151,6 +195,11 @@ $router->add('PUT', 'checkin/{date}', function (array $p): void {
     // checked_in_at is what distinguishes "not asked yet" from "asked and
     // answered", which the nudge logic needs (§4.2) — an all-null check-in is
     // still a check-in if the user chose to skip the ratings.
+    //
+    // So clearing every rating deliberately does NOT un-check-in. "I opened this
+    // and chose not to answer" is a different fact from "nobody asked me", and
+    // only the second one deserves a nudge. Stamping it on a clear is what keeps
+    // the app from pestering someone who already engaged with it today.
     $sets   = [];
     $params = [];
     foreach ($fields as $col => $val) {

@@ -17,6 +17,87 @@
   line-height: 1;
 }
 
+/* ---- chips used as radios ----------------------------------------------- */
+/*
+ * quiz.css styles .chip[aria-pressed] because its chips are toggles. The session
+ * status and free-log type chips are a single CHOICE, so they carry role="radio"
+ * and aria-checked — and so had no pressed state whatsoever: a screen reader
+ * announced the selection while a sighted user saw nothing change.
+ *
+ * Exactly the bug reported against "None" in onboarding, in a new place. Same
+ * appearance as the aria-pressed rule rather than a new look — these are the same
+ * component doing the same job.
+ */
+/* aria-selected is the tab equivalent (the four ways into a meal). All three
+   attributes mean "this is the chosen one" and all three must look chosen. */
+.chip[aria-checked='true'],
+.chip[aria-selected='true'] {
+  border-color: var(--yolk-deep);
+  background: color-mix(in srgb, var(--yolk) 14%, var(--white));
+  font-weight: 600;
+}
+
+/* ---- collapsible sections ---------------------------------------------- */
+
+.sec-head { align-items: baseline; }
+
+/*
+ * The whole heading is the hit target, not just the caret. A 12px triangle is a
+ * miss waiting to happen on a phone.
+ */
+.sec-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+
+.sec-caret {
+  display: inline-block;
+  width: 1em;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  transition: transform var(--t-quick) var(--ease);
+}
+.sec-toggle[aria-expanded='true'] .sec-caret { transform: rotate(90deg); }
+
+/* Live numbers stay in the heading whether the body is open or shut — a closed
+   section still has to say where the day stands. */
+.sec-summary { text-align: right; }
+
+/*
+ * P / F / C on one line, wrapping as whole units.
+ *
+ * As a flex row with three children the labels separated from their values at
+ * 360px — "P" ended up above "90/180g", which turns a macro readout into four
+ * unlabelled numbers. Inline units with nowrap means the LINE breaks between
+ * macros, never inside one.
+ */
+.macro-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px 10px;
+}
+.macro-line .macro { white-space: nowrap; }
+
+/* ---- theme toggle ------------------------------------------------------ */
+
+.theme-toggle {
+  /* Square, so the glyph is centred rather than sitting in button padding
+     sized for words. */
+  min-width: 34px;
+  padding: 6px 8px;
+  font-size: 15px;
+  line-height: 1;
+}
+
 /* ---- the check-in scale ------------------------------------------------ */
 /*
  * Five buttons in a row, equal width. A slider was tried in the original and is
@@ -43,10 +124,71 @@
 .scale-dot:active:not(:disabled) { transform: translateY(1px); }
 .scale-dot:disabled { opacity: .6; cursor: progress; }
 
+/*
+ * Unanswered rows are DIMMED. At full contrast, five numbers read as five valid
+ * answers rather than an empty question — the row looks answered before it is.
+ * Dimming the numerals only, not the borders: the targets have to stay visibly
+ * tappable, it is the VALUES that are absent.
+ */
+.scale[data-answered='false'] .scale-dot { color: var(--muted); font-weight: 500; }
+.scale[data-answered='false'] .scale-dot:hover:not(:disabled) { color: var(--ink); }
+
 /* The selected rating is the one yellow thing in the card. */
 .scale-dot[aria-checked='true'] {
   border-color: var(--yolk-deep);
   background: color-mix(in srgb, var(--yolk) 16%, var(--white));
+}
+
+/* ---- the favorite star ------------------------------------------------- */
+/*
+ * On the logged entry, because the moment you have eaten something is when you
+ * know it is a keeper. That is how the original accumulated a useful list
+ * without anyone curating one.
+ */
+.star {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 4px 6px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--muted);
+  transition: color var(--t-quick), transform 120ms;
+}
+.star:hover:not(:disabled) { color: var(--ink); }
+.star:active:not(:disabled) { transform: scale(.9); }
+.star[aria-pressed='true'] { color: var(--yolk-deep); }
+.star:disabled { opacity: .5; cursor: progress; }
+
+/* ---- barcode scanner --------------------------------------------------- */
+
+.scanner-frame {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--r-input);
+  background: #000;   /* not a token: it is a camera letterbox, not a surface */
+  aspect-ratio: 4 / 3;
+}
+
+.scanner-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/*
+ * A wide, short window — a retail barcode is a wide, short thing, and a square
+ * reticle invites people to frame the whole packet and get nothing.
+ */
+.scanner-reticle {
+  position: absolute;
+  inset: 50% 12% auto;
+  transform: translateY(-50%);
+  height: 26%;
+  border: 2px solid var(--yolk);
+  border-radius: 6px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .35);
 }
 
 /* ---- state tags -------------------------------------------------------- */

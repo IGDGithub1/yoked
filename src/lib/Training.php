@@ -17,6 +17,15 @@ final class Training
 {
     public const STATUSES = ['completed', 'partial', 'skipped', 'substituted'];
 
+    /**
+     * What a FREE-LOGGED session can be (007).
+     *
+     * No 'rest': you do not log a rest day, the absence is the record. A session
+     * logged against a prescription takes its type from the plan instead, so
+     * this only applies when prescribed_session_id is null.
+     */
+    public const TYPES = ['strength', 'cardio', 'hybrid', 'mobility', 'active_recovery'];
+
     /** Today's prescribed sessions plus anything already logged against them. */
     public static function day(int $userId, string $date): array
     {
@@ -71,7 +80,10 @@ final class Training
                 if (!$matched) {
                     $sessions[] = [
                         'prescribed_session_id' => null,
-                        'session_type'   => $log['session_type'] ?? 'other',
+                        // The row's own type (007). Pre-migration rows have
+                        // none, and 'strength' would be a guess dressed as a
+                        // fact — the client shows a neutral label instead.
+                        'session_type'   => $log['session_type'] ?? null,
                         'focus'          => null,
                         // An unprescribed session cannot be a commitment, so it
                         // never counts toward or against adherence.
@@ -142,11 +154,18 @@ final class Training
 
             $sid = DB::insert(
                 'INSERT INTO logged_sessions
-                    (user_id, logged_day_id, prescribed_session_id, status, actual_minutes,
-                     session_rpe, notes, trained_with_buddy)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                    (user_id, logged_day_id, prescribed_session_id, session_type, status,
+                     actual_minutes, session_rpe, notes, trained_with_buddy)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
-                    $userId, $dayId, $prescribedId, $status,
+                    $userId, $dayId, $prescribedId,
+                    // Only a free-logged session carries its own type; one
+                    // logged against a prescription reads it off the plan, and
+                    // storing a second copy is a second thing to disagree.
+                    $prescribedId === null
+                        ? Validate::enum($body['session_type'] ?? null, self::TYPES)
+                        : null,
+                    $status,
                     Validate::intRange($body['actual_minutes'] ?? null, 1, 600),
                     Validate::intRange($body['session_rpe'] ?? null, 1, 10),
                     Validate::str($body['notes'] ?? null, 1, 2000),
@@ -246,6 +265,68 @@ final class Training
             'UPDATE logged_days SET sessions_prescribed = ?, sessions_completed = ? WHERE id = ?',
             [$prescribed, $completed, $dayId]
         );
+    }
+
+    /**
+     * Find exercises by what the user typed.
+     *
+     * Free-logging needs this: resolveExercise() takes an exact slug, alias, or
+     * name, which is fine for a client that already holds the id and useless for
+     * a person typing "leg pr". The library is 90 exercises and 53 aliases, so
+     * this is a small LIKE against an indexed column rather than anything clever.
+     *
+     * Aliases are searched too and reported under their canonical exercise —
+     * someone who types "bench" should find "Barbell Bench Press", and the log
+     * row must reference the canonical id either way.
+     *
+     * load_type comes back because the log form depends on it: a plank wants
+     * seconds, a run wants distance, a press wants kilos. Asking for kg on a
+     * plank is how you teach someone the app does not understand training.
+     */
+    public static function searchExercises(string $query, int $limit = 12): array
+    {
+        $q = Validate::str($query, 1, 80);
+        if ($q === null) {
+            return [];
+        }
+
+        // Escape the LIKE metacharacters. Without this a user typing "100%"
+        // matches everything, which reads as the search being broken.
+        $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $q) . '%';
+        $lim  = max(1, min(25, $limit));
+
+        $rows = DB::all(
+            "SELECT e.id, e.slug, e.name, e.category, e.load_type, e.pattern
+             FROM exercises e
+             WHERE e.name LIKE ? OR e.slug LIKE ?
+                OR EXISTS (
+                    SELECT 1 FROM exercise_aliases a
+                    WHERE a.exercise_id = e.id AND a.alias LIKE ?
+                )
+             ORDER BY
+                -- A prefix match is what the user meant; an interior match is a
+                -- consolation. Without this ordering, typing 'press' surfaces
+                -- 'Leg Press' above 'Press' on id alone.
+                CASE WHEN e.name LIKE ? THEN 0 ELSE 1 END,
+                CHAR_LENGTH(e.name),
+                e.name
+             LIMIT {$lim}",
+            [$like, $like, $like, str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $q) . '%']
+        );
+
+        $out = [];
+        foreach ($rows as $r) {
+            $out[] = [
+                'exercise_id' => (int) $r['id'],
+                'slug'        => (string) $r['slug'],
+                'name'        => (string) $r['name'],
+                'category'    => (string) $r['category'],
+                // 'weight' | 'bodyweight' | 'assisted' | 'time' | 'distance'
+                'load_type'   => (string) $r['load_type'],
+                'pattern'     => (string) $r['pattern'],
+            ];
+        }
+        return $out;
     }
 
     /**
@@ -371,8 +452,8 @@ final class Training
     private static function loggedSessions(int $dayId): array
     {
         $sessions = DB::all(
-            'SELECT id, prescribed_session_id, status, actual_minutes, session_rpe,
-                    notes, trained_with_buddy, logged_at
+            'SELECT id, prescribed_session_id, session_type, status, actual_minutes,
+                    session_rpe, notes, trained_with_buddy, logged_at
              FROM logged_sessions WHERE logged_day_id = ? ORDER BY id',
             [$dayId]
         );
@@ -414,6 +495,7 @@ final class Training
             $out[] = [
                 'logged_session_id' => $id,
                 'prescribed_session_id' => self::intOrNull($s['prescribed_session_id']),
+                'session_type'   => $s['session_type'],
                 'status'         => (string) $s['status'],
                 'actual_minutes' => self::intOrNull($s['actual_minutes']),
                 'session_rpe'    => self::intOrNull($s['session_rpe']),

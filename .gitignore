@@ -16,3 +16,7 @@ storage/
 # OS / editor noise
 .DS_Store
 Thumbs.db
+
+# Screenshots written by the browser suite (app/tests/drive-logging.mjs).
+# Useful for design review, not artifacts to version.
+app/tests/*.png

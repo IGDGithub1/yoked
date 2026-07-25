@@ -123,11 +123,15 @@ export const api = {
 
     favorites: () => get('nutrition/favorites'),
     addFavorite: (food) => post('nutrition/favorites', food),
+    renameFavorite: (id, fields) => patch(`nutrition/favorites/${id}`, fields),
     deleteFavorite: (id) => del(`nutrition/favorites/${id}`),
   },
 
   training: {
     day: (date) => get(`training/day/${date}`),
+    /* Typeahead for free-logging. Not rate limited — one indexed LIKE against
+       90 rows, unlike food search which is a paid model call. */
+    exercises: (q) => get(`training/exercises?q=${encodeURIComponent(q)}`),
     /* A session and its exercises in ONE request: the user taps "done" once,
        and a half-written session after a dropped connection is worse than none. */
     logSession: (session) => post('training/sessions', session),

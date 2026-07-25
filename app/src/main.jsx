@@ -5,6 +5,11 @@ import './styles/base.css'
 import './styles/quiz.css'
 import './styles/log.css'
 import App from './App'
+import { applyStoredTheme } from './components/ThemeToggle'
+
+// Before the first paint, not in an effect: a forced light theme on a dark phone
+// would otherwise flash dark on every load.
+applyStoredTheme()
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

@@ -71,10 +71,52 @@ await check('signing in lands on the logging screen', async () => {
   await page.getByRole('heading', { name: /how are you today/i }).waitFor({ timeout: 20000 })
 })
 
+/*
+ * Clear the browser-side state this suite itself writes.
+ *
+ * Collapse and theme live in localStorage, so a second run inherited a collapsed
+ * Food section from the first and then failed a dozen assertions that could not
+ * find the cards inside it. Re-seeding the database is not enough — half the
+ * state under test is on the client.
+ *
+ * The DB side still needs `php bin/seed-uitest.php` before each run; this only
+ * guarantees the browser starts where a new user would.
+ */
+await page.evaluate(() => {
+  localStorage.removeItem('yoked.sections')
+  localStorage.removeItem('yoked.theme')
+})
+await page.reload({ waitUntil: 'networkidle' })
+await page.getByRole('heading', { name: /how are you today/i }).waitFor({ timeout: 20000 })
+
 await check('today\'s date is shown', async () => {
   const eyebrow = await page.locator('.eyebrow').first().textContent()
   return /today/i.test(eyebrow) ? true : `eyebrow said "${eyebrow}"`
 })
+
+/*
+ * Refuse to run against a dirty fixture.
+ *
+ * Almost every assertion below is written against a freshly seeded day, and a
+ * re-run without re-seeding produced twenty cascading failures that all looked
+ * like real bugs. One honest error beats twenty misleading ones.
+ */
+{
+  // Check the .tag elements, not the body text: "Ate as planned" is a BUTTON on
+  // an unlogged meal and "Did something else" is a status option, so matching
+  // prose here flagged a clean fixture as dirty. A .tag is only rendered for a
+  // meal that has actually been logged.
+  const tags = await page.locator('.tag').allInnerTexts()
+  const logged = tags.filter((t) => /as planned|substituted|skipped|off-plan/.test(t))
+  if (logged.length > 0) {
+    console.error(
+      `\nThe fixture already has food logged (${logged.join(', ')}). Re-seed first:\n` +
+      "  ssh … \"cd … && php bin/seed-uitest.php\"\n"
+    )
+    await browser.close()
+    process.exit(2)
+  }
+}
 
 // ---- the check-in ----------------------------------------------------------
 
@@ -234,10 +276,17 @@ await page.reload({ waitUntil: 'networkidle' })
 await page.getByRole('heading', { name: /how are you today/i }).waitFor({ timeout: 20000 })
 
 await check('the check-in ratings came back', async () => {
-  const energy = await page
-    .locator('[aria-labelledby="sc-energy"] [role="radio"]')
-    .nth(3)
-    .getAttribute('aria-checked')
+  // The card defaults CLOSED once answered, so the scales are not mounted on a
+  // fresh load — the collapsed summary is what carries the answers here.
+  const summary = await page.locator('body').innerText()
+  if (!/energy 4\/5/i.test(summary)) return `collapsed summary read: ${summary.slice(0, 200)}`
+  if (!/7\.5h sleep/i.test(summary)) return 'the sleep hours were not in the summary'
+
+  // Then open it and confirm the controls agree with the summary.
+  await page.getByRole('button', { name: /how are you today/i }).click()
+  const four = page.locator('[aria-labelledby="sc-energy"] [role="radio"]').nth(3)
+  await four.waitFor({ timeout: 10000 })
+  const energy = await four.getAttribute('aria-checked')
   const hours = await page.locator('#sleep-hours').inputValue()
   if (energy !== 'true') return `energy 4 came back as aria-checked=${energy}`
   if (hours !== '7.5') return `hours came back as "${hours}"`
@@ -300,16 +349,295 @@ await check('"back to today" returns and re-loads the day', async () => {
   )
 })
 
+// ---- favorites, scan, and the placeholder ----------------------------------
+
+console.log('\n7. the ways into a meal')
+
+await check('a logged food can be starred as a usual', async () => {
+  const card = page.locator('.card', { hasText: 'Breakfast' }).first()
+  const star = card.locator('.star').first()
+  await star.click()
+  await star.and(page.locator('[aria-pressed="true"]')).waitFor({ timeout: 15000 })
+})
+
+await check('the star survives a reload', async () => {
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.getByRole('heading', { name: /^Food$/ }).waitFor({ timeout: 20000 })
+  const card = page.locator('.card', { hasText: 'Breakfast' }).first()
+  const star = card.locator('.star').first()
+  await star.and(page.locator('[aria-pressed="true"]')).waitFor({ timeout: 15000 })
+})
+
+await check('the starred food appears as a usual on another meal', async () => {
+  const card = page.locator('.card', { hasText: 'Lunch' }).first()
+  await card.getByRole('button', { name: /^Add food$/i }).click()
+  // The four ways into a meal, for design review.
+  await card.locator('.chips').first().waitFor({ timeout: 10000 })
+  await page.screenshot({ path: shot('logging-addfood.png'), fullPage: true })
+  // Opens on "Usual" when there are any favorites — eating is repetitive, and
+  // that is the highest-yield thing to show first.
+  const tab = card.getByRole('tab', { name: /Usual/i })
+  await tab.waitFor({ timeout: 10000 })
+  if ((await tab.getAttribute('aria-selected')) !== 'true') {
+    return 'the Usual tab was not selected by default'
+  }
+  const txt = await card.innerText()
+  return /Eggs and oats/.test(txt) ? true : `usuals read: ${txt.replace(/\n/g, ' | ')}`
+})
+
+await check('logging from usuals adds the food', async () => {
+  const card = page.locator('.card', { hasText: 'Lunch' }).first()
+  await card.locator('.result', { hasText: 'Eggs and oats' }).first().click()
+  // 725 (breakfast) + 600 (the re-logged usual) = 1325.
+  await page.waitForFunction(
+    () => /1325\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    { timeout: 15000 }
+  )
+})
+
+await check('the search placeholder matches the meal', async () => {
+  const card = page.locator('.card', { hasText: 'Dinner' }).first()
+  await card.getByRole('button', { name: /^Add food$/i }).click()
+  await card.getByRole('tab', { name: /Search/i }).click()
+  const ph = await card.locator('input[aria-label="What did you eat?"]').getAttribute('placeholder')
+  // Whatever it picked, it must be from the DINNER list — not the old hardcoded
+  // "6oz chicken and a cup of broccoli" that read as breakfast nonsense.
+  const dinnerish = /sirloin|salmon|curry|bolognese|stir-fried/i.test(ph)
+  return dinnerish ? true : `dinner placeholder was "${ph}"`
+})
+
+await check('breakfast and dinner get different placeholders', async () => {
+  const dinner = await page.locator('.card', { hasText: 'Dinner' }).first()
+    .locator('input[aria-label="What did you eat?"]').getAttribute('placeholder')
+  const bcard = page.locator('.card', { hasText: 'Breakfast' }).first()
+  await bcard.getByRole('button', { name: /^Add food$/i }).click()
+  await bcard.getByRole('tab', { name: /Search/i }).click()
+  const brek = await bcard.locator('input[aria-label="What did you eat?"]')
+    .getAttribute('placeholder')
+  return brek !== dinner ? true : `both slots showed "${brek}"`
+})
+
+await check('the scan tab offers a typed-barcode fallback', async () => {
+  const card = page.locator('.card', { hasText: 'Breakfast' }).first()
+  await card.getByRole('tab', { name: /Scan/i }).click()
+  // Headless Chromium has no camera, so this exercises exactly the path an iOS
+  // Safari user gets: the manual number entry.
+  await card.locator('input[aria-label="Barcode number"]').waitFor({ timeout: 15000 })
+})
+
+await check('a barcode lookup reaches the server', async () => {
+  const card = page.locator('.card', { hasText: 'Breakfast' }).first()
+  await card.locator('input[aria-label="Barcode number"]').fill('5000112637922')
+  await card.getByRole('button', { name: /look up/i }).click()
+  // Either a hit or an honest "not in the database" — both prove the round trip.
+  // What must NOT happen is a silent nothing.
+  await page.waitForFunction(
+    () => /not in the barcode database|best guess|Scan another|kcal ·/i.test(document.body.innerText),
+    { timeout: 45000 }
+  )
+})
+
+// ---- collapsing and theme --------------------------------------------------
+
+console.log('\n8. sections and theme')
+
+await check('the food section collapses', async () => {
+  const toggle = page.getByRole('button', { name: /^Food$/ })
+  await toggle.click()
+  await page.waitForFunction(
+    () => {
+      const b = document.getElementById('sec-food')
+      return !b || b.offsetParent === null
+    },
+    { timeout: 10000 }
+  )
+})
+
+await check('a collapsed section still shows the day total', async () => {
+  const body = await page.locator('body').innerText()
+  return /1325/.test(body) ? true : 'the total vanished with the section'
+})
+
+await check('the collapse survives a reload', async () => {
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.getByRole('button', { name: /^Food$/ }).waitFor({ timeout: 20000 })
+  const expanded = await page.getByRole('button', { name: /^Food$/ }).getAttribute('aria-expanded')
+  return expanded === 'false' ? true : 'the section re-opened itself'
+})
+
+await check('re-opening it restores the meals', async () => {
+  await page.getByRole('button', { name: /^Food$/ }).click()
+  await page.locator('.card', { hasText: 'Breakfast' }).first().waitFor({ timeout: 10000 })
+})
+
+await check('the check-in collapses once answered', async () => {
+  // Answered in section 2, so on a fresh load it should default shut — and it
+  // must do so even though section 5 opened it by hand. Unlike Food/Training,
+  // this card's open state is deliberately NOT persisted: whether it should be
+  // open depends on whether today is answered, which changes daily, so a
+  // remembered "open" would pin it open every morning afterwards.
+  const expanded = await page
+    .getByRole('button', { name: /how are you today/i })
+    .getAttribute('aria-expanded')
+  if (expanded !== 'false') return 'the answered check-in was still expanded'
+  const body = await page.locator('body').innerText()
+  // And the answers are still legible while closed.
+  return /energy 4\/5/i.test(body) ? true : 'the collapsed summary did not show the ratings'
+})
+
+await check('a rating can be cleared by tapping it again', async () => {
+  await page.getByRole('button', { name: /how are you today/i }).click()
+  const four = page.locator('[aria-labelledby="sc-energy"] [role="radio"]').nth(3)
+  await four.waitFor({ timeout: 10000 })
+  await four.click()
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelectorAll('[aria-labelledby="sc-energy"] [role="radio"]')[3]
+      return el && el.getAttribute('aria-checked') === 'false'
+    },
+    { timeout: 15000 }
+  )
+})
+
+await check('the cleared rating stays cleared after a reload', async () => {
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.getByRole('button', { name: /how are you today/i }).waitFor({ timeout: 20000 })
+  const body = await page.locator('body').innerText()
+  return /energy 4\/5/i.test(body) ? 'the cleared rating came back' : true
+})
+
+await check('unanswered scales are dimmed', async () => {
+  const expanded = await page
+    .getByRole('button', { name: /how are you today/i })
+    .getAttribute('aria-expanded')
+  if (expanded === 'false') {
+    await page.getByRole('button', { name: /how are you today/i }).click()
+  }
+  const row = page.locator('[aria-labelledby="sc-energy"]')
+  await row.waitFor({ timeout: 10000 })
+  const answered = await row.getAttribute('data-answered')
+  return answered === 'false' ? true : `data-answered was "${answered}" after clearing`
+})
+
+await check('the theme toggle forces light and dark', async () => {
+  const btn = page.getByRole('button', { name: /^Theme:/ })
+  const before = await btn.getAttribute('aria-label')
+  await btn.click()
+  const after = await page.getByRole('button', { name: /^Theme:/ }).getAttribute('aria-label')
+  if (before === after) return 'the label did not change'
+  const attr = await page.evaluate(() => document.documentElement.getAttribute('data-theme'))
+  return attr === 'light' || attr === 'dark'
+    ? true
+    : `data-theme was "${attr}" after one tap`
+})
+
+await check('the forced theme survives a reload with no flash', async () => {
+  const wanted = await page.evaluate(() => document.documentElement.getAttribute('data-theme'))
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  // Read immediately, before React has necessarily mounted: applyStoredTheme()
+  // runs at module scope precisely so there is no flash of the wrong theme.
+  const got = await page.evaluate(() => document.documentElement.getAttribute('data-theme'))
+  return got === wanted ? true : `wanted ${wanted}, got ${got} on load`
+})
+
+// ---- free-logging a workout ------------------------------------------------
+
+console.log('\n9. logging a workout nobody prescribed')
+
+await check('a day with no plan offers to log a workout', async () => {
+  // Two days back: the fixture only prescribes today, so this is a genuinely
+  // unprescribed day — which is every day of the baseline fortnight.
+  await page.getByRole('button', { name: /previous day/i }).click()
+  await page.getByRole('button', { name: /previous day/i }).click()
+  await page.getByRole('button', { name: /log a workout/i }).waitFor({ timeout: 20000 })
+})
+
+await check('the exercise typeahead finds an exercise by name', async () => {
+  await page.getByRole('button', { name: /log a workout/i }).click()
+  await page.locator('input[aria-label="Search exercises"]').fill('press')
+  await page.locator('.result', { hasText: /press/i }).first().waitFor({ timeout: 20000 })
+})
+
+await check('picking an exercise adds a row with the right inputs', async () => {
+  await page.locator('.result', { hasText: /press/i }).first().click()
+  const row = page.locator('.exrow').first()
+  await row.waitFor({ timeout: 10000 })
+  const txt = await row.innerText()
+  // A press is weight-loaded, so it must offer kg — and not seconds.
+  if (!/kg/i.test(txt)) return `no kg input: ${txt.replace(/\n/g, ' | ')}`
+  return /Seconds/i.test(txt) ? `offered seconds for a press: ${txt.replace(/\n/g, ' | ')}` : true
+})
+
+await check('a timed exercise asks for seconds, not kilos', async () => {
+  await page.locator('input[aria-label="Search exercises"]').fill('plank')
+  const opt = page.locator('.result', { hasText: /plank/i }).first()
+  await opt.waitFor({ timeout: 20000 })
+  await opt.click()
+  const row = page.locator('.exrow').nth(1)
+  await row.waitFor({ timeout: 10000 })
+  const txt = await row.innerText()
+  // load_type from the exercises table is what drives this — asking for kg on a
+  // plank is how you teach someone the app does not understand training.
+  return /Seconds/i.test(txt) ? true : `plank row read: ${txt.replace(/\n/g, ' | ')}`
+})
+
+// The free-log form mid-fill, for design review: this is the screen that did not
+// exist before and could not be commented on.
+await page.screenshot({ path: shot('logging-freelog.png'), fullPage: true })
+
+await check('the free-logged session saves', async () => {
+  await page.locator('.exrow').first().locator('.exrow-inputs input').first().fill('3')
+  await page.getByRole('button', { name: /save it/i }).click()
+  await page.getByRole('button', { name: /^Remove$/i }).first().waitFor({ timeout: 25000 })
+})
+
+await check('it is labelled as the user\'s own, not prescribed', async () => {
+  const body = await page.locator('body').innerText()
+  return /your own/i.test(body) ? true : 'the free-logged session was not marked "your own"'
+})
+
+await check('the session type it recorded comes back', async () => {
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.getByRole('button', { name: /^Training$/ }).waitFor({ timeout: 20000 })
+  const body = await page.locator('body').innerText()
+  // 'strength' is the default chip. Before migration 007 this always read
+  // "Session" because the row had nowhere to store its type.
+  return /Strength/i.test(body) ? true : 'the free-logged session lost its type'
+})
+
+// Back to today for the quality-floor checks, which assert against the day that
+// actually has a plan.
+//
+// The date is NOT part of the URL (the app is deliberately router-free — the
+// server decides where a user belongs), so the reload in the previous check
+// already put us back on today. That is worth asserting rather than assuming:
+// it is the difference between "the reload reset the day" and "the button
+// silently vanished".
+await check('a reload returns to today, since the date is not in the URL', async () => {
+  const eyebrow = await page.locator('.eyebrow').first().textContent()
+  if (!/today/i.test(eyebrow)) return `after reload the eyebrow said "${eyebrow}"`
+  const back = await page.getByRole('button', { name: /back to today/i }).count()
+  return back === 0 ? true : '"Back to today" was offered while already on today'
+})
+
 // ---- quality floor ---------------------------------------------------------
 
-console.log('\n7. quality floor')
+console.log('\n10. quality floor')
+
+// Both sections open, so the accent budget is measured across everything on
+// screen at once rather than whatever happened to be expanded.
+for (const name of [/^Food$/, /^Training$/]) {
+  const btn = page.getByRole('button', { name })
+  if ((await btn.getAttribute('aria-expanded')) === 'false') await btn.click()
+}
+await page.locator('.card', { hasText: 'Breakfast' }).first().waitFor({ timeout: 15000 })
 
 await check('the accent is spent sparingly', async () => {
   // DESIGN.md: one yellow element per view, and it is earned. The header yolk
   // plus at most one primary button is the budget — a column of yellow buttons
   // down a day of meals is what this guards against.
-  const n = await page.locator('.btn--primary').count()
-  return n <= 1 ? true : `${n} primary buttons on screen`
+  const found = await page.locator('.btn--primary').allInnerTexts()
+  return found.length <= 1 ? true : `${found.length} primary buttons: ${found.join(', ')}`
 })
 
 await check('a logged meal no longer offers a primary action', async () => {
@@ -323,6 +651,45 @@ await check('no verdict is shown for a day still in progress', async () => {
   return /macros are off|On target today/.test(body)
     ? 'a verdict was shown for today'
     : true
+})
+
+/*
+ * Every selected control must LOOK selected.
+ *
+ * This bug has now shipped twice: once on onboarding's "None" chips, and again on
+ * the session-status and free-log-type chips — both times because the element used
+ * role="radio"/aria-checked while the CSS only styled aria-pressed. A screen
+ * reader announced the selection correctly while a sighted user saw nothing.
+ *
+ * So it is asserted mechanically rather than by eye: whatever the attribute, a
+ * chosen chip must differ visually from an unchosen sibling.
+ */
+await check('a selected chip is visually distinct from an unselected one', async () => {
+  // The free-log type chips: "Lifting" is chosen by default, "Cardio" is not.
+  await page.getByRole('button', { name: /log something else you did/i }).click()
+  const chosen = page.locator('.chip[aria-checked="true"]').first()
+  await chosen.waitFor({ timeout: 15000 })
+  const unchosen = page.locator('.chip[aria-checked="false"]').first()
+
+  const style = (el) => el.evaluate((n) => {
+    const s = getComputedStyle(n)
+    return `${s.backgroundColor}|${s.borderColor}|${s.fontWeight}`
+  })
+  const a = await style(chosen)
+  const b = await style(unchosen)
+  return a !== b ? true : `selected and unselected chips both render as ${a}`
+})
+
+await check('the four ways into a meal show which one is open', async () => {
+  const card = page.locator('.card', { hasText: 'Dinner' }).first()
+  await card.getByRole('button', { name: /^Add food$/i }).click()
+  const on = card.locator('.chip[aria-selected="true"]').first()
+  await on.waitFor({ timeout: 15000 })
+  const off = card.locator('.chip[aria-selected="false"]').first()
+  const style = (el) => el.evaluate((n) => getComputedStyle(n).backgroundColor)
+  const a = await style(on)
+  const b = await style(off)
+  return a !== b ? true : `the open and closed tabs share a background: ${a}`
 })
 
 await check('no horizontal scroll at 390px', async () => {
@@ -353,8 +720,13 @@ await page.screenshot({ path: shot('logging-today.png'), fullPage: true })
 
 const dark = await ctx.newPage()
 await dark.emulateMedia({ colorScheme: 'dark' })
-await dark.goto(BASE, { waitUntil: 'networkidle' })
-await dark.getByRole('heading', { name: /how are you today/i }).waitFor({ timeout: 20000 })
+// A fresh page in this context inherits the localStorage the toggle wrote, so
+// clear the override — otherwise this measures the forced theme, not the system
+// preference it is meant to be testing.
+await dark.goto(BASE, { waitUntil: 'domcontentloaded' })
+await dark.evaluate(() => localStorage.removeItem('yoked.theme'))
+await dark.reload({ waitUntil: 'networkidle' })
+await dark.getByRole('heading', { name: /^Food$/ }).waitFor({ timeout: 20000 })
 await check('dark mode picks up the dark shell', async () => {
   const bg = await dark.evaluate(() => getComputedStyle(document.body).backgroundColor)
   // --shell dark is #17140F.

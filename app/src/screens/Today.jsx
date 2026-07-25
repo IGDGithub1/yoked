@@ -1,21 +1,28 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, today as todayDate, shiftDate } from '../api'
 import CheckIn from '../components/CheckIn'
-import Food from '../components/Food'
-import Training from '../components/Training'
+import Food, { FoodSummary } from '../components/Food'
+import Training, { TrainingSummary } from '../components/Training'
+import Section from '../components/Section'
+import ThemeToggle from '../components/ThemeToggle'
 import Yolk from '../components/Yolk'
 
 /**
- * The logging screen — one day, scrolling: check-in, food, training.
+ * The logging screen — one day: check-in, food, training.
  *
- * One screen rather than three tabs. Logging is one activity done at a few
- * moments in a day, and the three parts inform each other: a hard session is
- * why the extra food, and low energy is why the short session. Splitting them
- * would hide that and add a navigation layer this app does not otherwise have.
+ * One screen rather than three tabs. Logging is one activity done at a few moments
+ * in a day, and the three parts inform each other: a hard session is why the extra
+ * food, and low energy is why the short session. Splitting them would hide that
+ * and add a navigation layer this app does not otherwise have.
  *
- * Two requests per day, not seven: nutrition and training days are separate
- * endpoints because they are separate concerns server-side, but they are always
- * wanted together, so they are fetched in parallel and rendered as one thing.
+ * Every section COLLAPSES, and the state persists. That is what makes the third
+ * visit of the day as cheap as the first — each visit is usually about one of the
+ * three things, and the summary in each heading means a closed section still tells
+ * you where the day stands.
+ *
+ * Two requests per day, not seven: nutrition and training are separate endpoints
+ * because they are separate concerns server-side, but they are always wanted
+ * together, so they are fetched in parallel and rendered as one thing.
  */
 export default function Today({ user, onSignOut, onReview }) {
   const [date, setDate] = useState(todayDate)
@@ -49,8 +56,8 @@ export default function Today({ user, onSignOut, onReview }) {
    * The nutrition payload also carries the check-in and the session counts, so a
    * training write has to update BOTH — logging a session changes
    * sessions_completed on the day that the food section reads. Refetching the
-   * nutrition day is one request against a stale count that the user would
-   * otherwise see until they stepped away and back.
+   * nutrition day is one request against a stale count the user would otherwise
+   * see until they stepped away and back.
    */
   const onNutritionDay = (day) => setNutrition(day)
   const onTrainingDay = (day) => {
@@ -70,6 +77,7 @@ export default function Today({ user, onSignOut, onReview }) {
       <header className="appbar">
         <Yolk pct={100} size={34} />
         <span className="brand">Yoked</span>
+        <ThemeToggle />
         <button type="button" className="btn btn--quiet push" onClick={onReview}>
           Your answers
         </button>
@@ -92,9 +100,9 @@ export default function Today({ user, onSignOut, onReview }) {
             <p className="eyebrow">{isToday ? 'Today' : relativeLabel(date)}</p>
             <h1 className="heading">{prettyDate(date)}</h1>
           </div>
-          {/* Forward is disabled on today: logging tomorrow's food is not a
-              thing, and the Next Day Review (§4.1a) is a different screen with
-              a different job. */}
+          {/* Forward is disabled on today: logging tomorrow's food is not a thing,
+              and the Next Day Review (§4.1a) is a different screen with a
+              different job. */}
           <button
             type="button"
             className="btn btn--ghost"
@@ -130,13 +138,28 @@ export default function Today({ user, onSignOut, onReview }) {
 
         {status === 'ready' && nutrition && training && (
           <>
-            <CheckIn checkin={nutrition.checkin} onSave={saveCheckIn} />
-            <Food day={nutrition} date={date} isToday={isToday} onDay={onNutritionDay} />
-            <Training day={training} date={date} onDay={onTrainingDay} />
+            {/* Keyed by date so stepping days REMOUNTS the card. Its open/shut
+                state is decided once at mount from whether the day is answered,
+                and that is exactly the granularity wanted: shut when you arrive
+                at an answered day, but never yanked shut mid-interaction by a
+                save response. */}
+            <CheckIn key={date} checkin={nutrition.checkin} onSave={saveCheckIn} />
 
-            {/* Baseline week 1 is pure observation and has no prescription, so
-                the absence of targets is the design rather than a gap. Saying so
-                stops it reading as a broken screen. */}
+            <Section name="food" title="Food" summary={<FoodSummary day={nutrition} />}>
+              <Food day={nutrition} date={date} isToday={isToday} onDay={onNutritionDay} />
+            </Section>
+
+            <Section
+              name="training"
+              title="Training"
+              summary={<TrainingSummary day={training} />}
+            >
+              <Training day={training} date={date} onDay={onTrainingDay} />
+            </Section>
+
+            {/* Baseline week 1 is pure observation and has no prescription, so the
+                absence of targets is the design rather than a gap. Saying so stops
+                it reading as a broken screen. */}
             {!nutrition.target && (
               <p className="tiny muted prose">
                 No targets yet — the baseline fortnight is observation. Log what you

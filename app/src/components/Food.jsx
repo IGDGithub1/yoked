@@ -1,21 +1,34 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { foodPlaceholder } from '../foodExamples'
+import Scanner from './Scanner'
 
 /**
  * Food logging for one day.
  *
- * The intake model is Keto Tracker's, carried over because it survived real
- * daily use (SPEC-nutrition.md). Two things about it are load-bearing and are
- * the reason this component is shaped the way it is:
+ * The intake model is Keto Tracker's, carried over because it survived real daily
+ * use (SPEC-nutrition.md). Two things about it are load-bearing:
  *
- *   1. Meal total = manual delta + SUM(entries), and the delta is ADDITIVE.
- *      The nudge buttons send the running delta, not an increment, because the
- *      server treats it as absolute against itself — +50 twice is still +50.
- *   2. Net carbs are derived server-side at intake. This component sends
- *      total_carbs and fiber and never computes `carbs` itself.
+ *   1. Meal total = manual delta + SUM(entries), and the delta is ADDITIVE. The
+ *      nudge buttons send the running delta, not an increment, because the server
+ *      treats it as absolute against itself — +50 twice is still +50.
+ *   2. Net carbs are derived server-side at intake. This sends total_carbs and
+ *      fiber and never computes `carbs` itself.
  *
- * Nothing here judges the day. Totals are shown against target, but the verdict
- * is the server's — an old client must not be able to re-grade history.
+ * The three ways in are FAVORITES, SCAN, and SEARCH, in that order of prominence.
+ * That order is the whole point and it is not the order the API suggests:
+ *
+ *   - Favorites first because eating is repetitive. The same eight breakfasts
+ *     cover most mornings, and a one-tap re-log of "my usual" is the difference
+ *     between a food log someone keeps and one they abandon in week three.
+ *   - Scan second because it is exact and free of typing, and packaged food is
+ *     most of what has a barcode worth scanning.
+ *   - Search last because it is the slowest, costs a paid model call, and is
+ *     rate limited to 60/hour. It is the fallback for genuinely new food, not
+ *     the front door.
+ *
+ * Nothing here judges the day. Totals show against target, but the verdict is the
+ * server's — an old client must not re-grade history.
  */
 
 const SLOT_LABELS = {
@@ -35,8 +48,23 @@ const ADHERENCE_LABELS = {
 }
 
 export default function Food({ day, date, isToday, onDay }) {
-  const totals = day.totals || {}
-  const target = day.target
+  /*
+   * Favorites are fetched ONCE for the whole section, not per meal card.
+   *
+   * Six slots each fetching the same list is six requests for one answer, and
+   * they would drift after a star — so the list lives here and every card reads
+   * the same copy.
+   */
+  const [favorites, setFavorites] = useState([])
+  useEffect(() => {
+    let live = true
+    api.nutrition.favorites()
+      .then((r) => { if (live) setFavorites(r.favorites || []) })
+      // A failed favorites fetch must not take the day down with it: search and
+      // scan still work, and the section degrades to what it was before.
+      .catch(() => {})
+    return () => { live = false }
+  }, [])
 
   // An untouched snack slot is not an empty state worth showing — it is the
   // normal condition of most slots on most days. Prescribed and logged slots
@@ -50,32 +78,18 @@ export default function Food({ day, date, isToday, onDay }) {
   const shown = showAll ? meals : meals.filter(interesting)
 
   // The first prescribed slot with nothing logged, in eating order. SLOTS is
-  // already ordered server-side, so the array order IS eating order.
+  // already ordered server-side, so array order IS eating order.
   const nextSlot = shown.find(
     (m) => m.entries.length === 0 && m.adherence !== 'skipped' && prescribedSlots.has(m.slot)
   )?.slot
 
   return (
-    <section className="stack" aria-labelledby="food-h">
-      <div className="row">
-        <h2 className="heading" id="food-h">Food</h2>
-        <div className="push" style={{ textAlign: 'right' }}>
-          <div className="num" style={{ fontWeight: 600 }}>
-            {Math.round(totals.calories || 0)}
-            {target && <span className="muted"> / {Math.round(target.calories)}</span>}
-            <span className="small muted"> kcal</span>
-          </div>
-          <MacroLine totals={totals} target={target} />
-        </div>
-      </div>
-
+    <>
       {/*
         The verdict is displayed, never computed here — and only once the day is
-        over. The server caches a verdict on every write, so mid-morning it says
-        "2 macros are off" about a day with one meal in it, which is both true
-        and useless. SPEC-coaching is explicit that the app is quiet by default
-        and never comments on a day in progress; showing it live would make the
-        one thing the user was promised they'd be spared.
+        over. The server caches one on every write, so mid-morning it says "2
+        macros are off" about a day with one meal in it: true, useless, and
+        exactly the noise §4.2 promises to spare people.
       */}
       {day.verdict && !isToday && <Verdict verdict={day.verdict} />}
 
@@ -86,9 +100,10 @@ export default function Food({ day, date, isToday, onDay }) {
           date={date}
           prescribed={(day.prescribed || []).find((p) => p.slot === meal.slot) || null}
           /* The accent goes to the NEXT unlogged meal only. A column of six
-             identical yellow buttons is not six primary actions, it is none —
-             and the next meal in eating order is the one being logged. */
+             identical yellow buttons is not six primary actions, it is none. */
           primary={meal.slot === nextSlot}
+          favorites={favorites}
+          onFavorites={setFavorites}
           onDay={onDay}
         />
       ))}
@@ -98,25 +113,42 @@ export default function Food({ day, date, isToday, onDay }) {
           Add another meal ({hidden.length} more slot{hidden.length === 1 ? '' : 's'})
         </button>
       )}
-    </section>
+    </>
   )
 }
 
-function MacroLine({ totals, target }) {
-  const cell = (label, key, unit = 'g') => (
-    <span className="tiny muted num">
-      {label} {Math.round(totals[key] || 0)}
-      {target ? `/${Math.round(target[key])}` : ''}{unit}
-    </span>
-  )
+/** The section heading's live numbers, shown whether the body is open or shut. */
+export function FoodSummary({ day }) {
+  const totals = day.totals || {}
+  const target = day.target
   return (
-    <div className="row" style={{ gap: 10, justifyContent: 'flex-end' }}>
-      {cell('P', 'protein')}
-      {cell('F', 'fat')}
-      {/* Net carbs. The server derives it; the label says so because "carbs"
-          alone is ambiguous to anyone counting them. */}
-      {cell('net C', 'carbs')}
+    <div style={{ textAlign: 'right' }}>
+      <div className="num" style={{ fontWeight: 600 }}>
+        {Math.round(totals.calories || 0)}
+        {target && <span className="muted"> / {Math.round(target.calories)}</span>}
+        <span className="small muted"> kcal</span>
+      </div>
+      {/* Each macro is one unbreakable unit. As a flex row the label and its
+          value landed on separate lines at 360px ("P" above "90/180g"), which
+          reads as four mystery numbers. */}
+      <div className="macro-line">
+        <Macro label="P" v={totals.protein} t={target?.protein} />
+        <Macro label="F" v={totals.fat} t={target?.fat} />
+        {/* Net carbs — the server derives it. "net C" rather than "C" because
+            "carbs" is ambiguous to anyone actually counting them, and the whole
+            intake model turns on net vs total. */}
+        <Macro label={'net C'} v={totals.carbs} t={target?.carbs} />
+      </div>
     </div>
+  )
+}
+
+function Macro({ label, v, t }) {
+  return (
+    <span className="tiny muted num macro">
+      {/* A non-breaking space: "P 90/180g" must never split after the label. */}
+      {label}&nbsp;{Math.round(v || 0)}{t ? `/${Math.round(t)}` : ''}g
+    </span>
   )
 }
 
@@ -129,18 +161,18 @@ function Verdict({ verdict }) {
     )
   }
   if (verdict.on_target) {
-    return <p className="small muted" style={{ margin: 0 }}>On target today.</p>
+    return <p className="small muted" style={{ margin: 0 }}>On target.</p>
   }
   return (
     <p className="small muted" style={{ margin: 0 }}>
-      {verdict.failure_count === 1 ? 'One macro is off' : `${verdict.failure_count} macros are off`} today.
+      {verdict.failure_count === 1 ? 'One macro was off' : `${verdict.failure_count} macros were off`}.
     </p>
   )
 }
 
 /* ---- one meal slot ------------------------------------------------------- */
 
-function Meal({ meal, date, prescribed, primary, onDay }) {
+function Meal({ meal, date, prescribed, primary, favorites, onFavorites, onDay }) {
   const [adding, setAdding] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -151,12 +183,14 @@ function Meal({ meal, date, prescribed, primary, onDay }) {
     setBusy(true)
     try {
       const r = await fn()
-      // Every mutating route returns the whole day, so state is replaced from
-      // the response rather than patched locally — that is what keeps totals
-      // and the verdict honest without a second GET.
+      // Every mutating route returns the whole day, so state is replaced from the
+      // response rather than patched locally — that keeps totals and the verdict
+      // honest without a second GET.
       if (r?.day) onDay(r.day)
+      return r
     } catch (e) {
       setError(e.message || 'That did not save.')
+      return null
     } finally {
       setBusy(false)
     }
@@ -173,8 +207,8 @@ function Meal({ meal, date, prescribed, primary, onDay }) {
         )}
       </div>
 
-      {/* What the coach asked for. Shown even after logging: "as planned" is
-          only meaningful next to the plan it followed. */}
+      {/* What the coach asked for. Shown even after logging: "as planned" is only
+          meaningful next to the plan it followed. */}
       {prescribed && (
         <p className="tiny muted" style={{ margin: 0 }}>
           Planned: {prescribed.name}
@@ -185,7 +219,14 @@ function Meal({ meal, date, prescribed, primary, onDay }) {
       )}
 
       {meal.entries.map((e) => (
-        <Entry key={e.id} entry={e} busy={busy} run={run} />
+        <Entry
+          key={e.id}
+          entry={e}
+          busy={busy}
+          run={run}
+          favorites={favorites}
+          onFavorites={onFavorites}
+        />
       ))}
 
       {logged && (
@@ -201,15 +242,8 @@ function Meal({ meal, date, prescribed, primary, onDay }) {
       <Delta meal={meal} date={date} busy={busy} run={run} />
 
       <div className="row" style={{ flexWrap: 'wrap' }}>
-        {/*
-          The one-tap path, and the reason the plan is worth following.
-          Idempotent server-side: tapping twice does not log two dinners.
-
-          Primary only while it is the next thing to do. Once the meal is logged
-          this is a state, not an action, so it drops to ghost — DESIGN.md allows
-          one yellow element per view, and six yellow buttons down a day of meals
-          spends the accent on nothing.
-        */}
+        {/* The one-tap path, and the reason the plan is worth following.
+            Idempotent server-side: tapping twice does not log two dinners. */}
         {prescribed && (
           <button
             type="button"
@@ -222,14 +256,19 @@ function Meal({ meal, date, prescribed, primary, onDay }) {
             {meal.adherence === 'as_planned' ? 'Logged as planned' : 'Ate as planned'}
           </button>
         )}
-        <button
-          type="button"
-          className="btn btn--ghost"
-          disabled={busy}
-          onClick={() => setAdding((v) => !v)}
-        >
-          {adding ? 'Close' : 'Add food'}
-        </button>
+        {/* Only shown while CLOSED. When the panel is open it has its own way out
+            at the bottom — a "Close" button up here reads as a peer of "Ate as
+            planned", which is a real action, and the two competed. */}
+        {!adding && (
+          <button
+            type="button"
+            className={!prescribed && primary ? 'btn btn--primary' : 'btn btn--ghost'}
+            disabled={busy}
+            onClick={() => setAdding(true)}
+          >
+            Add food
+          </button>
+        )}
         {prescribed && meal.adherence !== 'skipped' && (
           <button
             type="button"
@@ -248,6 +287,9 @@ function Meal({ meal, date, prescribed, primary, onDay }) {
         <AddFood
           date={date}
           slot={meal.slot}
+          favorites={favorites}
+          onFavorites={onFavorites}
+          onClose={() => setAdding(false)}
           onAdded={(dayPayload) => {
             onDay(dayPayload)
             setAdding(false)
@@ -258,7 +300,54 @@ function Meal({ meal, date, prescribed, primary, onDay }) {
   )
 }
 
-function Entry({ entry, busy, run }) {
+/**
+ * A logged food, with the star that makes it reusable.
+ *
+ * Starring lives HERE, on the thing you just ate, rather than in a favorites
+ * manager. That is the moment you know it is a keeper, and it is why the original
+ * accumulated a useful list without anyone curating one.
+ */
+function Entry({ entry, busy, run, favorites, onFavorites }) {
+  const [starring, setStarring] = useState(false)
+
+  // Case-insensitive, matching the server's uk_fav_user_name collation — so the
+  // star reflects what a POST would actually do rather than disagreeing with it.
+  const fav = favorites.find(
+    (f) => f.name.toLowerCase() === String(entry.name || '').toLowerCase()
+  )
+
+  async function toggleStar() {
+    setStarring(true)
+    try {
+      if (fav) {
+        const r = await api.nutrition.deleteFavorite(fav.id)
+        onFavorites(r.favorites || favorites.filter((f) => f.id !== fav.id))
+      } else {
+        const r = await api.nutrition.addFavorite({
+          name: entry.name,
+          serving_g: entry.serving_g,
+          calories: entry.calories,
+          protein: entry.protein,
+          fat: entry.fat,
+          /*
+           * favorite_foods has carbs_g and NO fiber column, so a favorite stores
+           * NET carbs. entry.carbs is already net (derived at intake), so it is
+           * sent as `carbs` — sending total_carbs+fiber here would net it a
+           * second time and quietly shrink the carbs every time the favorite is
+           * reused.
+           */
+          carbs: entry.carbs,
+        })
+        onFavorites(r.favorites || favorites)
+      }
+    } catch {
+      // A failed star is not worth an error banner on a logged meal. The state
+      // simply does not change, and the tap can be repeated.
+    } finally {
+      setStarring(false)
+    }
+  }
+
   return (
     <div className="row entry">
       <span className="small">
@@ -266,6 +355,16 @@ function Entry({ entry, busy, run }) {
         {entry.serving_g ? <span className="muted num"> {entry.serving_g}g</span> : null}
       </span>
       <span className="tiny muted num push">{Math.round(entry.calories)} kcal</span>
+      <button
+        type="button"
+        className="star"
+        aria-pressed={!!fav}
+        aria-label={fav ? `Remove ${entry.name} from favorites` : `Save ${entry.name} to favorites`}
+        disabled={starring}
+        onClick={toggleStar}
+      >
+        {fav ? '★' : '☆'}
+      </button>
       <button
         type="button"
         className="btn btn--quiet"
@@ -282,10 +381,10 @@ function Entry({ entry, busy, run }) {
 /**
  * The manual calorie nudge — "+50 for the oil I cooked in".
  *
- * This was the most-used correction path in the original app, so it is one tap
- * from the meal rather than behind an edit screen. It sends the RUNNING total
- * because the server treats the delta as absolute against itself; sending an
- * increment would double it.
+ * The most-used correction path in the original, so it is one tap from the meal
+ * rather than behind an edit screen. It sends the RUNNING total because the
+ * server treats the delta as absolute against itself; an increment would double
+ * it.
  *
  * Calories only, deliberately. The full four-macro delta exists server-side, but
  * a row of twelve nudge buttons is how you make a fast path slow — and "I used
@@ -311,8 +410,7 @@ function Delta({ meal, date, busy, run }) {
   return (
     <div className="delta">
       {/* Label above the buttons rather than beside them: at 360px "Extra +125
-          kcal" and three buttons do not share a line, and the wrap put the unit
-          on its own row. */}
+          kcal" and three buttons do not share a line. */}
       <span className="tiny muted">
         {current > 0
           ? <>Extra <span className="num">+{current} kcal</span> on top</>
@@ -332,38 +430,34 @@ function Delta({ meal, date, busy, run }) {
 
 /* ---- adding a food ------------------------------------------------------- */
 
+const WAYS = [
+  { key: 'favorites', label: 'Usual' },
+  { key: 'scan', label: 'Scan' },
+  { key: 'search', label: 'Search' },
+  { key: 'manual', label: 'By hand' },
+]
+
 /**
- * Search, favorites, or by hand.
+ * Favorites, scan, search, or by hand.
  *
- * Search is a paid call and rate limited to 60/hour, so the manual path is a
- * peer here rather than a fallback — someone who knows the numbers should not
- * have to spend a search on them.
+ * Opens on FAVORITES when there are any. Eating is repetitive, and the list of
+ * things you have eaten before is the highest-yield thing to show first; search
+ * is a paid call and the slowest of the four.
  */
-function AddFood({ date, slot, onAdded }) {
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState(null)
+function AddFood({ date, slot, favorites, onFavorites, onClose, onAdded }) {
+  const [way, setWay] = useState(favorites.length > 0 ? 'favorites' : 'search')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
-  const [manual, setManual] = useState(false)
 
-  async function search(e) {
-    e.preventDefault()
-    if (!query.trim()) return
-    setError(null)
-    setBusy(true)
-    setResults(null)
-    try {
-      const r = await api.nutrition.search(query.trim())
-      setResults(r.foods || [])
-    } catch (err) {
-      // A 429 says what to do instead, and the manual path is right there.
-      setError(err.message || 'Could not look that up. Add it by hand instead.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function add(food) {
+  /**
+   * The one place an entry is written, whichever way found the food.
+   *
+   * `netCarbs` distinguishes the two shapes that arrive here, and it matters:
+   * search and barcode results carry total_carbs + fiber and the server derives
+   * net at intake, while a favorite already holds net. Sending a favorite's
+   * carbs as total_carbs would subtract fiber from an already-netted number.
+   */
+  async function add(food, { netCarbs = false } = {}) {
     setError(null)
     setBusy(true)
     try {
@@ -373,12 +467,12 @@ function AddFood({ date, slot, onAdded }) {
         calories: food.calories,
         protein: food.protein,
         fat: food.fat,
-        // total_carbs + fiber, never a pre-netted `carbs`: the server derives
-        // net at intake and would otherwise subtract fiber twice.
-        total_carbs: food.total_carbs,
-        fiber: food.fiber,
+        ...(netCarbs
+          ? { carbs: food.carbs }
+          : { total_carbs: food.total_carbs, fiber: food.fiber }),
         source: food.source || 'manual',
         source_ref: food.source_ref || null,
+        favorite_id: food.favorite_id || null,
       })
       if (r?.day) onAdded(r.day)
     } catch (err) {
@@ -390,16 +484,239 @@ function AddFood({ date, slot, onAdded }) {
 
   return (
     <div className="stack-sm addfood">
+      <div className="chips" role="tablist" aria-label="How to add food">
+        {WAYS.map((w) => (
+          <button
+            key={w.key}
+            type="button"
+            role="tab"
+            aria-selected={way === w.key}
+            className="chip"
+            onClick={() => setWay(w.key)}
+          >
+            {w.label}
+            {w.key === 'favorites' && favorites.length > 0 && (
+              <span className="tiny muted num"> {favorites.length}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {error && <p className="error">{error}</p>}
+
+      {way === 'favorites' && (
+        <Favorites
+          favorites={favorites}
+          busy={busy}
+          onPick={(f) => add({ ...f, source: 'favorite', favorite_id: f.id }, { netCarbs: true })}
+          onRemove={async (id) => {
+            const r = await api.nutrition.deleteFavorite(id)
+            onFavorites(r.favorites || favorites.filter((f) => f.id !== id))
+          }}
+        />
+      )}
+
+      {way === 'scan' && (
+        <BarcodeLookup busy={busy} onAdd={(f) => add(f)} onDone={() => setWay('search')} />
+      )}
+
+      {way === 'search' && (
+        <Search date={date} slot={slot} busy={busy} onAdd={(f) => add(f)} />
+      )}
+
+      {way === 'manual' && <ManualFood busy={busy} onSubmit={(f) => add(f)} />}
+
+      {/* The way out lives at the BOTTOM of the panel, quietly. Adding food
+          closes it anyway, so this is only for changing your mind — which is not
+          an action worth a button the same weight as "Ate as planned". */}
+      <button type="button" className="btn btn--quiet" onClick={onClose}>
+        Never mind
+      </button>
+    </div>
+  )
+}
+
+function Favorites({ favorites, busy, onPick, onRemove }) {
+  const [q, setQ] = useState('')
+
+  if (favorites.length === 0) {
+    return (
+      <p className="small muted" style={{ margin: 0 }}>
+        No usuals yet. Star anything you log and it lands here — that is how this
+        list gets useful without you managing it.
+      </p>
+    )
+  }
+
+  const shown = q.trim()
+    ? favorites.filter((f) => f.name.toLowerCase().includes(q.trim().toLowerCase()))
+    : favorites
+
+  return (
+    <div className="stack-sm">
+      {/* A filter, not a search: this is local and instant. Only worth the space
+          once the list is long enough to scroll. */}
+      {favorites.length > 6 && (
+        <input
+          className="input"
+          placeholder="Filter your usuals"
+          aria-label="Filter favorites"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      )}
+      {shown.map((f) => (
+        <div className="row" key={f.id}>
+          <button
+            type="button"
+            className="result"
+            disabled={busy}
+            onClick={() => onPick(f)}
+          >
+            <span className="small">{f.name}</span>
+            <span className="tiny muted num">
+              {Math.round(f.calories)} kcal · P {f.protein} · F {f.fat} · net C {f.carbs}
+              {f.serving_g ? ` · ${f.serving_g}g` : ''}
+            </span>
+          </button>
+          <button
+            type="button"
+            className="btn btn--quiet"
+            aria-label={`Remove ${f.name} from favorites`}
+            disabled={busy}
+            onClick={() => onRemove(f.id)}
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      {shown.length === 0 && (
+        <p className="tiny muted" style={{ margin: 0 }}>Nothing matches that.</p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Scan a barcode, then confirm what came back.
+ *
+ * The result is shown for confirmation rather than logged straight away, because
+ * the lookup has an AI fallback for UPCs that Open Food Facts does not know —
+ * that answer is a guess, and a guess the user can see and correct beats a wrong
+ * number logged silently.
+ */
+function BarcodeLookup({ busy, onAdd, onDone }) {
+  const [scanning, setScanning] = useState(true)
+  const [found, setFound] = useState(null)
+  const [meta, setMeta] = useState({})
+  const [error, setError] = useState(null)
+  const [looking, setLooking] = useState(false)
+
+  async function lookup(code) {
+    setScanning(false)
+    setError(null)
+    setLooking(true)
+    try {
+      const r = await api.nutrition.barcode(code)
+      setFound(r.foods || [])
+      setMeta({ cached: r.cached, guessed: r.guessed, upc: code })
+    } catch (e) {
+      setError(e.message || 'That barcode is not in the database.')
+    } finally {
+      setLooking(false)
+    }
+  }
+
+  if (scanning) {
+    return <Scanner onDetected={lookup} onClose={onDone} />
+  }
+
+  return (
+    <div className="stack-sm">
+      {looking && <p className="small muted" style={{ margin: 0 }}>Looking it up…</p>}
+
+      {error && (
+        <>
+          <p className="error">{error}</p>
+          <p className="error-help">
+            Add it by hand once and a scan will find it next time.
+          </p>
+        </>
+      )}
+
+      {/* An AI guess is labelled as one. The numbers are editable by hand
+          afterwards, and saying where they came from is what makes that
+          worthwhile rather than mysterious. */}
+      {meta.guessed && (
+        <p className="notice small" style={{ margin: 0 }}>
+          Not in the barcode database. These numbers are the coach's best guess
+          from the barcode — check them before logging.
+        </p>
+      )}
+
+      {found?.map((f, i) => (
+        <button
+          key={`${f.name}-${i}`}
+          type="button"
+          className="result"
+          disabled={busy}
+          onClick={() => onAdd(f)}
+        >
+          <span className="small">{f.name}</span>
+          <span className="tiny muted num">
+            {Math.round(f.calories)} kcal · P {f.protein} · F {f.fat} · C {f.total_carbs}
+            {f.fiber ? ` (−${f.fiber} fiber)` : ''}
+            {f.serving_g ? ` · ${f.serving_g}g` : ''}
+          </span>
+        </button>
+      ))}
+
+      <button type="button" className="btn btn--quiet" onClick={() => setScanning(true)}>
+        Scan another
+      </button>
+    </div>
+  )
+}
+
+function Search({ date, slot, busy, onAdd }) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState(null)
+  const [searching, setSearching] = useState(false)
+  const [error, setError] = useState(null)
+
+  async function search(e) {
+    e.preventDefault()
+    if (!query.trim()) return
+    setError(null)
+    setSearching(true)
+    setResults(null)
+    try {
+      const r = await api.nutrition.search(query.trim())
+      setResults(r.foods || [])
+    } catch (err) {
+      // A 429 says what to do instead, and the by-hand path is one tap away.
+      setError(err.message || 'Could not look that up. Add it by hand instead.')
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  return (
+    <div className="stack-sm">
       <form onSubmit={search} className="row">
         <input
           className="input"
-          placeholder="6oz chicken and a cup of broccoli"
+          /* Matches the MEAL and varies by day — nobody eats "6oz chicken and a
+             cup of broccoli" for breakfast, and a placeholder that does not fit
+             the slot is the tell that an app was assembled rather than written.
+             It also teaches the syntax: quantities and several foods at once. */
+          placeholder={foodPlaceholder(slot, date)}
           aria-label="What did you eat?"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <button type="submit" className="btn btn--ghost" disabled={busy || !query.trim()}>
-          {busy ? 'Looking…' : 'Search'}
+        <button type="submit" className="btn btn--ghost" disabled={searching || !query.trim()}>
+          {searching ? 'Looking…' : 'Search'}
         </button>
       </form>
 
@@ -417,7 +734,7 @@ function AddFood({ date, slot, onAdded }) {
           type="button"
           className="result"
           disabled={busy}
-          onClick={() => add(f)}
+          onClick={() => onAdd(f)}
         >
           <span className="small">{f.name}</span>
           <span className="tiny muted num">
@@ -426,19 +743,13 @@ function AddFood({ date, slot, onAdded }) {
           </span>
         </button>
       ))}
-
-      <button type="button" className="btn btn--quiet" onClick={() => setManual((v) => !v)}>
-        {manual ? 'Never mind' : 'Enter it by hand'}
-      </button>
-
-      {manual && <ManualFood busy={busy} onSubmit={add} />}
     </div>
   )
 }
 
 function ManualFood({ busy, onSubmit }) {
   const [f, setF] = useState({
-    name: '', calories: '', protein: '', fat: '', total_carbs: '', fiber: '',
+    name: '', serving_g: '', calories: '', protein: '', fat: '', total_carbs: '', fiber: '',
   })
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }))
   const num = (v) => (v === '' ? 0 : Number(v))
@@ -451,6 +762,7 @@ function ManualFood({ busy, onSubmit }) {
         if (!f.name.trim()) return
         onSubmit({
           name: f.name.trim(),
+          serving_g: f.serving_g === '' ? null : Number(f.serving_g),
           calories: num(f.calories),
           protein: num(f.protein),
           fat: num(f.fat),
@@ -470,6 +782,7 @@ function ManualFood({ busy, onSubmit }) {
             asking for net here would mean two places knowing the rule. */}
         <NumBox label="Carbs" value={f.total_carbs} onChange={set('total_carbs')} />
         <NumBox label="Fiber" value={f.fiber} onChange={set('fiber')} />
+        <NumBox label="Grams" value={f.serving_g} onChange={set('serving_g')} />
       </div>
       <button type="submit" className="btn btn--ghost" disabled={busy || !f.name.trim()}>
         Add it
