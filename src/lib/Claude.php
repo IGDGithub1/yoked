@@ -232,14 +232,31 @@ final class Claude
 
             // Name the violations explicitly in the retry. Vague feedback
             // ("that was wrong") produces another violating plan.
+            //
+            // The wording here matters more than it looks. This used to say
+            // "Regenerate the whole plan. Keep everything that was fine; fix
+            // only what is listed above," which is a contradiction: the model
+            // can see a complete plan it just wrote, is told most of it is
+            // correct, and is asked to re-emit ~30k tokens to change one meal.
+            // It reasonably answered with a short partial instead — 4k tokens in
+            // 29s against 30k in 580s — which then failed the same check, so the
+            // violation survived every attempt and generation failed outright.
+            //
+            // So: no ambiguity about scope. The full document is required, the
+            // reason is stated (it is parsed as a whole and replaces the last
+            // one), and the length is acknowledged rather than glossed over.
             $opts['messages'] = array_merge($baseMessages, [
                 ['role' => 'assistant', 'content' => json_encode($result['data'])],
                 ['role' => 'user', 'content' =>
                     "That plan violates hard constraints that cannot be overridden:\n"
                     . '- ' . implode("\n- ", $violations) . "\n\n"
-                    . 'Regenerate the whole plan. Keep everything that was fine; '
-                    . 'fix only what is listed above. Do not explain the fix — '
-                    . 'return the corrected plan in the same format.',
+                    . 'Return the COMPLETE corrected plan — every day, every '
+                    . 'session, every meal, in full. It is parsed as one document '
+                    . 'and replaces the previous one, so a partial answer or a '
+                    . 'diff cannot be used and will fail. Reproduce everything '
+                    . 'that was already correct verbatim and change only what is '
+                    . 'listed above. Yes, this means emitting the whole plan '
+                    . 'again; that is expected. Do not explain the fix.',
                 ],
             ]);
         }

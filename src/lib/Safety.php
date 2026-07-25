@@ -80,6 +80,8 @@ final class Safety
 
         $violations = array_merge(
             $violations,
+            // First, because everything below assumes a whole week is present.
+            self::checkWeekIsWhole($plan),
             self::checkMeals($plan, $foodBans),
             self::checkMealCompleteness($plan),
             self::checkExercises($plan, $movementBans, $cardioBans),
@@ -206,6 +208,56 @@ final class Safety
     }
 
     /** Prescribed exercises against hard movement and cardio constraints. */
+    /**
+     * A week is seven days, or it is not a week.
+     *
+     * Guards against a partial answer being accepted as a plan. A retry that
+     * returns a fragment — "here is the corrected breakfast" — can still satisfy
+     * the schema and parse cleanly, and without this the fragment reaches the
+     * checks below, which report something misleading about the one day present
+     * rather than the six that are missing.
+     *
+     * Stated as a violation rather than a hard error so the retry prompt names
+     * the real problem, which is the only way the model can act on it.
+     */
+    private static function checkWeekIsWhole(array $plan): array
+    {
+        $days = $plan['days'] ?? [];
+
+        if (!is_array($days) || $days === []) {
+            return ['The plan contains no days at all. Return the complete week: '
+                    . 'seven day entries, each with its own targets and meals.'];
+        }
+
+        $dates = [];
+        foreach ($days as $d) {
+            $date = trim((string) ($d['date'] ?? ''));
+            if ($date !== '') {
+                $dates[$date] = true;
+            }
+        }
+        $count = count($dates);
+
+        if ($count !== 7) {
+            $listed = $count > 0 ? ' Present: ' . implode(', ', array_keys($dates)) . '.' : '';
+            return ["The plan has {$count} distinct day(s); a week needs 7. This is "
+                    . 'usually a partial answer — return every day of the week in '
+                    . 'full, not just the parts that changed.' . $listed];
+        }
+
+        // A day with no meals at all is the other shape a truncated or abbreviated
+        // answer takes, and it is worth naming the day rather than the count.
+        $violations = [];
+        foreach ($days as $d) {
+            $date = (string) ($d['date'] ?? '?');
+            if (($d['meals'] ?? []) === []) {
+                $violations[] = "{$date} has no meals. Every day needs its meals, "
+                    . 'even on a rest day.';
+            }
+        }
+        return $violations;
+    }
+
     /**
      * A meal that claims to be fully specified must actually be.
      *
