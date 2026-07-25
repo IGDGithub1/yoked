@@ -355,6 +355,93 @@ t('constraint retry loop regenerates on violation', function () {
         ?: 'expected at least one regeneration (the prompt asks for peanut butter)';
 });
 
+t('the merge hook keeps what a partial retry omits', function () {
+    // The live plan suite only exercises the merge when a generation happens to
+    // violate a constraint, which it often does not — both runs in one session
+    // passed on the first attempt, leaving the merge path unobserved. This forces
+    // it: ask for a list of dated entries, reject one of them, and give the model
+    // an explicit nudge to return only the correction. Whether it obliges or
+    // re-sends everything, the merged result must be complete either way.
+    $schema = [
+        'type' => 'object',
+        'properties' => [
+            'entries' => [
+                'type'  => 'array',
+                'items' => [
+                    'type'                 => 'object',
+                    'additionalProperties' => false,
+                    'required'             => ['date', 'colour'],
+                    'properties' => [
+                        'date'   => ['type' => 'string'],
+                        'colour' => ['type' => 'string'],
+                    ],
+                ],
+            ],
+        ],
+        'required' => ['entries'],
+        'additionalProperties' => false,
+    ];
+
+    // Same identity-keyed merge shape as Plans::mergePlans, kept local so this
+    // tests the hook in Claude rather than the plan domain.
+    $merge = function (array $prev, array $next): array {
+        $byDate = [];
+        foreach ([$prev['entries'] ?? [], $next['entries'] ?? []] as $rows) {
+            foreach ($rows as $r) {
+                if (($r['date'] ?? '') !== '') {
+                    $byDate[(string) $r['date']] = $r;
+                }
+            }
+        }
+        ksort($byDate);
+        return array_merge($prev, $next, ['entries' => array_values($byDate)]);
+    };
+
+    $result = Claude::generateValidated(
+        $schema,
+        [
+            'purpose'    => 'other',
+            'max_tokens' => 2000,
+            'effort'     => 'low',
+            'messages'   => [['role' => 'user', 'content' =>
+                'Return one entry for each date 2026-03-01 through 2026-03-07, each '
+                . 'with a colour. Make 2026-03-04 "beige" and the rest any other '
+                . 'colour. Return only the JSON object.']],
+        ],
+        function (array $data): array {
+            foreach ($data['entries'] ?? [] as $e) {
+                if (strcasecmp((string) ($e['colour'] ?? ''), 'beige') === 0) {
+                    return ["{$e['date']} is beige, which is not allowed. Send back "
+                            . 'only that one corrected entry.'];
+                }
+            }
+            return [];
+        },
+        3,
+        $merge
+    );
+
+    if (!($result['ok'] ?? false)) {
+        return 'retry loop failed: ' . (string) ($result['error'] ?? '?');
+    }
+    $attempts = (int) ($result['attempts'] ?? 0);
+    $dates = array_column($result['data']['entries'] ?? [], 'date');
+    printf("        attempts=%d entries=%d\n", $attempts, count($dates));
+
+    if ($attempts < 2) {
+        // The model ignored the instruction to include beige, so nothing was
+        // rejected and the merge never ran. Not a defect — report and move on
+        // rather than failing the suite on the model's cooperativeness.
+        printf("        (first attempt was clean; merge path not exercised)\n");
+        return count(array_unique($dates)) === 7
+            ?: 'expected 7 entries even without a retry';
+    }
+    // The point: a retry that returned one entry must not have shrunk the result.
+    return count(array_unique($dates)) === 7
+        ?: 'merge lost entries — got ' . count(array_unique($dates))
+           . ' of 7: ' . implode(',', $dates);
+});
+
 t('refusal / error path logs to ai_calls', function () {
     $before = (int) (DB::one('SELECT COUNT(*) AS n FROM ai_calls')['n'] ?? 0);
     // 'other' purpose, deliberately tiny max_tokens to force truncation, which
