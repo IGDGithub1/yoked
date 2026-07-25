@@ -7,8 +7,8 @@ Small, invite-only, PWA on PHP 8 / MySQL shared hosting.
 
 ## Status
 
-A user can sign up, answer the quiz, and log food, training and a daily check-in
-against a generated week.
+A user can sign up, answer the quiz, log food and training through a two-week
+baseline, and report their week back to the coach that plans the next one.
 
 | | |
 |---|---|
@@ -22,7 +22,8 @@ against a generated week.
 | Onboarding UI | ✅ the quiz, tier confirmation, answer review |
 | Logging | ✅ food (search, barcode, favorites), training incl. free-logging, check-in |
 | Baseline lifecycle | ✅ two weeks, Monday-aligned, per-user local time, graduates to active |
-| Weekly check-in, nudges, chat | ⬜ schema exists; cron opens the check-in but nothing answers it |
+| Weekly check-in | ✅ Sat 18:00 local, shapes Sunday's plan, late answers reviewed |
+| Nudges, chat, vetoes | ⬜ check-in nudges work; §9 absence nudges and §6 chat are next |
 
 `bin/test-plans.php` seeds the two users from the specs, generates their weeks,
 and asserts the output against the spec decisions.
@@ -81,8 +82,9 @@ php bin/smoketest.php         # 22 schema assertions, rolled back
 php bin/test-goals.php        # 46 evaluator assertions incl. keto parity
 php bin/test-schedule.php     # 21 date assertions; no DB, no API
 php bin/test-baseline.php     # 24 lifecycle assertions: observation, graduation
+php bin/test-checkin.php      # 29 assertions: opening, lateness, skipping
 php bin/test-claude.php       # API client; --offline for shape checks only
-php bin/test-logging.php      # 45 assertions over real HTTP: food, training, check-in
+php bin/test-logging.php      # 46 assertions over real HTTP: food, training, check-in
 php bin/test-plans.php        # end-to-end generation; --seed-only to skip API
 ```
 
@@ -95,9 +97,10 @@ opens on today and the plan week must contain it:
 php bin/seed-uitest.php       # two users, re-runnable:
                               #   uitest_logging  active, plan for TODAY
                               #   uitest_baseline day 3 of 14, no plan
+                              # plus an open weekly check-in and a reviewed one
 ```
 ```powershell
-cd app; npm run drive:logging   # 80 checks: log it, reload, confirm it stuck
+cd app; npm run drive:logging   # 90 checks: log it, reload, confirm it stuck
 ```
 
 Re-seed before each run — the suite mutates the fixture, and it refuses to start
@@ -124,7 +127,13 @@ nothing change.
   no code path from user text to plan mutation.
 - **Quiet by default.** On-track days make no Claude call at all. Nudges address
   absence, never a bad day.
-- **Everything is UTC**, converted client-side.
+- **Everything is stored UTC**, converted client-side. The one exception is
+  *scheduling*: `profiles.timezone` decides when a weekly slot fires, because
+  "Saturday 18:00" has to mean Saturday evening where the user actually lives.
+- **The check-in precedes the plan.** It opens Saturday 18:00 and the plan generates
+  Sunday 18:00, so the user's own account of their week can shape it. Answer late
+  and the plan is already built; the coach reads the check-in anyway and changes the
+  plan only if something in it needs changing.
 
 ## Lineage
 

@@ -38,7 +38,7 @@ const TYPE_OPTIONS = [
   { value: 'active_recovery', label: 'Easy / recovery' },
 ]
 
-export default function Training({ day, date, onDay }) {
+export default function Training({ day, date, yieldAccent, onDay }) {
   const sessions = day.sessions || []
   const [freeLogging, setFreeLogging] = useState(false)
 
@@ -55,7 +55,13 @@ export default function Training({ day, date, onDay }) {
           <p className="small muted" style={{ margin: 0 }}>
             Nothing prescribed today. If you trained anyway, log it.
           </p>
-          <button type="button" className="btn btn--primary" onClick={() => setFreeLogging(true)}>
+          <button
+            type="button"
+            /* Yields when an open weekly check-in has claimed the accent: it is
+               time-boxed and shapes the coming week, this can wait an hour. */
+            className={yieldAccent ? 'btn btn--ghost' : 'btn btn--primary'}
+            onClick={() => setFreeLogging(true)}
+          >
             Log a workout
           </button>
         </div>
@@ -66,6 +72,7 @@ export default function Training({ day, date, onDay }) {
           key={s.prescribed_session_id ?? `logged-${s.logged?.logged_session_id}`}
           session={s}
           date={date}
+          yieldAccent={yieldAccent}
           onDay={onDay}
         />
       ))}
@@ -112,7 +119,7 @@ export function TrainingSummary({ day }) {
   return <span className="tiny muted num">{done} of {committed.length} done</span>
 }
 
-function Session({ session, date, onDay }) {
+function Session({ session, date, yieldAccent, onDay }) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -192,7 +199,7 @@ function Session({ session, date, onDay }) {
         // user the wrong thing about which matters (§3.3a).
         <button
           type="button"
-          className={session.is_committed ? 'btn btn--primary' : 'btn btn--ghost'}
+          className={session.is_committed && !yieldAccent ? 'btn btn--primary' : 'btn btn--ghost'}
           onClick={() => setOpen(true)}
         >
           Log this session

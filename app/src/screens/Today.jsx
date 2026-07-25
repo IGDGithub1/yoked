@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, today as todayDate, shiftDate } from '../api'
 import CheckIn from '../components/CheckIn'
+import WeeklyCheckIn from '../components/WeeklyCheckIn'
 import Food, { FoodSummary } from '../components/Food'
 import Training, { TrainingSummary } from '../components/Training'
 import Section from '../components/Section'
@@ -30,6 +31,19 @@ export default function Today({ user, baseline, onSignOut, onReview }) {
   const [training, setTraining] = useState(null)
   const [status, setStatus] = useState('loading')
   const [error, setError] = useState(null)
+
+  /*
+   * The weekly check-in, fetched once rather than per day.
+   *
+   * It is not a property of the day being viewed: it belongs to the week that is
+   * ending, and it should not disappear because the user stepped back to look at
+   * Tuesday. Its own state so a failure here cannot take the day down.
+   */
+  const [weekly, setWeekly] = useState(null)
+  const loadWeekly = useCallback(() => {
+    api.weekly.load().then(setWeekly).catch(() => setWeekly(null))
+  }, [])
+  useEffect(() => { loadWeekly() }, [loadWeekly])
 
   const load = useCallback(async (d) => {
     setStatus('loading')
@@ -144,6 +158,13 @@ export default function Today({ user, baseline, onSignOut, onReview }) {
 
         {status === 'ready' && nutrition && training && (
           <>
+            {/* Above the daily check-in, and only when there is something to
+                answer or read: an open weekly check-in is time-boxed, and it
+                shapes the coming week. The daily one can wait a scroll. */}
+            {weekly && isToday && (
+              <WeeklyCheckIn data={weekly} onAnswered={loadWeekly} />
+            )}
+
             {/* Keyed by date so stepping days REMOUNTS the card. Its open/shut
                 state is decided once at mount from whether the day is answered,
                 and that is exactly the granularity wanted: shut when you arrive
@@ -152,7 +173,18 @@ export default function Today({ user, baseline, onSignOut, onReview }) {
             <CheckIn key={date} checkin={nutrition.checkin} onSave={saveCheckIn} />
 
             <Section name="food" title="Food" summary={<FoodSummary day={nutrition} />}>
-              <Food day={nutrition} date={date} isToday={isToday} onDay={onNutritionDay} />
+              <Food
+                day={nutrition}
+                date={date}
+                isToday={isToday}
+                /* An open weekly check-in outranks logging a meal: it is
+                   time-boxed and it shapes the coming week, while lunch can be
+                   logged any time today. So it takes the accent and the meals
+                   drop to ghost, keeping the "one yellow thing" rule true across
+                   the whole screen rather than per section. */
+                yieldAccent={Boolean(weekly?.pending) && isToday}
+                onDay={onNutritionDay}
+              />
             </Section>
 
             <Section
@@ -160,7 +192,12 @@ export default function Today({ user, baseline, onSignOut, onReview }) {
               title="Training"
               summary={<TrainingSummary day={training} />}
             >
-              <Training day={training} date={date} onDay={onTrainingDay} />
+              <Training
+                day={training}
+                date={date}
+                yieldAccent={Boolean(weekly?.pending) && isToday}
+                onDay={onTrainingDay}
+              />
             </Section>
 
             {/* Baseline week 1 is pure observation and has no prescription, so the

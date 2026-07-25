@@ -185,3 +185,49 @@ printf(
     "seeded %s / %s — user #%d, baseline %s to %s (day 3 of 14, no plan)\n",
     UI_BASE_USER, UI_PASS, $blUser, $blStart, $blEnd
 );
+
+// ---- an open weekly check-in for the main fixture --------------------------
+
+/*
+ * The check-in normally opens at the user's Saturday 18:00 slot, which the suite
+ * cannot wait for. Seeded directly, for the week that is ending.
+ *
+ * Two logged days in that week, because the real cron job refuses to open a
+ * check-in for a user who did nothing: a form with no data behind it is a form
+ * nobody can fill in.
+ */
+$ciWeek = date('Y-m-d', strtotime('monday this week'));
+
+DB::run(
+    'INSERT INTO logged_days (user_id, log_date, energy, sleep_hours)
+     VALUES (?, ?, 4, 7.0)
+     ON DUPLICATE KEY UPDATE energy = VALUES(energy)',
+    [$seed['user_id'], $ciWeek]
+);
+$ciId = DB::insert(
+    'INSERT INTO weekly_checkins (user_id, week_start, status) VALUES (?, ?, "pending")',
+    [$seed['user_id'], $ciWeek]
+);
+
+// And one already answered and reviewed, a fortnight back, so the "what your coach
+// said" path has something to show without needing a live Claude call.
+$oldWeek = date('Y-m-d', strtotime($ciWeek . ' -14 days'));
+DB::run(
+    'INSERT INTO weekly_checkins
+        (user_id, week_start, status, weight_kg, waist_cm, self_report,
+         claude_review, answered_at, completed_at)
+     VALUES (?, ?, "completed", 84.5, 91.0, ?, ?, NOW(), NOW())',
+    [
+        $seed['user_id'], $oldWeek,
+        'Solid week. Missed Thursday because of work.',
+        "Good week. You hit your macros five days out of seven and the two you "
+        . "missed were both short on calories rather than over, which is the better "
+        . "way to miss.\n\nThursday going is fine. One missed session out of four is "
+        . "not a pattern, and you made up the volume on Saturday without being asked.",
+    ]
+);
+
+printf(
+    "seeded an open check-in #%d for week %s, plus a reviewed one for %s\n",
+    $ciId, $ciWeek, $oldWeek
+);

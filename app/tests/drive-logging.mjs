@@ -788,11 +788,11 @@ for (const name of [/^Food$/, /^Training$/]) {
 await page.locator('.card', { hasText: 'Breakfast' }).first().waitFor({ timeout: 15000 })
 
 await check('the accent is spent sparingly', async () => {
-  // DESIGN.md: one yellow element per view, and it is earned. The header yolk
-  // plus at most one primary button is the budget — a column of yellow buttons
-  // down a day of meals is what this guards against.
-  const found = await page.locator('.btn--primary').allInnerTexts()
-  return found.length <= 1 ? true : `${found.length} primary buttons: ${found.join(', ')}`
+  // DESIGN.md: one yellow element per view, and it is earned. The header yolk plus
+  // at most one yellow PROMPT is the budget; a form's own submit does not count,
+  // since it is the way out of a form you already chose to open.
+  const found = await page.locator('.btn--primary:not([type="submit"])').allInnerTexts()
+  return found.length <= 1 ? true : `${found.length} yellow prompts: ${found.join(', ')}`
 })
 
 await check('a logged meal no longer offers a primary action', async () => {
@@ -927,9 +927,136 @@ await check('the console is clean', async () => {
 
 await page.screenshot({ path: shot('logging-today.png'), fullPage: true })
 
+// ---- the weekly check-in ---------------------------------------------------
+
+console.log('\n11. the weekly check-in')
+
+await check('an open check-in is surfaced with its week', async () => {
+  const card = page.locator('.checkin-weekly')
+  await card.waitFor({ timeout: 20000 })
+  const txt = await card.innerText()
+  // Which week, spelled out: the form opens on Saturday so "this week" is
+  // ambiguous without the dates.
+  return /\d+ to \d+ \w+/.test(txt) ? true : `card read: ${txt.replace(/\n/g, ' | ')}`
+})
+
+await check('an open check-in claims the only accent on the screen', async () => {
+  /*
+   * The accent rule has to hold ACROSS sections, not within each one.
+   *
+   * With both sections expanded and a check-in open there were briefly three
+   * yellow buttons: "Fill it in", the next meal's "Ate as planned", and
+   * Training's "Log a workout". Each was locally reasonable and together they
+   * were exactly the "column of yellow buttons" the rule exists to prevent.
+   * Food and Training now yield to the check-in.
+   */
+  for (const name of [/^Food$/, /^Training$/]) {
+    const btn = page.getByRole('button', { name })
+    if ((await btn.getAttribute('aria-expanded')) === 'false') await btn.click()
+  }
+  await page.locator('.card', { hasText: 'Breakfast' }).first().waitFor({ timeout: 15000 })
+
+  /*
+   * Counts PROMPTS, not submits.
+   *
+   * A form's submit button is legitimately the primary action while you are inside
+   * that form: "Save it" in an open session form is not competing for attention,
+   * it is the way out. What the rule is about is unsolicited yellow — buttons
+   * offering to start something, several at once, down a scrolling page.
+   */
+  const found = await page.locator('.btn--primary:not([type="submit"])').allInnerTexts()
+  if (found.length !== 1) {
+    return `${found.length} yellow prompts with a check-in open: ${found.join(', ')}`
+  }
+  return /fill it in/i.test(found[0]) ? true : `the accent went to "${found[0]}"`
+})
+
+await check('it says whether answering still shapes the plan', async () => {
+  const txt = await page.locator('.checkin-weekly').innerText()
+  // No plan exists for next week in the fixture, so it should say it counts.
+  return /shapes next week/.test(txt)
+    ? true
+    : `no shaping status in: ${txt.replace(/\n/g, ' | ')}`
+})
+
+await check('the form opens with weight and waist, not six boxes', async () => {
+  const card = page.locator('.checkin-weekly')
+  await card.getByRole('button', { name: /fill it in/i }).click()
+  const inputs = await card.locator('input[type="number"]').count()
+  // Waist is the one that matters most (§7.2); the other five are behind a
+  // toggle so a two-minute form does not look like a medical intake.
+  return inputs === 2 ? true : `${inputs} number inputs on open, expected 2`
+})
+
+await check('the other measurements are available but not forced', async () => {
+  const card = page.locator('.checkin-weekly')
+  await card.getByRole('button', { name: /add the other measurements/i }).click()
+  const inputs = await card.locator('input[type="number"]').count()
+  return inputs === 7 ? true : `${inputs} number inputs after expanding, expected 7`
+})
+
+await check('units follow the profile rather than being hardcoded', async () => {
+  const me = await page.evaluate(async () => {
+    const r = await fetch('/api/checkin/weekly', {
+      headers: { accept: 'application/json' }, credentials: 'same-origin',
+    })
+    return r.json()
+  })
+  const txt = await page.locator('.checkin-weekly').innerText()
+  const wanted = me.units === 'metric' ? 'kg' : 'lb'
+  return txt.includes(`Weight (${wanted})`)
+    ? true
+    : `profile says ${me.units} but the form does not show ${wanted}`
+})
+
+await check('the emphasis request has a "?" explaining the privilege', async () => {
+  const help = page.locator('.checkin-weekly').getByRole('button', {
+    name: /what is emphasis requests/i,
+  })
+  await help.click()
+  const bubble = page.locator('.help-bubble').first()
+  await bubble.waitFor({ timeout: 10000 })
+  const txt = await bubble.innerText()
+  await page.keyboard.press('Escape')
+  return /following the plan/.test(txt) ? true : `bubble read: ${txt}`
+})
+
+await check('a partial answer submits and says what happens next', async () => {
+  const card = page.locator('.checkin-weekly')
+  // Only the written report, which is a valid check-in.
+  await card.locator('textarea').fill('Good week. Knee felt off on Thursday.')
+  await card.getByRole('button', { name: /send it/i }).click()
+  await page.waitForFunction(
+    () => /use this to build next week|needs changing/i.test(document.body.innerText),
+    { timeout: 20000 }
+  )
+})
+
+await check('the answer reached the server and closed the check-in', async () => {
+  const r = await page.evaluate(async () => {
+    const res = await fetch('/api/checkin/weekly', {
+      headers: { accept: 'application/json' }, credentials: 'same-origin',
+    })
+    return res.json()
+  })
+  return r.pending === null ? true : 'the check-in is still pending after answering'
+})
+
+await check('an already-reviewed check-in can be read back', async () => {
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.getByRole('heading', { name: /^Food$/ }).waitFor({ timeout: 20000 })
+  const toggle = page.getByRole('button', { name: /your coach on last week/i })
+  await toggle.waitFor({ timeout: 20000 })
+  await toggle.click()
+  const body = await page.locator('body').innerText()
+  return /five days out of seven/.test(body)
+    ? true
+    : 'the stored review did not render'
+})
+
 // ---- timezone and the baseline countdown -----------------------------------
 
-console.log('\n11. timezone and baseline')
+console.log('\n12. timezone and baseline')
 
 await check('the browser timezone reaches the server', async () => {
   // Sent on boot, not asked in the quiz. The weekly slots fire in local time, so

@@ -151,6 +151,17 @@ export const api = {
 
   /** Partial saves are fine — one rating is a valid check-in. */
   checkin: (date, fields) => put(`checkin/${date}`, fields),
+
+  /*
+   * The WEEKLY check-in, which is a different thing from the daily one above:
+   * weight, measurements, and the user's read on the week that just ended.
+   */
+  weekly: {
+    load: () => get('checkin/weekly'),
+    answer: (id, fields) => put(`checkin/weekly/${id}`, fields),
+    /* A deliberate pass, which stops the nudges. Ignoring it does not. */
+    skip: (id) => post(`checkin/weekly/${id}/skip`),
+  },
 }
 
 /**

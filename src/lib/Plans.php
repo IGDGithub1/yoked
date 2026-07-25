@@ -794,6 +794,46 @@ final class Plans
             }
         }
 
+        /*
+         * The weekly check-in gets prose rather than a JSON dump.
+         *
+         * The generic branch below hands the model json_encode() output, which is
+         * fine for a machine-shaped fact and poor for a human's words: the user's
+         * own report of their week is the most valuable single input here and it
+         * should not arrive wrapped in braces and escapes.
+         */
+        if (isset($extra['check_in']) && is_array($extra['check_in'])) {
+            $ci = $extra['check_in'];
+            $out[] = '';
+            $out[] = '=== THEIR WEEKLY CHECK-IN (week of ' . ($ci['week'] ?? '?') . ') ===';
+            $out[] = 'This is the user speaking about the week that just ended. It '
+                   . 'outranks any inference you would otherwise draw from the logs.';
+            if (($ci['self_report'] ?? null) !== null) {
+                $out[] = '';
+                $out[] = 'They said: ' . $ci['self_report'];
+            }
+            if (($ci['weight_kg'] ?? null) !== null) {
+                $out[] = "Weight this week: {$ci['weight_kg']} kg. Read the TREND, never "
+                       . 'a single reading.';
+            }
+            if (($ci['emphasis_request'] ?? null) !== null) {
+                // §7.2a. The decision has already been made and recorded by the
+                // review pass; this is here so the plan HONOURS it rather than
+                // re-litigating it.
+                $out[] = '';
+                $out[] = 'They asked for an emphasis shift: ' . $ci['emphasis_request'];
+                $out[] = 'Any granted emphasis is listed under STANDING EMPHASIS above. '
+                       . 'Apply it to this week rather than deciding it again.';
+            }
+            if (($ci['review'] ?? null) !== null) {
+                $out[] = '';
+                $out[] = 'Your own review of that week, already sent to them:';
+                $out[] = (string) $ci['review'];
+                $out[] = 'Build a week consistent with what you told them.';
+            }
+            unset($extra['check_in']);
+        }
+
         foreach ($extra as $label => $value) {
             $out[] = '';
             $out[] = '=== ' . strtoupper((string) $label) . ' ===';

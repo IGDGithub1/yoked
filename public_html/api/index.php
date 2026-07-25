@@ -61,6 +61,10 @@ require YK_SRC . '/routes/health.php';
 require YK_SRC . '/routes/auth.php';
 require YK_SRC . '/routes/onboarding.php';
 require YK_SRC . '/routes/nutrition.php';
+// checkin BEFORE training: training.php registers `PUT checkin/{date}` for the
+// DAILY check-in, and that pattern would swallow `PUT checkin/weekly` with
+// date="weekly". First match wins, so the more specific file goes first.
+require YK_SRC . '/routes/checkin.php';
 require YK_SRC . '/routes/training.php';
 
 // ---- Resolve path ----------------------------------------------------------

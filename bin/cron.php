@@ -46,6 +46,8 @@ require YK_SRC . '/lib/Claude.php';
 require YK_SRC . '/lib/PlanSchema.php';
 require YK_SRC . '/lib/Safety.php';
 require YK_SRC . '/lib/Plans.php';
+require YK_SRC . '/lib/Nutrition.php';
+require YK_SRC . '/lib/CheckIn.php';
 
 $args   = array_slice($argv, 1);
 $dryRun = in_array('--dry-run', $args, true);
@@ -278,12 +280,42 @@ function jobWeeklyPlan(?int $onlyUser, bool $dryRun): array
          * job's business; that path arrives with the check-in conversation.
          */
         $isBaseline = ($user['onboarding_state'] ?? '') === 'baseline';
-        $reason     = $isBaseline
+
+        /*
+         * Did they answer the check-in for the week that is ending?
+         *
+         * This is the whole reason the check-in moved to Saturday. When it is
+         * answered the plan is built from it (§7.2: the check-in produces next
+         * week's plan). When it is not, the plan generates anyway from logs and
+         * history rather than stalling — a user who goes quiet still gets a week.
+         */
+        $endingWeek = Schedule::weekStart($tz);
+        $answered   = $isBaseline ? null : CheckIn::answeredFor($userId, $endingWeek);
+
+        $reason = $isBaseline
             ? 'provisional'
-            : (Plans::hasEverHadPlan($userId) ? 'check_in' : 'initial');
+            : ($answered !== null
+                ? 'check_in'
+                : (Plans::hasEverHadPlan($userId) ? 'check_in' : 'initial'));
+
+        $extra = [];
+        if ($answered !== null) {
+            // Handed to the generator explicitly. It already reads adherence from
+            // logged_days, but the user's own words and their emphasis request are
+            // not in any table it looks at.
+            $extra['check_in'] = [
+                'week'             => $endingWeek,
+                'self_report'      => $answered['self_report'],
+                'emphasis_request' => $answered['emphasis_request'],
+                'weight_kg'        => $answered['weight_kg'],
+                'review'           => $answered['claude_review'],
+            ];
+        }
+
+        $note = $answered !== null ? ' with check-in' : ' without a check-in';
 
         if ($dryRun) {
-            say("  {$name}: WOULD generate week of {$week} (reason={$reason})");
+            say("  {$name}: WOULD generate week of {$week} (reason={$reason}){$note}");
             $results['generated']++;
             continue;
         }
@@ -296,10 +328,10 @@ function jobWeeklyPlan(?int $onlyUser, bool $dryRun): array
         }
 
         $started = microtime(true);
-        say("  {$name}: generating week of {$week} (reason={$reason}) …");
+        say("  {$name}: generating week of {$week} (reason={$reason}){$note} …");
 
         try {
-            $result = Plans::generateWeek($userId, $week, $reason);
+            $result = Plans::generateWeek($userId, $week, $reason, $extra);
 
             if ($result['ok']) {
                 $secs = round(microtime(true) - $started, 1);
@@ -307,9 +339,11 @@ function jobWeeklyPlan(?int $onlyUser, bool $dryRun): array
                 finish($runId, 'ok', "plan_version {$result['plan_version_id']}", $started);
                 $results['generated']++;
 
-                // Tell them it is ready. Notify::create() would be the home for
-                // this once the notification layer lands; for now the plan
-                // simply being there is the signal.
+                // Record which plan came out of this check-in, so the history can
+                // answer "what did that conversation produce" without guessing.
+                if ($answered !== null) {
+                    CheckIn::linkPlan((int) $answered['id'], (int) $result['plan_version_id']);
+                }
             } else {
                 $detail = $result['error']
                     . ($result['violations'] ? ' | ' . implode('; ', $result['violations']) : '');
@@ -419,19 +453,30 @@ function jobBaselineGraduation(?int $onlyUser, bool $dryRun): array
 // ---------------------------------------------------------------------------
 
 /**
- * Open a check-in for the week that just ended.
+ * Open a check-in for the week that is ending, at the user's Saturday slot.
  *
- * Cron creates these rather than waiting for the user to open the app: a quiet
- * user would otherwise never get re-planned, which is the whole failure mode
- * the check-in exists to catch (SPEC-coaching.md §7.2).
+ * The timing is the whole point. This used to have no schedule at all, so it fired
+ * on the first sweep after midnight Monday — SIX HOURS AFTER the Sunday 18:00 plan
+ * it is supposed to inform. SPEC-coaching §7.2 says the check-in produces next
+ * week's plan, and it could not, because the plan was already live.
+ *
+ * Now: Saturday 18:00 local, a day ahead of the plan slot, so the user has roughly
+ * 24 hours to say something that will actually shape the coming week.
+ *
+ * The week it covers is the CURRENT one, which is not quite over. Saturday evening
+ * is enough of a picture, and a user with something to add about Sunday can say so
+ * in the written report.
+ *
+ * Cron creates these rather than waiting for the user to open the app: a quiet user
+ * would otherwise never get re-planned, which is the failure mode the check-in
+ * exists to catch.
  */
 function jobWeeklyCheckin(?int $onlyUser, bool $dryRun): array
 {
-    // The Monday of the week that just ended.
-    $lastWeek = date('Y-m-d', strtotime('monday last week'));
-    $results  = ['created' => 0, 'skipped' => 0, 'failed' => 0];
+    $results = ['created' => 0, 'skipped' => 0, 'failed' => 0];
 
-    $sql = 'SELECT u.id, u.display_name
+    $sql = 'SELECT u.id, u.display_name,
+                   p.checkin_weekday, p.checkin_hour, p.timezone
             FROM users u
             JOIN profiles p ON p.user_id = u.id
             WHERE u.status = "active"
@@ -443,41 +488,54 @@ function jobWeeklyCheckin(?int $onlyUser, bool $dryRun): array
         $params[] = $onlyUser;
     }
 
+    global $ignoreSchedule;
+
     foreach (DB::all($sql, $params) as $user) {
         $userId = (int) $user['id'];
         $name   = $user['display_name'];
+        $tz     = $user['timezone'] ?? null;
 
-        $existing = DB::one(
-            'SELECT id, status FROM weekly_checkins WHERE user_id = ? AND week_start = ?',
-            [$userId, $lastWeek]
-        );
-        if ($existing !== null) {
-            say("  {$name}: check-in for {$lastWeek} already exists ({$existing['status']})", false);
+        // The week ENDING, in the user's own zone. On a Saturday that is the
+        // Monday five days back.
+        $week = Schedule::weekStart($tz);
+
+        $wantDay  = (int) $user['checkin_weekday'];
+        $wantHour = (int) $user['checkin_hour'];
+        if (!$ignoreSchedule && !Schedule::slotPassed($tz, $wantDay, $wantHour)) {
+            say("  {$name}: check-in slot not reached (wants day {$wantDay} hour {$wantHour} "
+                . ($tz ?? 'UTC') . ')', false);
             $results['skipped']++;
             continue;
         }
 
-        // Only worth asking if they actually did something that week —
-        // otherwise the check-in is a form nobody has anything to put in.
+        $existing = CheckIn::find($userId, $week);
+        if ($existing !== null) {
+            say("  {$name}: check-in for {$week} already exists ({$existing['status']})", false);
+            $results['skipped']++;
+            continue;
+        }
+
+        // Only worth asking if they actually did something that week — otherwise
+        // the check-in is a form nobody has anything to put in.
         $logged = (int) (DB::one(
             'SELECT COUNT(*) AS n FROM logged_days
              WHERE user_id = ? AND log_date >= ? AND log_date < DATE_ADD(?, INTERVAL 7 DAY)',
-            [$userId, $lastWeek, $lastWeek]
+            [$userId, $week, $week]
         )['n'] ?? 0);
 
         if ($logged === 0) {
-            say("  {$name}: nothing logged for {$lastWeek}; no check-in opened", false);
+            say("  {$name}: nothing logged for {$week}; no check-in opened", false);
             $results['skipped']++;
             continue;
         }
 
         if ($dryRun) {
-            say("  {$name}: WOULD open a check-in for {$lastWeek} ({$logged} days logged)");
+            say("  {$name}: WOULD open a check-in for {$week} ({$logged} days logged)");
             $results['created']++;
             continue;
         }
 
-        $runId = claim('weekly_checkin', $userId, $lastWeek);
+        $runId = claim('weekly_checkin', $userId, $week);
         if ($runId === false) {
             $results['skipped']++;
             continue;
@@ -485,12 +543,8 @@ function jobWeeklyCheckin(?int $onlyUser, bool $dryRun): array
 
         $started = microtime(true);
         try {
-            DB::run(
-                'INSERT INTO weekly_checkins (user_id, week_start, status)
-                 VALUES (?, ?, "pending")',
-                [$userId, $lastWeek]
-            );
-            say("  {$name}: opened check-in for {$lastWeek}");
+            CheckIn::open($userId, $week);
+            say("  {$name}: opened check-in for {$week}");
             finish($runId, 'ok', "{$logged} days logged", $started);
             $results['created']++;
         } catch (Throwable $e) {
@@ -500,6 +554,212 @@ function jobWeeklyCheckin(?int $onlyUser, bool $dryRun): array
             finish($runId, 'failed', $e->getMessage(), $started);
             $results['failed']++;
         }
+    }
+
+    return $results;
+}
+
+// ---------------------------------------------------------------------------
+// Job 4 — review answered check-ins, and act on late ones
+// ---------------------------------------------------------------------------
+
+/**
+ * Send answered check-ins to Claude, and alter the plan when a late one warrants it.
+ *
+ * Split from the answer itself so the user is not made to wait on a model call
+ * while submitting a form. They submit, they get an acknowledgement, and the review
+ * appears when it is ready.
+ *
+ * For a LATE check-in (answers arrived after the plan generated) Claude also decides
+ * whether the plan has to change. Deliberately not a keyword heuristic: "broke my
+ * leg" is obvious, but "knee felt off" and "work is getting busier" are judgment
+ * calls, and the app does not get to decide what counts as serious.
+ */
+function jobCheckinReview(?int $onlyUser, bool $dryRun): array
+{
+    $results = ['reviewed' => 0, 'altered' => 0, 'banked' => 0, 'failed' => 0];
+
+    // Answered but not yet reviewed. claude_review IS NULL is the marker, which is
+    // also what makes a failed review retry on the next sweep.
+    $sql = 'SELECT c.id, c.user_id, c.week_start, c.answered_late, u.display_name, p.timezone
+            FROM weekly_checkins c
+            JOIN users u    ON u.id = c.user_id
+            JOIN profiles p ON p.user_id = c.user_id
+            WHERE c.status = "completed"
+              AND c.claude_review IS NULL
+              AND u.status = "active"
+              AND p.coaching_paused = 0';
+    $params = [];
+    if ($onlyUser !== null) {
+        $sql .= ' AND c.user_id = ?';
+        $params[] = $onlyUser;
+    }
+    $sql .= ' ORDER BY c.answered_at LIMIT 20';
+
+    foreach (DB::all($sql, $params) as $row) {
+        $checkinId = (int) $row['id'];
+        $userId    = (int) $row['user_id'];
+        $name      = $row['display_name'];
+        $tz        = $row['timezone'] ?? null;
+        $week      = (string) $row['week_start'];
+        $late      = (int) $row['answered_late'] === 1;
+
+        if ($dryRun) {
+            say("  {$name}: WOULD review check-in for {$week}" . ($late ? ' (late)' : ''));
+            $results['reviewed']++;
+            continue;
+        }
+
+        // Period keyed on the check-in's week, so a retry next sweep is allowed
+        // only after the previous claim is released or finished.
+        $runId = claim('checkin_review', $userId, $week);
+        if ($runId === false) {
+            continue;
+        }
+
+        $started = microtime(true);
+        try {
+            $r = CheckIn::review($userId, $checkinId, $tz);
+            if (!$r['ok']) {
+                say("  {$name}: review FAILED — {$r['error']}");
+                finish($runId, 'failed', (string) $r['error'], $started);
+                $results['failed']++;
+                continue;
+            }
+
+            $results['reviewed']++;
+            say("  {$name}: reviewed check-in for {$week}");
+
+            if (!$late) {
+                finish($runId, 'ok', 'reviewed', $started);
+                continue;
+            }
+
+            // A late check-in either changes the plan or does not. Both outcomes
+            // are recorded: "we looked and it was fine" is information.
+            if (!$r['alter_plan']) {
+                CheckIn::recordLateOutcome($checkinId, 'banked', null);
+                say("  {$name}: late check-in banked; the plan stands");
+                finish($runId, 'ok', 'late, banked', $started);
+                $results['banked']++;
+                continue;
+            }
+
+            $planWeek = date('Y-m-d', strtotime($week . ' +7 days'));
+            say("  {$name}: late check-in alters the plan for {$planWeek} …");
+
+            $gen = Plans::generateWeek($userId, $planWeek, 'check_in', [
+                // The specific fact Claude named, handed to the generator as an
+                // instruction rather than making it re-read the whole check-in.
+                'check_in_change' => (string) ($r['alter_reason'] ?? ''),
+            ]);
+
+            if ($gen['ok']) {
+                CheckIn::recordLateOutcome($checkinId, 'altered', (int) $gen['plan_version_id']);
+                say("  {$name}: plan superseded — plan_version {$gen['plan_version_id']}");
+                finish($runId, 'ok', "altered, plan_version {$gen['plan_version_id']}", $started);
+                $results['altered']++;
+            } else {
+                // The review stands even though the regeneration failed: the user
+                // still gets their read on the week, and the outcome stays NULL so
+                // the next sweep retries.
+                $detail = (string) ($gen['error'] ?? 'generation failed');
+                say("  {$name}: plan alteration FAILED — {$detail}");
+                finish($runId, 'failed', $detail, $started);
+                $results['failed']++;
+            }
+        } catch (Throwable $e) {
+            say("  {$name}: ERROR — " . $e->getMessage());
+            error_log('[yoked cron] check-in review failed for #' . $checkinId
+                . ': ' . $e->getMessage());
+            try {
+                finish($runId, 'failed', $e->getMessage(), $started);
+            } catch (Throwable $inner) {
+                error_log('[yoked cron] could not record failure: ' . $inner->getMessage());
+            }
+            $results['failed']++;
+        }
+    }
+
+    return $results;
+}
+
+// ---------------------------------------------------------------------------
+// Job 5 — nudge unanswered check-ins
+// ---------------------------------------------------------------------------
+
+/**
+ * Chase a pending check-in (§ resolved item 2: "cron creates it, nudges if
+ * unanswered").
+ *
+ * Without this a user who ignores the check-in is silently re-planned without it
+ * forever, which is the exact failure the check-in was added to prevent.
+ *
+ * No Claude call: it stamps a counter that the app reads. Escalation intensity is
+ * the user's own `nudge_intensity` setting, and 'leave_me_alone' means exactly
+ * that — one nudge and then silence, because "I hate noisy apps" is in the scoping
+ * and a nudge that keeps coming is how an app gets deleted.
+ */
+function jobCheckinNudge(?int $onlyUser, bool $dryRun): array
+{
+    $results = ['nudged' => 0, 'quiet' => 0];
+
+    // Per-intensity ceiling on how many times we will ask.
+    $maxNudges = [
+        'leave_me_alone' => 1,
+        'gentle'         => 2,
+        'persistent'     => 4,
+        'relentless'     => 7,
+    ];
+
+    $sql = 'SELECT c.id, c.user_id, c.week_start, c.nudge_count, c.last_nudged_at,
+                   u.display_name, p.nudge_intensity, p.timezone
+            FROM weekly_checkins c
+            JOIN users u    ON u.id = c.user_id
+            JOIN profiles p ON p.user_id = c.user_id
+            WHERE c.status = "pending"
+              AND u.status = "active"
+              AND p.coaching_paused = 0';
+    $params = [];
+    if ($onlyUser !== null) {
+        $sql .= ' AND c.user_id = ?';
+        $params[] = $onlyUser;
+    }
+
+    foreach (DB::all($sql, $params) as $row) {
+        $name      = $row['display_name'];
+        $count     = (int) $row['nudge_count'];
+        $intensity = (string) ($row['nudge_intensity'] ?? 'gentle');
+        $ceiling   = $maxNudges[$intensity] ?? 2;
+
+        if ($count >= $ceiling) {
+            $results['quiet']++;
+            continue;
+        }
+
+        // At most one a day. A form asked about twice in an afternoon is nagging,
+        // and the whole nudge design is built around not being that.
+        if ($row['last_nudged_at'] !== null
+            && strtotime((string) $row['last_nudged_at']) > time() - 20 * 3600) {
+            $results['quiet']++;
+            continue;
+        }
+
+        if ($dryRun) {
+            say("  {$name}: WOULD nudge check-in for {$row['week_start']} "
+                . '(' . ($count + 1) . " of {$ceiling}, {$intensity})");
+            $results['nudged']++;
+            continue;
+        }
+
+        DB::run(
+            'UPDATE weekly_checkins
+                SET nudge_count = nudge_count + 1, last_nudged_at = NOW()
+              WHERE id = ? AND status = "pending"',
+            [(int) $row['id']]
+        );
+        say("  {$name}: nudged for {$row['week_start']} (" . ($count + 1) . " of {$ceiling})");
+        $results['nudged']++;
     }
 
     return $results;
@@ -535,10 +795,26 @@ if ($released > 0) {
  * the time plan generation looks at them, and gets their first real plan in the
  * same sweep rather than waiting a week for the next one.
  */
+/*
+ * Order matters here, and it is not alphabetical.
+ *
+ *   graduation  first, so a user whose two weeks ended overnight is 'active' by the
+ *               time plan generation looks at them and gets their real plan in the
+ *               same sweep rather than waiting a week.
+ *   checkin     BEFORE plan, so a Saturday-opened check-in exists to be answered
+ *               before Sunday's generation reads it.
+ *   review      before plan, so an answered check-in has been through Claude and
+ *               any emphasis grant is on file when the plan is built.
+ *   plan        then generation, with whatever input arrived.
+ *   nudge       last: it is bookkeeping, and chasing a check-in that this sweep
+ *               just answered would be absurd.
+ */
 $jobs = [
     'baseline_graduation' => fn() => jobBaselineGraduation($onlyUser, $dryRun),
-    'weekly_plan'         => fn() => jobWeeklyPlan($onlyUser, $dryRun),
     'weekly_checkin'      => fn() => jobWeeklyCheckin($onlyUser, $dryRun),
+    'checkin_review'      => fn() => jobCheckinReview($onlyUser, $dryRun),
+    'weekly_plan'         => fn() => jobWeeklyPlan($onlyUser, $dryRun),
+    'checkin_nudge'       => fn() => jobCheckinNudge($onlyUser, $dryRun),
 ];
 
 $exit = 0;
