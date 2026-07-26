@@ -1365,6 +1365,173 @@ await check('the 14-pip rail does not overflow at 360px', async () => {
 await obs.screenshot({ path: shot('logging-baseline.png'), fullPage: true })
 await obs.close()
 
+// ---- the Next Day Review ---------------------------------------------------
+
+console.log('\n14. the Next Day Review')
+
+/*
+ * Its own fixture, because the review is time-gated and the other two must not be.
+ * uitest_logging has review_hour 0 (off) so a dozen unrelated assertions do not depend on
+ * the clock; uitest_baseline deliberately has no plan. This one has review_hour 1 and a
+ * plan covering tomorrow.
+ */
+const rev = await ctx.newPage()
+await rev.goto(BASE, { waitUntil: 'domcontentloaded' })
+await rev.evaluate(() => {
+  localStorage.removeItem('yoked.sections')
+  localStorage.removeItem('yoked.theme')
+})
+
+await check('the review user signs in', async () => {
+  // The shared context still holds the previous fixture's cookie.
+  await rev.evaluate(async () => {
+    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
+    await fetch('/api/logout', {
+      method: 'POST',
+      headers: { 'x-csrf-token': me.csrf, accept: 'application/json' },
+      credentials: 'same-origin',
+    })
+  })
+  await rev.reload({ waitUntil: 'networkidle' })
+
+  const f = rev.locator('form.card')
+  await f.waitFor({ timeout: 20000 })
+  await f.locator('input[type="text"]').first().fill('uitest_review')
+  await f.locator('input[type="password"]').first().fill(PASS)
+  await f.getByRole('button', { name: /^sign in$/i }).click()
+  await rev.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+})
+
+await check('tomorrow is shown, with the session and the meals', async () => {
+  const card = rev.locator('.nextday')
+  await card.waitFor({ timeout: 20000 })
+  const txt = await card.innerText()
+  if (!/Push/.test(txt)) return `no session: ${txt.replace(/\n/g, ' | ')}`
+  return /Slow-braised beef/.test(txt) ? true : `no meals: ${txt.replace(/\n/g, ' | ')}`
+})
+
+await check('the prep-heavy meal is flagged and the quick one is not', async () => {
+  /*
+   * The entire reason the card appears in the EVENING. "Tomorrow's dinner needs 40
+   * minutes" is actionable at 8pm and useless at 6pm tomorrow.
+   *
+   * The fixture has a 45-minute dinner and a 5-minute breakfast, so this also asserts the
+   * threshold discriminates rather than flagging everything with a prep time.
+   */
+  const notices = await rev.locator('.nextday .notice').allInnerTexts()
+  if (notices.length !== 1) {
+    return `${notices.length} prep flags, expected 1: ${notices.join(' ;; ')}`
+  }
+  if (!/45 minutes/.test(notices[0])) return `flag read: ${notices[0]}`
+  return /Dinner/i.test(notices[0]) ? true : `flagged the wrong meal: ${notices[0]}`
+})
+
+await check('the review does not claim the accent', async () => {
+  // It is a heads-up, not a demand. Nothing on it should be the yellow thing on screen
+  // until the user opts into the audible form.
+  const n = await rev.locator('.nextday .btn--primary').count()
+  return n === 0 ? true : `${n} primary buttons in the review card`
+})
+
+await check('"something\'s up" records a fact without claiming a plan change', async () => {
+  const card = rev.locator('.nextday')
+  await card.getByRole('button', { name: /something's up/i }).click()
+  // role="radio", not button: these chips are a single choice, so getByRole('button')
+  // does not match them.
+  await card.getByRole('radio', { name: /^travelling$/i }).click()
+  await card.locator('input[aria-label="What is going on?"]').fill('Flying out early, no gym.')
+
+  /*
+   * §6.1 is structural: "The user's message never edits the plan." The copy has to match,
+   * so this asserts the UI does NOT promise a revision — an app that overstates what it
+   * did is worse than one that waits for §6.
+   */
+  const before = await card.innerText()
+  if (/plan (has been |was )?(updated|changed|revised)/i.test(before)) {
+    return 'the form promises a plan change'
+  }
+
+  await card.getByRole('button', { name: /tell my coach/i }).click()
+  await rev.waitForFunction(
+    () => /take this into account|Already noted/i.test(document.body.innerText),
+    { timeout: 20000 }
+  )
+  return true
+})
+
+await check('the noted circumstance comes back, so it is not reported twice', async () => {
+  await rev.reload({ waitUntil: 'networkidle' })
+  await rev.locator('.nextday').waitFor({ timeout: 20000 })
+  const txt = await rev.locator('.nextday').innerText()
+  return /Already noted: Flying out early/.test(txt)
+    ? true
+    : `card read: ${txt.replace(/\n/g, ' | ')}`
+})
+
+await check('noting a circumstance created no plan version', async () => {
+  // The assertion that makes "chat that can be talked into anything" a failure mode that
+  // does not exist. Checked through the API rather than trusting the absence of a call.
+  const day = await rev.evaluate(async () => {
+    const d = new Date()
+    const p = (n) => String(n).padStart(2, '0')
+    const date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+    const r = await fetch(`/api/nutrition/day/${date}`, {
+      headers: { accept: 'application/json' }, credentials: 'same-origin',
+    })
+    return r.json()
+  })
+  // The fixture prescribes TOMORROW only, so today having no target proves the plan was
+  // not regenerated to cover it.
+  return day.target === null
+    ? true
+    : 'a plan appeared for today, so something regenerated it'
+})
+
+await check('dismissing it hides it, and it stays hidden across a reload', async () => {
+  // §4.1a: "Optional and dismissible; it must not become the noise the user was promised
+  // they'd be spared." A card that comes back on the next page load IS that noise.
+  await rev.locator('.nextday').getByRole('button', { name: /looks good/i }).click()
+  await rev.waitForFunction(
+    () => document.querySelectorAll('.nextday').length === 0,
+    { timeout: 15000 }
+  )
+  await rev.reload({ waitUntil: 'networkidle' })
+  await rev.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+  await rev.waitForTimeout(1500)
+  const back = await rev.locator('.nextday').count()
+  return back === 0 ? true : 'the dismissed review came back after a reload'
+})
+
+await check('the review is absent for a user who turned it off', async () => {
+  // uitest_logging has review_hour 0. Asserted so "it appears for everyone" cannot creep
+  // in unnoticed.
+  const off = await ctx.newPage()
+  await off.goto(BASE, { waitUntil: 'networkidle' })
+  await off.evaluate(async () => {
+    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
+    await fetch('/api/logout', {
+      method: 'POST',
+      headers: { 'x-csrf-token': me.csrf, accept: 'application/json' },
+      credentials: 'same-origin',
+    })
+  })
+  await off.reload({ waitUntil: 'networkidle' })
+  const f = off.locator('form.card')
+  await f.waitFor({ timeout: 20000 })
+  await f.locator('input[type="text"]').first().fill(USER)
+  await f.locator('input[type="password"]').first().fill(PASS)
+  await f.getByRole('button', { name: /^sign in$/i }).click()
+  await off.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+  await off.waitForTimeout(1500)
+
+  const n = await off.locator('.nextday').count()
+  await off.close()
+  return n === 0 ? true : 'a review appeared for a user with review_hour 0'
+})
+
+await rev.screenshot({ path: shot('logging-nextday.png'), fullPage: true })
+await rev.close()
+
 // ---- dark mode -------------------------------------------------------------
 
 const dark = await ctx.newPage()

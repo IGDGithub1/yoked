@@ -25,7 +25,8 @@ baseline, and report their week back to the coach that plans the next one.
 | Baseline lifecycle | ✅ two weeks, Monday-aligned, per-user local time, graduates to active |
 | Weekly check-in | ✅ Sat 18:00 local, shapes Sunday's plan, late answers reviewed |
 | Drift and nudges | ✅ §4.2 escalation, pure SQL on track; §9 absence ladder, tone-matched |
-| Chat, vetoes, Next Day Review | ⬜ §6 interjections, §5 vetoes, §4.1a are next |
+| Next Day Review | ✅ §4.1a evening card: tomorrow, prep flags, dismissible |
+| Chat, vetoes | ⬜ §6 evaluate-and-revise, §5 vetoes; circumstances record but nothing acts |
 
 `bin/test-plans.php` seeds the two users from the specs, generates their weeks,
 and asserts the output against the spec decisions.
@@ -86,6 +87,7 @@ php bin/test-schedule.php     # 21 date assertions; no DB, no API
 php bin/test-baseline.php     # 24 lifecycle assertions: observation, graduation
 php bin/test-checkin.php      # 29 assertions: opening, lateness, skipping
 php bin/test-drift.php        # 32 assertions: escalation ladder, nudges, notifications
+php bin/test-tomorrow.php     # 18 assertions: the evening window, prep flags, dismissal
 php bin/test-claude.php       # API client; --offline for shape checks only
 php bin/test-logging.php      # 46 assertions over real HTTP: food, training, check-in
 php bin/test-plans.php        # end-to-end generation; --seed-only to skip API
@@ -100,10 +102,11 @@ opens on today and the plan week must contain it:
 php bin/seed-uitest.php       # two users, re-runnable:
                               #   uitest_logging  active, plan for TODAY
                               #   uitest_baseline day 3 of 14, no plan
+                              #   uitest_review   review_hour 1, plan for tomorrow
                               # plus an open weekly check-in and a reviewed one
 ```
 ```powershell
-cd app; npm run drive:logging   # 101 checks: log it, reload, confirm it stuck
+cd app; npm run drive:logging   # 110 checks: log it, reload, confirm it stuck
 ```
 
 Re-seed before each run — the suite mutates the fixture, and it refuses to start

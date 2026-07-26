@@ -113,3 +113,4 @@ require YK_SRC . '/lib/CheckIn.php';
 require YK_SRC . '/lib/Notify.php';
 require YK_SRC . '/lib/Drift.php';
 require YK_SRC . '/lib/Nudge.php';
+require YK_SRC . '/lib/Tomorrow.php';

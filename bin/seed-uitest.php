@@ -30,18 +30,36 @@ const UI_PASS = 'a-long-enough-passphrase';
  */
 const UI_BASE_USER = 'uitest_baseline';
 
+/**
+ * A third fixture, for the Next Day Review (§4.1a).
+ *
+ * Its own user because the review's whole behaviour is time-gated, and the two fixtures
+ * above must NOT be: the main one has review_hour 0 so a dozen unrelated assertions do
+ * not pass or fail depending on the clock, and the baseline one deliberately has no plan
+ * at all, so a review would find nothing to show.
+ *
+ * This one carries review_hour 1 — past for 23 hours out of 24 — plus a plan covering
+ * tomorrow and a genuinely prep-heavy dinner.
+ */
+const UI_REVIEW_USER = 'uitest_review';
+
 $drop = in_array('--drop', array_slice($argv, 1), true);
 
+$allUsers = [UI_USER, UI_BASE_USER, UI_REVIEW_USER];
+
 // ON DELETE CASCADE from users carries the plan, the logged days and the rest.
-DB::run('DELETE FROM users WHERE username IN (?, ?)', [UI_USER, UI_BASE_USER]);
+DB::run(
+    'DELETE FROM users WHERE username IN (?, ?, ?)',
+    $allUsers
+);
 // Login is rate limited per identifier, and a re-seed mid-testing would
 // otherwise inherit the previous run's failed attempts.
-foreach ([UI_USER, UI_BASE_USER] as $u) {
+foreach ($allUsers as $u) {
     DB::run('DELETE FROM rate_limits WHERE bucket LIKE ?', ['login:%' . $u . '%']);
 }
 
 if ($drop) {
-    echo 'removed ' . UI_USER . ' and ' . UI_BASE_USER . "\n";
+    echo 'removed ' . implode(', ', $allUsers) . "\n";
     exit(0);
 }
 
@@ -76,14 +94,24 @@ $prescribe = [
  */
 $monday = date('Y-m-d', strtotime('monday this week'));
 
-$seed = DB::tx(function () use ($today, $prescribe, $monday): array {
+// $today is not captured: the three-day $prescribe window replaced every use of it
+// inside here, and an unused capture is a claim about what this closure needs.
+$seed = DB::tx(function () use ($prescribe, $monday): array {
     $userId = DB::insert(
         'INSERT INTO users (username, display_name, email, password_hash, onboarding_state)
          VALUES (?, ?, ?, ?, "active")',
         [UI_USER, 'UI Test', UI_USER . '@example.test',
          password_hash(UI_PASS, PASSWORD_DEFAULT)]
     );
-    DB::run('INSERT INTO profiles (user_id) VALUES (?)', [$userId]);
+    /*
+     * review_hour 0 means "off", and that is deliberate for the MAIN fixture.
+     *
+     * The Next Day Review only appears after the user's evening hour, and the browser
+     * suite runs at whatever time of day it runs. Leaving it on would make a dozen
+     * unrelated assertions pass or fail depending on the clock. UI_REVIEW_USER carries
+     * hour 1 instead, so there is exactly one fixture the review reliably shows for.
+     */
+    DB::run('INSERT INTO profiles (user_id, review_hour) VALUES (?, 0)', [$userId]);
 
     $preset = DB::one("SELECT id FROM goal_presets WHERE slug = 'recomp'");
     DB::run(
@@ -297,3 +325,88 @@ DB::run(
 );
 
 printf("seeded a nudge and a drift question (chat_turn #%d)\n", $turnId);
+
+// ---- the Next Day Review fixture -------------------------------------------
+
+/*
+ * A user the review reliably shows for.
+ *
+ * review_hour 1 is past for 23 hours out of 24, which is as close to "always" as the
+ * feature allows without lying about what it does. The plan covers tomorrow in the
+ * user's own zone, with one quick meal and one that genuinely needs planning, so the
+ * prep-flagging has both cases to distinguish.
+ */
+$revTz  = 'America/New_York';
+$revTom = Schedule::now($revTz)->modify('+1 day')->format('Y-m-d');
+
+$revUser = DB::tx(function () use ($revTz, $revTom): int {
+    $userId = DB::insert(
+        'INSERT INTO users (username, display_name, email, password_hash, onboarding_state)
+         VALUES (?, ?, ?, ?, "active")',
+        [UI_REVIEW_USER, 'Review Test', UI_REVIEW_USER . '@example.test',
+         password_hash(UI_PASS, PASSWORD_DEFAULT)]
+    );
+    DB::run(
+        'INSERT INTO profiles (user_id, timezone, review_hour) VALUES (?, ?, 1)',
+        [$userId, $revTz]
+    );
+    $preset = DB::one("SELECT id FROM goal_presets WHERE slug = 'recomp'");
+    DB::run(
+        'INSERT INTO goals (user_id, primary_goal, goal_preset_id, success_statement, status)
+         VALUES (?, "recomp", ?, "Seeded for UI testing.", "active")',
+        [$userId, $preset === null ? null : (int) $preset['id']]
+    );
+
+    $planId = DB::insert(
+        'INSERT INTO plan_versions (user_id, week_start, version, reason, summary)
+         VALUES (?, ?, 1, "initial", "Seeded for the Next Day Review.")',
+        [$userId, Schedule::weekStart($revTz)]
+    );
+    $dayId = DB::insert(
+        'INSERT INTO prescribed_days
+            (plan_version_id, day_date, target_calories, target_protein_g,
+             target_fat_g, target_carbs_g)
+         VALUES (?, ?, 2400, 180, 80, 220)',
+        [$planId, $revTom]
+    );
+
+    // 5 minutes: below the threshold, must NOT be flagged.
+    DB::run(
+        'INSERT INTO prescribed_meals
+            (prescribed_day_id, slot, kind, name, calories, protein_g, fat_g, carbs_g,
+             prep_minutes)
+         VALUES (?, "breakfast", "specified", "Overnight oats", 500, 30, 15, 60, 5)',
+        [$dayId]
+    );
+    // 45 minutes: the §4.1a case, "tomorrow's dinner needs 40 minutes".
+    DB::run(
+        'INSERT INTO prescribed_meals
+            (prescribed_day_id, slot, kind, name, calories, protein_g, fat_g, carbs_g,
+             prep_minutes, method)
+         VALUES (?, "dinner", "specified", "Slow-braised beef", 900, 60, 40, 50, 45, ?)',
+        [$dayId, 'Brown the beef, then braise for forty minutes.']
+    );
+
+    $sid = DB::insert(
+        'INSERT INTO prescribed_sessions
+            (plan_version_id, session_date, session_type, focus, is_committed,
+             target_minutes, location, rationale)
+         VALUES (?, ?, "strength", "push", 1, 50, "full_gym", ?)',
+        [$planId, $revTom, 'Heavy day, so eat before it.']
+    );
+    $ex = DB::one("SELECT id FROM exercises WHERE slug = 'leg-press'");
+    if ($ex !== null) {
+        DB::run(
+            'INSERT INTO prescribed_exercises
+                (session_id, exercise_id, block, sets, target_reps)
+             VALUES (?, ?, "main", 3, "10")',
+            [$sid, (int) $ex['id']]
+        );
+    }
+    return $userId;
+});
+
+printf(
+    "seeded %s / %s — user #%d, review_hour 1, tomorrow %s (one prep-heavy meal)\n",
+    UI_REVIEW_USER, UI_PASS, $revUser, $revTom
+);

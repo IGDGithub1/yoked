@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, today as todayDate, shiftDate } from '../api'
 import Notifications from '../components/Notifications'
 import WeeklyCheckIn from '../components/WeeklyCheckIn'
+import NextDay from '../components/NextDay'
 import { UserIcon } from '../components/Icons'
 import Yolk from '../components/Yolk'
 
@@ -24,25 +25,28 @@ export default function Dashboard({ user, baseline, onNavigate }) {
   const [notes, setNotes] = useState(null)
   const [weekly, setWeekly] = useState(null)
   const [week, setWeek] = useState(null)
+  const [tomorrow, setTomorrow] = useState(null)
   const [status, setStatus] = useState('loading')
 
   const load = useCallback(async () => {
     /*
-     * Three independent fetches, in parallel, and each allowed to fail alone.
+     * Four independent fetches, in parallel, and each allowed to fail alone.
      *
      * A dashboard is a collection of unrelated panels: a failed notifications call
      * should not blank the macro chart. allSettled rather than all, so one rejection
      * does not take the page down.
      */
     const monday = weekStartOf(todayDate())
-    const [n, w, wk] = await Promise.allSettled([
+    const [n, w, wk, tm] = await Promise.allSettled([
       api.notifications.load(),
       api.weekly.load(),
       api.nutrition.week(monday),
+      api.tomorrow.load(),
     ])
     setNotes(n.status === 'fulfilled' ? n.value : null)
     setWeekly(w.status === 'fulfilled' ? w.value : null)
     setWeek(wk.status === 'fulfilled' ? wk.value : null)
+    setTomorrow(tm.status === 'fulfilled' ? (tm.value?.review ?? null) : null)
     setStatus('ready')
   }, [])
 
@@ -71,12 +75,17 @@ export default function Dashboard({ user, baseline, onNavigate }) {
       {/* The check-in and any review the coach has written back. */}
       {weekly && <WeeklyCheckIn data={weekly} onAnswered={load} />}
 
+      {/* Below the check-in and above the week chart. Tomorrow is less urgent than a
+          check-in that shapes the coming week, and more urgent than a review of the one
+          that just ended. */}
+      <NextDay review={tomorrow} onChanged={load} />
+
       {week && <WeekAtAGlance week={week} onNavigate={onNavigate} />}
 
       {/*
         The way into the Journal, for a user who came here to log rather than read.
-        Without it the tab bar is the only route, and a landing page offering no action
-        is a dead end.
+        Without it the header icon is the only route, and a landing page offering no
+        action is a dead end.
 
         Yellow ONLY when nothing else on this page is asking for something. An open
         weekly check-in is time-boxed and shapes the coming week; logging today is

@@ -167,6 +167,18 @@ export const api = {
     readAll: () => post('notifications/read', { all: true }),
   },
 
+  /*
+   * The Next Day Review (§4.1a). Whether it should appear at all is the SERVER's
+   * decision: the evening hour is per-user in their own timezone, and a client computing
+   * it would be a second implementation differing exactly at the boundary that matters.
+   */
+  tomorrow: {
+    load: () => get('tomorrow'),
+    dismiss: () => post('tomorrow/dismiss'),
+    /* Records a fact. It never edits the plan (§6.1). */
+    note: (fields) => post('tomorrow/circumstance', fields),
+  },
+
   weekly: {
     load: () => get('checkin/weekly'),
     answer: (id, fields) => put(`checkin/weekly/${id}`, fields),
