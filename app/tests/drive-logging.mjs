@@ -81,7 +81,13 @@ await check('signing in lands on the Dashboard, not the Journal', async () => {
   return /#\/dashboard/.test(page.url()) ? true : `url was ${page.url()}`
 })
 
-/** Both views are reachable from the tab bar; most checks below live in the Journal. */
+/**
+ * Both views are reachable from the header nav; most checks below live in the Journal.
+ *
+ * Matches on the ACCESSIBLE NAME, which is the aria-label on an icon button. That is the
+ * right thing to match: it is what a screen reader announces, and it kept working
+ * unchanged when the text tabs became icons.
+ */
 async function goto(view, target = page) {
   const want = `#/${view.toLowerCase()}`
   if (new URL(target.url()).hash === want) return
@@ -100,6 +106,39 @@ async function reloadJournal(target = page) {
   await target.getByRole('heading', { name: /how are you today/i })
     .waitFor({ timeout: 20000 })
 }
+
+await check('all navigation is in one place, and it is the header', async () => {
+  /*
+   * The first version split it: view switching in a bottom tab bar, everything else at
+   * the top, so a user looking for "where can I go" had to check two edges of the
+   * screen. Asserted structurally rather than by eye — a future card could reintroduce a
+   * fixed bottom bar without anyone noticing.
+   */
+  const inHeader = await page.locator('.appbar .navicons .navbtn').count()
+  if (inHeader < 4) return `${inHeader} nav controls in the header, expected 4`
+  const bottomBar = await page.locator('.tabbar').count()
+  return bottomBar === 0 ? true : 'a bottom tab bar is still present'
+})
+
+await check('every icon control has a name for a screen reader and a hover', async () => {
+  // An icon is never the accessible name. "gauge" is not what the control does, so each
+  // button carries an aria-label, and title= gives a sighted user the same string.
+  const missing = await page.locator('.navicons .navbtn').evaluateAll((els) =>
+    els
+      .filter((el) => !el.getAttribute('aria-label') || !el.getAttribute('title'))
+      .map((el) => el.outerHTML.slice(0, 60))
+  )
+  return missing.length === 0 ? true : `unlabelled: ${missing.join(' ;; ')}`
+})
+
+await check('the logo goes home', async () => {
+  await goto('Journal')
+  await page.getByRole('button', { name: /yoked home/i }).click()
+  await page.waitForFunction(
+    () => window.location.hash === '#/dashboard',
+    { timeout: 10000 }
+  )
+})
 
 await check('the Journal is reachable and holds the day', async () => {
   await goto('Journal')
@@ -1024,6 +1063,50 @@ await check('an open check-in is surfaced with its week', async () => {
   // Which week, spelled out: the form opens on Saturday so "this week" is
   // ambiguous without the dates.
   return /\d+ to \d+ \w+/.test(txt) ? true : `card read: ${txt.replace(/\n/g, ' | ')}`
+})
+
+await check('the profile is reachable from the Dashboard, not the nav', async () => {
+  /*
+   * It used to be a top-level nav link, which gave a screen visited a handful of times
+   * the same prominence as the two used daily. It still has to be REACHABLE — a question
+   * left blank stays blank forever otherwise — just not prominent.
+   */
+  await goto('Dashboard')
+  const navProfile = await page.locator('.navicons').getByRole('button', { name: /profile/i }).count()
+  if (navProfile > 0) return 'the profile is still in the header nav'
+
+  await page.getByRole('button', { name: /your profile/i }).click()
+  await page.waitForFunction(() => window.location.hash === '#/profile', { timeout: 10000 })
+  const body = await page.locator('body').innerText()
+  // Named for what it IS, not how it was collected: a user has a profile, not a set of
+  // quiz answers.
+  if (/Your answers/.test(body)) return 'the old "Your answers" wording is still there'
+  return /Your profile/.test(body) ? true : `profile page read: ${body.slice(0, 200)}`
+})
+
+await check('the profile has a working back button, being a real route', async () => {
+  await page.goBack()
+  await page.waitForFunction(() => window.location.hash === '#/dashboard', { timeout: 10000 })
+})
+
+await check('signing out asks first', async () => {
+  /*
+   * As a text link beside "Your answers" this was hard to hit by accident. As a bare icon
+   * next to the theme toggle it is not, and the cost of a mis-tap is re-entering a
+   * password on a phone.
+   */
+  await page.getByRole('button', { name: /^sign out$/i }).click()
+  const dialog = page.getByRole('alertdialog', { name: /sign out/i })
+  await dialog.waitFor({ timeout: 10000 })
+
+  // "Stay" backs out and leaves the session alone, which is the whole point.
+  await dialog.getByRole('button', { name: /^stay$/i }).click()
+  await page.waitForFunction(
+    () => document.querySelectorAll('[role="alertdialog"]').length === 0,
+    { timeout: 10000 }
+  )
+  const stillIn = await page.locator('.navicons').count()
+  return stillIn > 0 ? true : 'declining the confirmation signed the user out anyway'
 })
 
 await check('the Dashboard spends the accent once', async () => {

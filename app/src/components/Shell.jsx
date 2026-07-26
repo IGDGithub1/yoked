@@ -1,58 +1,117 @@
+import { useState } from 'react'
 import Yolk from './Yolk'
 import ThemeToggle from './ThemeToggle'
+import { GaugeIcon, LogOutIcon, ScrollTextIcon } from './Icons'
 
 /**
- * The chrome both signed-in views share: header, tab bar, and the scroll container.
+ * The chrome both signed-in views share.
  *
- * Extracted when the Journal stopped being the only destination. Before this, Today
- * owned the appbar and every new view would have copied it — which is how two headers
- * drift apart, and how a tab bar ends up in one view and not the other.
+ * ALL NAVIGATION IS IN THE HEADER. The first version put view switching in a bottom tab
+ * bar and everything else at the top, which meant a user scanning for "where can I go"
+ * had to check two edges of the screen. Split navigation is worse than either edge
+ * alone, whichever one you pick.
  *
- * THE TAB BAR IS AT THE BOTTOM. This is a phone-first PWA and the top of a phone
- * screen is the hardest place to reach; the two things a user switches between all day
- * belong under their thumb. It also keeps the header free for the things that are not
- * navigation (theme, answers, sign out).
+ * Icons rather than text, because four text links do not fit a 360px header without
+ * wrapping, and these are destinations a user learns once. Every one carries an
+ * aria-label and a title, so the label is available to a screen reader and to a hover.
+ *
+ * Order is deliberate: the two DESTINATIONS first, then the two SETTINGS-ish controls,
+ * with sign-out last because it is the one that ends the session.
  */
+export default function Shell({ route, onNavigate, onSignOut, children }) {
+  const [confirming, setConfirming] = useState(false)
 
-const TABS = [
-  // Dashboard first because it is the landing page: review before entry.
-  { route: 'dashboard', label: 'Dashboard' },
-  { route: 'journal', label: 'Journal' },
-]
-
-export default function Shell({ route, onNavigate, onSignOut, onReview, children }) {
   return (
     <>
       <header className="appbar">
-        <Yolk pct={100} size={34} />
-        <span className="brand">Yoked</span>
-        <ThemeToggle />
-        <button type="button" className="btn btn--quiet push" onClick={onReview}>
-          Your answers
+        {/*
+          The mark is a link home. A logo that does nothing is a wasted affordance, and
+          "click the logo to get back" is the one navigation convention that needs no
+          teaching.
+        */}
+        <button
+          type="button"
+          className="brandlink"
+          onClick={() => onNavigate('dashboard')}
+          aria-label="Yoked home"
+          title="Yoked home"
+        >
+          <Yolk pct={100} size={34} />
+          <span className="brand">Yoked</span>
         </button>
-        <button type="button" className="btn btn--quiet" onClick={onSignOut}>
-          Sign out
-        </button>
+
+        <nav className="navicons push" aria-label="Views">
+          <NavIcon
+            route="dashboard"
+            current={route}
+            onNavigate={onNavigate}
+            label="Dashboard"
+            Icon={GaugeIcon}
+          />
+          <NavIcon
+            route="journal"
+            current={route}
+            onNavigate={onNavigate}
+            label="Journal"
+            Icon={ScrollTextIcon}
+          />
+
+          <ThemeToggle />
+
+          {/*
+            Confirmed, not immediate. As a text link next to "Your answers" this was hard
+            to hit by accident; as a bare icon beside the theme toggle it is not, and the
+            cost of a mis-tap is re-entering a password on a phone.
+          */}
+          <button
+            type="button"
+            className="navbtn"
+            onClick={() => setConfirming(true)}
+            aria-label="Sign out"
+            title="Sign out"
+          >
+            <LogOutIcon />
+          </button>
+        </nav>
       </header>
 
-      {children}
+      {confirming && (
+        <div className="signout-confirm" role="alertdialog" aria-label="Sign out?">
+          <p className="small" style={{ margin: 0 }}>Sign out of Yoked?</p>
+          <div className="row">
+            <button type="button" className="btn btn--primary" onClick={onSignOut}>
+              Sign out
+            </button>
+            <button type="button" className="btn btn--quiet" onClick={() => setConfirming(false)}>
+              Stay
+            </button>
+          </div>
+        </div>
+      )}
 
-      <nav className="tabbar" aria-label="Views">
-        {TABS.map((t) => (
-          <button
-            key={t.route}
-            type="button"
-            className="tab"
-            /* aria-current, not aria-pressed: these are navigation targets rather
-               than toggles, and a screen reader should announce the active one as
-               "current page". */
-            aria-current={route === t.route ? 'page' : undefined}
-            onClick={() => onNavigate(t.route)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
+      {children}
     </>
+  )
+}
+
+/**
+ * One destination.
+ *
+ * aria-current="page" rather than a class, so the attribute a screen reader announces
+ * and the one the CSS styles are the same thing and cannot disagree.
+ */
+function NavIcon({ route, current, onNavigate, label, Icon }) {
+  const active = route === current
+  return (
+    <button
+      type="button"
+      className="navbtn"
+      aria-current={active ? 'page' : undefined}
+      aria-label={label}
+      title={label}
+      onClick={() => onNavigate(route)}
+    >
+      <Icon />
+    </button>
   )
 }

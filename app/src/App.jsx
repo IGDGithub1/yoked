@@ -6,7 +6,7 @@ import Quiz from './screens/Quiz'
 import Ready from './screens/Ready'
 import Dashboard from './screens/Dashboard'
 import Journal from './screens/Journal'
-import Answers from './screens/Answers'
+import Profile from './screens/Profile'
 import Shell from './components/Shell'
 import Yolk from './components/Yolk'
 
@@ -116,54 +116,63 @@ export default function App() {
 
   const step = state.next?.step
 
-  // Reviewing answers after onboarding. Kept in App rather than inside Today
-  // so it is reachable from anywhere that grows a link to it later, and so the
-  // quiz is loaded fresh — the answers on screen must be what the server holds,
-  // not whatever this session last typed.
-  if (state.reviewing) {
-    return (
-      <Answers
-        onClose={() => {
-          // Re-boot on the way out: editing an answer can change what the
-          // server says comes next, and reusing the old `next` would strand the
-          // user on a screen that no longer applies.
-          setState((s) => ({ ...s, reviewing: false }))
-          boot()
-        }}
-      />
-    )
-  }
-
-  const review = () => setState((s) => ({ ...s, reviewing: true }))
-
+  /*
+   * Mid-onboarding, the profile is still reachable — that is the "save and finish
+   * later" exit, and a half-answered quiz needs the way back in more than a finished
+   * one does. It is not a Shell route here because the Shell's nav offers destinations
+   * a user in the quiz cannot use yet.
+   */
   if (step === 'onboarding' || step === 'start_baseline') {
+    if (route === 'profile') {
+      return (
+        <Profile
+          onClose={() => {
+            // Re-boot on the way out: editing an answer can change what the server
+            // says comes next, and reusing the old `next` would strand the user on a
+            // screen that no longer applies.
+            navigate('dashboard')
+            boot()
+          }}
+        />
+      )
+    }
     return (
       <QuizFlow
         user={state.user}
         initialStep={step}
         onRefresh={boot}
         onSignOut={signOut}
-        onReview={review}
+        onReview={() => navigate('profile')}
       />
     )
   }
 
   /*
-   * Past onboarding: the Dashboard for review, the Journal for entry.
+   * Past onboarding: the Dashboard for review, the Journal for entry, and the Profile
+   * behind a Dashboard card rather than the nav.
    *
-   * Both live inside the same Shell so the header and tab bar are defined once. Before
-   * the split the logging screen owned its own appbar, and a second view would have
-   * copied it — which is how two headers drift apart.
+   * All three live inside the same Shell so the header is defined once. Before the
+   * split the logging screen owned its own appbar, and a second view would have copied
+   * it — which is how two headers drift apart.
    */
   return (
-    <Shell route={route} onNavigate={navigate} onSignOut={signOut} onReview={review}>
-      {route === 'journal' ? (
+    <Shell route={route} onNavigate={navigate} onSignOut={signOut}>
+      {route === 'journal' && (
         <Journal
           /* Null unless mid-baseline. Drives the countdown and explains the absence
              of targets. */
           baseline={state.baseline}
         />
-      ) : (
+      )}
+      {route === 'profile' && (
+        <Profile
+          onClose={() => {
+            navigate('dashboard')
+            boot()
+          }}
+        />
+      )}
+      {route === 'dashboard' && (
         <Dashboard user={state.user} baseline={state.baseline} onNavigate={navigate} />
       )}
     </Shell>

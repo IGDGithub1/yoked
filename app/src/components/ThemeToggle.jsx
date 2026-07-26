@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ContrastIcon, MoonIcon, SunIcon } from './Icons'
 
 /**
  * Light / dark / system, as one cycling button in the appbar.
@@ -19,10 +20,17 @@ import { useEffect, useState } from 'react'
 const KEY = 'yoked.theme'
 const ORDER = ['system', 'light', 'dark']
 
+/*
+ * A glyph per state, from the shared icon set rather than a text character.
+ *
+ * The old version used ◐ ☀ ☾, which render at wildly different weights across
+ * platforms and looked nothing like the other nav icons. These are drawn to the same
+ * 24px/2px conventions as the rest.
+ */
 const LABELS = {
-  system: { icon: '◐', text: 'Theme: follows your device' },
-  light: { icon: '☀', text: 'Theme: light' },
-  dark: { icon: '☾', text: 'Theme: dark' },
+  system: { Icon: ContrastIcon, text: 'Theme: follows your device' },
+  light: { Icon: SunIcon, text: 'Theme: light' },
+  dark: { Icon: MoonIcon, text: 'Theme: dark' },
 }
 
 function read() {
@@ -59,20 +67,21 @@ export default function ThemeToggle() {
   }, [mode])
 
   const next = () => setMode(ORDER[(ORDER.indexOf(mode) + 1) % ORDER.length])
-  const label = LABELS[mode]
+  const { Icon, text } = LABELS[mode]
 
   return (
     <button
       type="button"
-      className="btn btn--quiet theme-toggle"
+      className="navbtn"
       onClick={next}
       /* The icon alone is not a label. This is the whole accessible name, and it
          states the CURRENT theme rather than the next one — a control that
-         announces where it will take you is a riddle. */
-      aria-label={label.text}
-      title={label.text}
+         announces where it will take you is a riddle.
+         title= gives sighted users the same string as a hover tooltip. */
+      aria-label={text}
+      title={text}
     >
-      <span aria-hidden="true">{label.icon}</span>
+      <Icon />
     </button>
   )
 }

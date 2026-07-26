@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, today as todayDate, shiftDate } from '../api'
 import Notifications from '../components/Notifications'
 import WeeklyCheckIn from '../components/WeeklyCheckIn'
+import { UserIcon } from '../components/Icons'
 import Yolk from '../components/Yolk'
 
 /**
@@ -89,6 +90,22 @@ export default function Dashboard({ user, baseline, onNavigate }) {
         onClick={() => onNavigate('journal')}
       >
         Log today
+      </button>
+
+      {/*
+        The profile, at the bottom and quiet.
+        It was a top-level nav link, which gave a screen visited a handful of times the
+        same prominence as the two views used every day. It still has to be REACHABLE —
+        a question left blank stays blank forever otherwise — just not prominent.
+      */}
+      <button type="button" className="profilelink" onClick={() => onNavigate('profile')}>
+        <UserIcon />
+        {/* Two lines rather than one wrapping line. Inline, the label and its
+            description wrapped mid-sentence and "you" landed alone on the second row. */}
+        <span className="stack-tight">
+          <span className="small" style={{ fontWeight: 600 }}>Your profile</span>
+          <span className="tiny muted">What your coach knows about you</span>
+        </span>
       </button>
     </div>
   )

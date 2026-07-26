@@ -5,7 +5,12 @@ import Quiz from './Quiz'
 import Yolk from '../components/Yolk'
 
 /**
- * Review and change onboarding answers, after the quiz is done.
+ * The user's profile: review and change what the coach knows about them.
+ *
+ * Was "Your answers" and sat in the top nav, which gave a screen visited a handful of
+ * times the same prominence as the two views used daily. It is reached from a Dashboard
+ * card now, and named for what it IS rather than for how it was collected — a user has
+ * a profile, not a set of quiz answers.
  *
  * The quiz is a one-way corridor by design — it asks in an order that builds on
  * itself. But a corridor with no door back means a question left blank stays
@@ -17,7 +22,7 @@ import Yolk from '../components/Yolk'
  * section drops into the existing Quiz component at that section, so there is
  * one implementation of every field, not two that drift.
  */
-export default function Answers({ onClose }) {
+export default function Profile({ onClose }) {
   const [data, setData] = useState(null)
   const [failed, setFailed] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -58,7 +63,7 @@ export default function Answers({ onClose }) {
     return (
       <div className="centred">
         <div className="card stack">
-          <h1 className="subheading">Could not load your answers</h1>
+          <h1 className="subheading">Could not load your profile</h1>
           <p className="small muted" style={{ margin: 0 }}>
             Nothing is lost. Check your connection and try again.
           </p>
@@ -93,7 +98,7 @@ export default function Answers({ onClose }) {
 
       <div className="wrap stack-lg">
         <div>
-          <p className="eyebrow">Your answers</p>
+          <p className="eyebrow">Your profile</p>
           <h1 className="title">Change anything.</h1>
           <p className="muted prose" style={{ marginTop: 8 }}>
             Your coach reads these every time it writes a week, so a correction here

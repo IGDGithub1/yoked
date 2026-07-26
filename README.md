@@ -103,7 +103,7 @@ php bin/seed-uitest.php       # two users, re-runnable:
                               # plus an open weekly check-in and a reviewed one
 ```
 ```powershell
-cd app; npm run drive:logging   # 95 checks: log it, reload, confirm it stuck
+cd app; npm run drive:logging   # 101 checks: log it, reload, confirm it stuck
 ```
 
 Re-seed before each run — the suite mutates the fixture, and it refuses to start
@@ -132,6 +132,10 @@ nothing change.
   ENTRY. Everything review-shaped had been piling onto the logging screen and needed a
   `yieldAccent` prop so the meals would go quiet when a check-in was open; splitting
   them means "one yellow prompt per view" holds by construction instead.
+- **All navigation is in the header.** Icons with `aria-label` plus `title`, so the name
+  reaches a screen reader and a hover alike. A bottom tab bar plus a top bar meant
+  checking two edges of the screen for "where can I go"; the browser suite asserts
+  structurally that no second bar comes back.
 - **Quiet by default.** On-track days make no Claude call at all, and neither does
   minor drift: one missed session aggregates for the weekly check-in rather than
   becoming a conversation. Only significant drift asks a question.
@@ -163,7 +167,7 @@ credentials and is not part of this project).
 
 ## Stack
 
-PHP 8.4 · MySQL 8.4 · vanilla PDO · no Composer · React SPA · PWA · SiteGround shared
+PHP 8.4 · MySQL 8.4 · vanilla PDO · no Composer · React SPA · Lucide icons · PWA · SiteGround shared
 hosting · `claude-sonnet-5` for coaching.
 
 No Composer means the Anthropic SDK isn't available, so `src/lib/Claude.php` is

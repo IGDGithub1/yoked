@@ -7,79 +7,117 @@
  * matching.
  */
 
-/* ---- the tab bar -------------------------------------------------------- */
+/* ---- header navigation -------------------------------------------------- */
 /*
- * At the BOTTOM. This is a phone-first PWA and the top of a phone screen is the hardest
- * place to reach; the two views a user switches between all day belong under a thumb.
+ * ALL navigation lives in the header. The first version had view switching in a bottom
+ * tab bar and everything else at the top, so a user looking for "where can I go" had to
+ * check two edges of the screen. Split navigation is worse than either edge alone.
  *
- * Fixed rather than sticky, so it does not scroll away mid-page, with padding added to
- * .wrap below to keep the last card clear of it.
+ * Icons rather than text: four text links do not fit a 360px header without wrapping,
+ * and these are destinations learned once. Each carries an aria-label AND a title, so
+ * the name reaches a screen reader and a hover alike.
  */
-.tabbar {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 20;
-  display: flex;
-  border-top: 1px solid var(--hairline);
-  background: var(--shell);
-  /* Home-bar inset on an installed iOS PWA, where the bottom of the viewport is not
-     the bottom of the usable screen. Zero everywhere else. */
-  padding-bottom: env(safe-area-inset-bottom, 0);
-}
 
-.tab {
-  flex: 1 1 0;
-  padding: 14px 8px;
+/* The mark is a link home. A logo that does nothing is a wasted affordance. */
+.brandlink {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0;
   border: 0;
   background: none;
-  color: var(--muted);
-  font-family: var(--body);
-  font-size: 14px;
-  font-weight: 600;
+  color: inherit;
   cursor: pointer;
-  transition: color var(--t-quick);
-}
-.tab:hover { color: var(--ink); }
-
-/*
- * aria-current, not a class: the active tab is styled off the same attribute a screen
- * reader announces, so the two cannot disagree. The bar above it is the one accent,
- * which is legitimate here — this is wayfinding, the thing DESIGN.md says earns the
- * yellow.
- */
-.tab[aria-current='page'] {
-  color: var(--ink);
-  box-shadow: inset 0 2px 0 var(--yolk);
 }
 
+.navicons { display: flex; align-items: center; gap: 2px; }
+
+.navbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 40px, which clears the 44px WCAG target once the header's own padding is counted,
+     without four chunky buttons dominating a narrow header. */
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: var(--r-input);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--t-quick), background var(--t-quick);
+}
+.navbtn:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.navbtn:active { transform: translateY(1px); }
+
 /*
- * Clear the fixed bar. Without this the last card sits underneath it and the final
- * button on a page is unreachable.
+ * The current view. Styled off aria-current so the attribute a screen reader announces
+ * and the one the CSS keys on are the same thing and cannot disagree.
  *
- * Scoped to a page that HAS a tab bar rather than applied to every .wrap: the quiz and
- * the answers review use .wrap too and have no bar, and 96px of dead space at the
- * bottom of the quiz would be a mystery.
+ * This is wayfinding, which DESIGN.md names as the thing that earns the yellow.
  */
-body:has(.tabbar) .wrap { padding-bottom: 96px; }
+.navbtn[aria-current='page'] {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--yolk) 18%, transparent);
+}
+
+/* ---- sign-out confirmation ---------------------------------------------- */
+/*
+ * Confirmed rather than immediate. As a text link beside "Your answers" sign-out was
+ * hard to hit by accident; as a bare icon next to the theme toggle it is not, and a
+ * mis-tap costs a password entry on a phone.
+ *
+ * A bar under the header rather than a modal: it is a two-option question, and a modal
+ * for it would be the loudest thing in an app whose one loud moment is reserved for
+ * confirming a hard constraint.
+ */
+.signout-confirm {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--yolk) 10%, var(--shell));
+}
+
+/* ---- the profile link --------------------------------------------------- */
+/*
+ * Bottom of the Dashboard, deliberately quiet. It used to be a top-level nav link, which
+ * gave a screen visited a handful of times the same prominence as the two used daily.
+ */
+.profilelink {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1.5px solid var(--hairline);
+  border-radius: var(--r-card);
+  background: none;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--t-quick), color var(--t-quick);
+}
+.profilelink:hover { border-color: var(--muted); color: var(--ink); }
+.profilelink .small { color: var(--ink); }
+.profilelink svg { flex: none; }
+
+/* Label over description, so neither wraps mid-sentence at 360px. */
+.stack-tight { display: flex; flex-direction: column; gap: 1px; }
 
 /* ---- week at a glance --------------------------------------------------- */
 /*
  * Seven bars, one per day. A bar rather than a line because a week is seven discrete
  * days and a line implies something continuous between them.
- */
-/*
- * The chart wrapper exists so the target line can span it once.
  *
- * Drawn per-bar it read as a plotted series with gaps on unlogged days, which is the
- * opposite of the point: the target is one fixed reference, and seven dashes made it
- * look like data.
- */
-/*
- * Only the TRACK row is relative, not the whole chart including labels — so a target
- * line positioned from its bottom lands on the chart baseline rather than under the
- * day letters. That keeps the maths honest instead of offsetting by a magic number.
+ * Two nested wrappers, and the nesting is the point. The target is ONE line across the
+ * chart — drawn per-bar it read as a plotted series with gaps on unlogged days, which is
+ * the opposite of a fixed reference. It lives inside .weekchart-tracks, which contains
+ * only the tracks, so its `bottom` percentage is measured against exactly the height the
+ * bars are. The day letters sit outside that context, so no label-height correction is
+ * needed.
  */
 .weekchart { position: relative; }
 .weekchart-tracks { position: relative; }
@@ -120,20 +158,14 @@ body:has(.tabbar) .wrap { padding-bottom: 96px; }
 /*
  * The target, so a bar is read against something rather than against its neighbours.
  *
- * Positioned from the BOTTOM of the bar area, which is the label row's height plus the
- * track: the labels sit below the tracks, so `bottom: 0` on the wrapper would land
- * under them rather than at the chart's baseline.
+ * `bottom` is set inline as a percentage of the track height. An earlier version offset
+ * it by a guessed label height, which is the kind of magic number that silently drifts
+ * the moment the font changes; the wrapper nesting above removed the need for it.
  */
 .weekchart-target {
   position: absolute;
   left: 0;
   right: 0;
-  /*
-   * `bottom` is set inline as a percentage of the TRACK height. The day letters live
-   * outside .weekchart-tracks precisely so that percentage needs no correction — an
-   * earlier version offset it by a guessed label height, which is the kind of magic
-   * number that silently drifts the moment the font changes.
-   */
   height: 0;
   border-top: 1px dashed var(--muted);
   opacity: .45;
