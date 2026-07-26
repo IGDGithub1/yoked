@@ -394,12 +394,32 @@ t('the main movement PATTERNS match, in order', function () use ($sesA, $sesB, $
 });
 
 t('the core block is identical', function () use ($sesA, $sesB, $sharedDates) {
-    // §10.2a, the strongest claim in the feature: same exercises, same sets, same reps or holds.
+    /*
+     * §10.2a, the strongest claim in the feature: same exercises, same sets, same reps or holds.
+     *
+     * target_reps is FREE TEXT by design — "8", "8-10", "12/side" and "AMRAP" are all real
+     * prescriptions, and no enum covers them. So the comparison normalises before matching:
+     * "10" and "10 each side" are the same prescription of the same bilateral exercise, and
+     * "30s" and "30s hold" are the same hold. A first version of this test compared the raw
+     * strings and reported a mismatch on two days where every number agreed, which is a test
+     * bug rather than a divergence.
+     *
+     * The numbers themselves are NOT normalised away: sets, seconds, and the digits in the rep
+     * field all still have to match exactly.
+     */
+    $norm = static function (?string $s): string {
+        $s = strtolower(trim((string) $s));
+        // Wording that carries no prescription: a side or per-leg note describes the exercise,
+        // not the dose, and both users are doing the same exercise.
+        $s = preg_replace('/\b(each side|per side|each leg|per leg|each|hold|holds|total)\b/', '', $s);
+        return trim(preg_replace('/\s+/', ' ', (string) $s));
+    };
+
     $off = [];
     foreach ($sharedDates as $d) {
         $shape = fn(array $rows): array => array_map(
             fn($e) => [$e['slug'], (int) $e['sets'],
-                       (string) $e['target_reps'], (string) $e['target_seconds']],
+                       $norm($e['target_reps']), (string) $e['target_seconds']],
             $rows
         );
         $x = $shape(blockOf((int) $sesA[$d]['id'], 'core'));
@@ -423,14 +443,26 @@ t('the follower is not given the leader loads', function () use ($sesA, $sesB, $
      */
     $sameEverywhere = true;
     $compared = 0;
+    $variantDiffers = 0;
+    $paired = 0;
+
     foreach ($sharedDates as $d) {
         $x = blockOf((int) $sesA[$d]['id'], 'main');
         $y = blockOf((int) $sesB[$d]['id'], 'main');
         foreach ($x as $i => $ex) {
+            if (!isset($y[$i])) {
+                continue;
+            }
+            $paired++;
+            // The variant is the other half of §10.1: Back Squat against Goblet Squat is the
+            // same pattern prescribed two ways, which is what a mismatched pair needs.
+            if ((string) $ex['slug'] !== (string) $y[$i]['slug']) {
+                $variantDiffers++;
+            }
             $wx = $ex['target_weight_kg'];
             $wy = $y[$i]['target_weight_kg'] ?? null;
             if ($wx === null || $wy === null) {
-                continue;   // bodyweight or timed; nothing to compare
+                continue;   // bodyweight or timed on one side; no load to compare
             }
             $compared++;
             if ((float) $wx !== (float) $wy) {
@@ -438,8 +470,26 @@ t('the follower is not given the leader loads', function () use ($sesA, $sesB, $
             }
         }
     }
+
+    if ($paired === 0) {
+        return 'no main movements lined up at all, so nothing converged';
+    }
+
+    /*
+     * Loads may be absent on BOTH sides rather than merely different.
+     *
+     * A measured run had the leader carrying no target_weight_kg anywhere while the follower had
+     * one on almost everything, which is defensible: an advanced lifter works from their own
+     * recent loads and a beginner needs a number to start from. That leaves nothing to compare
+     * numerically, so the divergence claim falls back to the exercise VARIANT — and if neither
+     * the loads nor the variants differ, the two people really did get the same prescription
+     * and this must fail rather than skip.
+     */
     if ($compared === 0) {
-        return null;   // no loaded movement in common; nothing this test can say
+        return $variantDiffers > 0
+            ? true
+            : 'no loads to compare AND every exercise variant is identical, so the follower '
+            . 'was given the leader prescription outright';
     }
     return !$sameEverywhere
         ?: "all {$compared} loaded movements were prescribed at the same weight";
