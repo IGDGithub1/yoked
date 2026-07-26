@@ -518,129 +518,256 @@ actually ends the coaching relationship. A logged bad day is a success.
 
 ## 10. The buddy system
 
-Two users who train together can pair up and **sync their weeks**. It solves a real
-problem for both of Yoked's first users — one needs motivation to show up, the other
+Two users who train together pair up and **sync their weeks as far as they can**. It solves
+a real problem for both of Yoked's first users — one needs motivation to show up, the other
 needs someone watching so she doesn't coast — and unpaid accountability is the most
 effective adherence mechanism the app has.
 
+### 10.0 The trade, stated plainly
+
+**Pairing costs precision and buys adherence, and that is the point.**
+
+A paired user's plan is deliberately less individually optimal than a solo one. They inherit
+their buddy's training limits, they train on days the pair agreed rather than the days that
+suit them best, and their shared sessions match their buddy's shape rather than their own
+ideal. All of that is a real cost.
+
+It is worth paying because the alternative is worse. A pinpoint-accurate plan someone
+abandons after a month produces less than a compromised plan they are still doing in a year.
+Being beholden to another person is what keeps most people engaged; self-motivation is what
+most people run out of. So where individual optimisation and staying paired conflict, **the
+pairing wins** — and the app should say so rather than quietly degrading someone's
+programming and hoping they don't notice.
+
+This section is the exception to §3's general rule that the plan serves the individual. It
+applies only while a pair is active, only to training, and never to safety.
+
+**Nutrition is out of scope.** v1 pairs training only. Sharing meals is a plausible later
+iteration and is not designed here.
+
 ### 10.1 Shape
 
-**Friends → buddy pair → synced weeks.** Both users opt in explicitly; either can
-unpair at any time. Pairing requires an existing friendship (invite-only app,
-friends-only social surface — matching Friendspace's model).
+**Friends → buddy pair → synced weeks.** Both users opt in explicitly; either can unpair at
+any time, no reason required. Pairing requires an existing friendship (invite-only app,
+friends-only social surface).
 
-A synced week produces one **shared session skeleton**:
+One pair at a time. The spec describes a pair, not a group, and the schema agrees.
+
+A synced day produces one **shared session skeleton**:
 
 | Shared | Individual |
 |---|---|
-| Day and time | Loads |
+| Day and time slot | Loads |
 | Session type and focus | Rep ranges |
 | Movement patterns and order | Rest intervals |
-| Equipment context | Exercise **variant** |
-| | Set counts |
-| | Core block volume |
+| Warm-up timing | Exercise **variant** |
+| Equipment context | Set counts |
+| The core block, in full (§10.2a) | |
 
-So both users are at the same rack doing the same movement in the same order — and
-one is goblet squatting 50 lb for 3 × 10 while the other back squats 95 lb for 4 × 8.
-This is how a competent trainer handles a mismatched pair: one session, two
-prescriptions.
+So both users are at the same rack doing the same movement in the same order — and one is
+goblet squatting 50 lb for 3 × 10 while the other back squats 95 lb for 4 × 8. This is how a
+competent trainer handles a mismatched pair: one session, two prescriptions.
 
-### 10.2 Syncing never compromises either plan
+### 10.1a Two schedules, not one
 
-**The hard rule.** If a shared skeleton would require prescribing something either
-user's constraints forbid, or something that does not serve their goal, **that
-exercise diverges** — different movement, same slot, same time. Both users still
-train together.
+**A paired user has an individual schedule and a buddy schedule. The buddy schedule is the
+priority; the individual one is the fallback and the filler.**
 
-Structure is negotiable. Safety and goal-fit are not. A synced plan that quietly
-gives one user the other's programming is worse than no syncing at all.
+This is the load-bearing structure of the whole feature.
 
-Divergence is normal and expected, not a failure of pairing. Sunday-league examples:
-a hypertension modifier sends one user to a machine press while the other goes
-overhead with a barbell; a knee constraint swaps a squat variant. Same day, same gym,
-same hour.
+- The **individual schedule** is the §7.1 availability grid, answered at onboarding. It is
+  never overwritten by pairing and never lost.
+- The **buddy schedule** is the set of days the pair agreed to train together. It is stored
+  against the pair, not the user, and it disappears when the pair does.
+
+Where they disagree, the buddy schedule wins for shared days. Where the buddy schedule does
+not cover a user's committed capacity, the surplus is drawn from their individual grid and
+generated for them alone.
+
+Two things follow, and both are why the model is worth the extra table:
+
+1. **A user can agree to a day they did not originally offer.** Compromise is the point
+   (§10.3a), and it must not require editing the answer they gave about their own week.
+2. **A buddy going quiet does not strand the other** (§10.5). Falling back means generating
+   from the individual grid, which is still there and still accurate.
+
+### 10.2 Convergence is the goal; safety is the limit
+
+**Structure is negotiable. Safety and goal-direction are not.**
+
+Where a shared skeleton would require prescribing something a user's **hard** constraints
+forbid, that exercise **diverges** — different movement, same slot, same time. Both users
+still train together. Divergence is normal and expected, not a failure of pairing.
+
+Everything softer than a hard constraint should bend toward the pair rather than away from
+it. A soft preference, an ideal split, a slightly better exercise selection: these lose to
+staying synced. This is a deliberate reversal of how the rest of §3 reads, and §10.0 is why.
+
+Sunday-league examples: a hypertension modifier sends one user to a machine press while the
+other goes overhead with a barbell; a knee constraint swaps a squat variant. Same day, same
+gym, same hour.
 
 ### 10.2a The core block is shared, not individualized
 
-> **NOT BUILT, and the prompt line that gestured at it has been removed.** Generation runs
-> per-user: it sees one person and cannot know what the other was told, so an instruction to
-> "make the core block identical between them" was a claim the code could not keep. It read
-> as synced without being synced.
->
-> This lands with §10.6, where the shared skeleton is generated once for the PAIR. The
-> reasoning below still holds and is worth keeping — it is the argument for why shared core
-> is right, not a description of what exists.
-
-**Exception to §10.1.** For a buddy pair the core block is **identical** — same
+**Exception to §10.1's split.** For a buddy pair the core block is **identical** — same
 exercises, same sets, same reps, same holds — where the main lifts diverge freely.
 
-**Why this is deliberate and not laziness:**
-
-- **It is mostly floor work.** Planks, dead bugs, bird dogs, Pallof presses. No
-  barbell, no loading problem, so nothing forces the prescriptions apart the way a
-  squat does.
-- **Core strength converges far more than limb strength.** A deconditioned 52-year-old
-  and a trained 21-year-old are much closer on a plank than on a back squat. The gap
-  that makes shared loading impossible elsewhere mostly isn't there.
+- **It is mostly floor work.** Planks, dead bugs, bird dogs, Pallof presses. No barbell, no
+  loading problem, so nothing forces the prescriptions apart the way a squat does.
+- **Core strength converges far more than limb strength.** A deconditioned 52-year-old and a
+  trained 21-year-old are much closer on a plank than on a back squat.
 - **Side-by-side on mats is social time.** Ten minutes of matched work at the end of a
-  session is where a pair talks, competes a little, and messes about. That is the
-  buddy system's actual mechanism — U1 shows up because it's fun, U2 doesn't coast
-  because someone's next to her.
-- **Volume parity is worth less than adherence.** Losing two sets of optimal
-  individualized core work is a trivial cost against making gym day something both
-  users look forward to.
+  session is where a pair talks, competes a little, and messes about. That is the buddy
+  system's actual mechanism.
+- **Volume parity is worth less than adherence.** Losing two sets of optimal individualized
+  core work is a trivial cost against making gym day something both users look forward to.
 
-**Individualization is still available where genuinely needed:** a hard constraint
-(back injury, hernia) diverges the affected movement per §10.2. Loaded core work —
-weighted carries, cable woodchops — keeps individual **loads**, since a 60 lb suitcase
-carry and a 35 lb one are the same exercise. What matches is the movement, the sets,
-and the reps.
+**Individualization is still available where genuinely needed:** a hard constraint (back
+injury, hernia) diverges the affected movement per §10.2. Loaded core work — weighted
+carries, cable woodchops — keeps individual **loads**, since a 60 lb suitcase carry and a
+35 lb one are the same exercise.
 
-**Rule of thumb:** bodyweight and isometric core work is identical; loaded core work
-shares the movement and scales the weight.
+**Rule of thumb:** bodyweight and isometric core work is identical; loaded core work shares
+the movement and scales the weight.
 
-### 10.3 Availability intersection
+### 10.2b Inherited training limits
 
-Synced days are days **both** users are free, computed from each user's §7.1 grid.
+**While paired, each user takes on their buddy's training avoids.** If one cannot ski,
+skiing is not suggested to either of them for as long as the pair lasts.
 
-One user's Wednesday conflict shifts **the shared day**, not the other user's whole
-week. Where availability doesn't overlap enough to cover both users' committed day
-counts, the surplus days generate **solo** — synced where possible, independent
-otherwise.
+**Tiers do not transfer.** A user's own limits stay **hard** and reject a plan that violates
+them. An inherited limit arrives **soft**: the coach steers away from it and may still
+propose it with a stated reason, and the user can veto it (§5) like any other suggestion.
+
+The asymmetry is deliberate, and it is SPEC-safety §6 holding the line. A hard constraint is
+a limit the user set for themselves, deliberately. Nothing another person does should create
+one, because a constraint the user never chose is a constraint they cannot reason about — and
+a plan rejected over someone else's preference is a failure they cannot fix.
+
+**Training only.** Food constraints, allergies, dietary patterns and conditions never
+transfer. Nutrition is out of scope for v1 (§10.0), and an allergy is not a preference to
+compromise over.
+
+Inherited limits vanish on unpairing. They are a property of the pair, not of the user.
+
+### 10.3 The shared schedule
+
+Synced days start from the **intersection** of both users' §7.1 grids: days both are free.
+`sometimes` counts as free — the grid's own vocabulary makes it a maybe rather than a no, and
+treating it as a no reports zero shared days for exactly the chaotic-schedule pair that most
+needs the accountability.
+
+Where the intersection covers both users' committed counts, that is the buddy schedule and
+nothing needs negotiating.
+
+The shared duration for a day is the **shorter** of the two users' available minutes: a
+shared session cannot outlast whichever of them has to leave.
+
+### 10.3a Thin overlap is surfaced, not solved silently
+
+**Where the intersection is too thin to pair meaningfully, the app tells both users and asks
+them to compromise.** It does not quietly generate two solo weeks and leave them to work out
+why pairing did nothing.
+
+"Too thin" is: the intersection covers fewer days than the smaller of the two committed
+counts. One user wanting M/W/F/Sa and the other Tu/Th/Sa/Sun overlap only on Saturday, which
+is not a training partnership.
+
+The compromise is a negotiation between the two users, in the app. Either may offer a day
+outside their own grid. Agreement writes the **buddy schedule** — never the individual grid,
+which stays the record of what that person actually said about their own week (§10.1a).
+
+An unresolved negotiation leaves the pair active with whatever natural overlap exists. It is
+never a blocker: a pair that cannot agree still gets the adherence signal (§10.4) and still
+trains, just less together.
+
+### 10.3b Surplus days are the user's choice
+
+**When the buddy schedule covers fewer days than a user's committed count, that user decides
+what to do with the difference.** The app asks; it does not pick.
+
+Three options, and all three are defensible:
+
+| Choice | Effect |
+|---|---|
+| Keep my commitment | Buddy days plus individual days, totalling the stated count |
+| Buddy days committed, extras optional | Committed count drops to the shared days; individual days are generated as optional, no adherence cost |
+| Match the buddy schedule | Committed count is reduced to the shared days; nothing extra generated |
+
+**Why this is a question and not a rule.** `SPEC-safety`'s committed-count check exists
+because "under-prescribing quietly shrinks their week" — a 5-day user who pairs on 2 days and
+silently trains twice a week loses training *and* the accountability the pairing was for.
+But forcing all five is equally wrong for someone who paired precisely because they wanted a
+lighter, more social week. Only the user knows which they meant.
+
+Asked once when the buddy schedule is agreed, changeable afterwards, and re-asked if the
+shared schedule changes.
 
 ### 10.4 Shared adherence signal
 
-The most effective nudge in the app, and it costs nothing: *"your buddy trained
-Monday, you didn't."*
+The most effective nudge in the app, and it costs nothing: *"your buddy trained Monday, you
+didn't."*
 
-**Buddy nudges are gentle by default, regardless of tone setting.** A user may have
-chosen sarcastic hardass for themselves; there is a real difference between the app
-roasting you and your friend watching you skip. The tone dial governs the app's voice,
-not social pressure.
+**Buddy nudges are gentle by default, regardless of tone setting.** A user may have chosen
+sarcastic hardass for themselves; there is a real difference between the app roasting you and
+your friend watching you skip. The tone dial governs the app's voice, not social pressure.
 
 What a buddy sees by default: whether sessions were completed, and shared-session
-performance. **Not** covered by this: weight, measurements, and photos, which follow
-onboarding 9.5/9.6 and default to hidden. Pairing up to train is not consent to share
-body metrics.
+performance. **Not** covered by this: weight, measurements, and photos, which follow the
+privacy settings and default to hidden. Pairing up to train is not consent to share body
+metrics.
 
-### 10.5 Solo fallback
+### 10.5 Absence never strands the other user
 
-A buddy who travels, gets ill, or unpairs must never strand the other. Unsynced days
-generate normally as solo sessions. Pairing is an enhancement to a complete
-single-user plan, never a dependency of one.
+A buddy who travels, gets ill, or unpairs must never leave the other waiting. There are
+three cases and they are genuinely different.
+
+**Planned, declared before generation.** Travel can be seen coming. A buddy states an absence
+with a return date, ideally prompted at the Saturday check-in, before Sunday's generation. The
+partner's week is then built **solo from their individual grid** and they are told why:
+"Sam is away this week, so this one is yours alone."
+
+**Unplanned, declared mid-week.** Illness cannot be planned. A buddy declares it on Tuesday
+with a return date. The partner's week is already built and **stays built** — reshuffling a
+week someone is halfway through is worse than letting them finish it — but they are told
+immediately, so an empty rack on Thursday is expected rather than confusing. If the return
+date falls beyond the end of the week, the following week generates solo.
+
+**Undeclared.** Someone simply stops. Where drift (§4.2) already shows a buddy has logged
+nothing for their nudge window, the partner's next week generates solo rather than around a
+ghost. This is a safety net for the silent-quitter case, not the primary path.
+
+In every case the partner keeps a complete, valid week. **Pairing is an enhancement to a
+complete single-user plan, never a dependency of one.**
 
 ### 10.6 Generation impact
 
-Buddy pairing is the one feature that makes plan generation **sometimes per-pair
-rather than strictly per-user**. Mechanically: generate the shared skeleton from the
-intersection of both users' availability and structural needs, then generate each
-user's prescriptions against it, then validate each user's plan independently per
-`SPEC-safety.md` §5.
+Buddy pairing is the one feature that makes plan generation **sometimes per-pair rather than
+strictly per-user**.
 
-Validation stays **per-user**. There is no such thing as a pair-level constraint
-check — each user's plan must stand on its own.
+Mechanically: generate the shared skeleton from the buddy schedule and both users' structural
+needs, then generate each user's prescriptions against it, then generate each user's surplus
+days independently, then validate each user's plan **on its own**.
 
----
+Validation stays per-user. There is no such thing as a pair-level constraint check — each
+user's plan must stand on its own against their own hard constraints, inherited limits
+included as soft (§10.2b).
+
+### 10.7 Build order
+
+§10 is large and each piece is independently useful. Recorded here because the order matters
+and the reasoning is easy to lose:
+
+1. **Handshake** — invite, accept, decline, unpair; visibility follows. *Done.*
+2. **Schedules and negotiation** — §10.1a, §10.3, §10.3a, §10.3b, and generation preferring
+   shared days. Both users end up in the gym together, which is most of the adherence value.
+3. **Inherited limits** — §10.2b. Self-contained, no schema change.
+4. **Absence** — §10.5. Needs the check-in and drift.
+5. **Synced sessions** — §10.6 and §10.2a. The largest and riskiest: it restructures
+   generation, and until it lands the app must not claim sessions are shared.
+
+Each step must leave the app honest about what it does. Copy promising synced workouts before
+step 5 exists is the failure mode to avoid — a real pair notices within a week.
 
 ## 11. What Claude is called for
 
