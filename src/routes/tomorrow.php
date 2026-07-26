@@ -60,9 +60,10 @@ $router->add('POST', 'tomorrow/dismiss', function (): void {
  * mutation, which is what makes "chat that can be talked into anything" a failure mode
  * that does not exist rather than one guarded against by prompt wording.
  *
- * Today the fact is stored and read at the next generation. The full §6 loop — evaluate
- * now, revise or decline with reasoning — is separate work, and the response says so
- * plainly rather than implying tonight's note rewrote tomorrow.
+ * The stored fact is read two ways: at the next generation, and by the §6 evaluation,
+ * which decides whether it warrants revising the live plan. Either way the decision is
+ * Claude's, not this handler's, so the response stays honest about what it did — "your
+ * coach will take this into account", never "your plan has been updated".
  */
 $router->add('POST', 'tomorrow/circumstance', function (): void {
     $user   = Auth::require();

@@ -3,7 +3,7 @@ import { api, today as todayDate, shiftDate } from '../api'
 import Notifications from '../components/Notifications'
 import WeeklyCheckIn from '../components/WeeklyCheckIn'
 import NextDay from '../components/NextDay'
-import { UserIcon } from '../components/Icons'
+import { MessageIcon, UserIcon } from '../components/Icons'
 import Yolk from '../components/Yolk'
 
 /**
@@ -26,6 +26,7 @@ export default function Dashboard({ user, baseline, onNavigate }) {
   const [weekly, setWeekly] = useState(null)
   const [week, setWeek] = useState(null)
   const [tomorrow, setTomorrow] = useState(null)
+  const [chat, setChat] = useState(null)
   const [status, setStatus] = useState('loading')
 
   const load = useCallback(async () => {
@@ -37,16 +38,18 @@ export default function Dashboard({ user, baseline, onNavigate }) {
      * does not take the page down.
      */
     const monday = weekStartOf(todayDate())
-    const [n, w, wk, tm] = await Promise.allSettled([
+    const [n, w, wk, tm, ch] = await Promise.allSettled([
       api.notifications.load(),
       api.weekly.load(),
       api.nutrition.week(monday),
       api.tomorrow.load(),
+      api.chat.load(),
     ])
     setNotes(n.status === 'fulfilled' ? n.value : null)
     setWeekly(w.status === 'fulfilled' ? w.value : null)
     setWeek(wk.status === 'fulfilled' ? wk.value : null)
     setTomorrow(tm.status === 'fulfilled' ? (tm.value?.review ?? null) : null)
+    setChat(ch.status === 'fulfilled' ? ch.value : null)
     setStatus('ready')
   }, [])
 
@@ -102,6 +105,14 @@ export default function Dashboard({ user, baseline, onNavigate }) {
       </button>
 
       {/*
+        The way into the conversation.
+        Above the profile because it is the one a user reaches for when something has
+        changed, and louder when the coach has asked something: an unanswered question is
+        the only case where this card is the reason they opened the app.
+      */}
+      <CoachLink chat={chat} onNavigate={onNavigate} />
+
+      {/*
         The profile, at the bottom and quiet.
         It was a top-level nav link, which gave a screen visited a handful of times the
         same prominence as the two views used every day. It still has to be REACHABLE —
@@ -117,6 +128,41 @@ export default function Dashboard({ user, baseline, onNavigate }) {
         </span>
       </button>
     </div>
+  )
+}
+
+/**
+ * The entry to the conversation.
+ *
+ * Two states, and the difference matters. Normally it is a quiet link like the profile's.
+ * When the COACH has asked something unanswered it says so, because a question nobody
+ * knows about is a question that never gets answered — and drift questions are written by
+ * cron, so the user was never here when it arrived.
+ */
+function CoachLink({ chat, onNavigate }) {
+  const turns = chat?.turns ?? []
+  const last = turns[turns.length - 1]
+  // A coach turn that ends the conversation and asked something. `drift` marks a turn the
+  // coach opened rather than a reply.
+  const asking = last && last.role === 'assistant'
+    && (last.outcome === 'question' || last.drift !== null)
+
+  return (
+    <button type="button" className="profilelink" onClick={() => onNavigate('coach')}>
+      <MessageIcon />
+      <span className="stack-tight">
+        <span className="small" style={{ fontWeight: 600 }}>
+          {asking ? 'Your coach asked you something' : 'Talk to your coach'}
+        </span>
+        <span className="tiny muted">
+          {asking
+            ? 'Waiting on your answer'
+            : chat?.pending
+              ? 'Thinking about what you said'
+              : 'Travel, illness, anything that changed'}
+        </span>
+      </span>
+    </button>
   )
 }
 

@@ -68,6 +68,7 @@ require YK_SRC . '/routes/checkin.php';
 require YK_SRC . '/routes/training.php';
 require YK_SRC . '/routes/notifications.php';
 require YK_SRC . '/routes/tomorrow.php';
+require YK_SRC . '/routes/chat.php';
 
 // ---- Resolve path ----------------------------------------------------------
 

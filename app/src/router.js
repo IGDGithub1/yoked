@@ -28,12 +28,12 @@ import { useEffect, useState } from 'react'
 /**
  * The destinations a signed-in, onboarded user can reach.
  *
- * `profile` is a real route but NOT in the nav: it is reached from a Dashboard card,
- * because once the quiz is answered it is visited rarely and does not earn top-level
- * exposure. Being a route anyway is what makes it linkable and gives it a working back
- * button.
+ * `coach` and `profile` are real routes but NOT in the nav. Both are reached from a
+ * Dashboard card: the profile is visited rarely once the quiz is answered, and the coach
+ * is entered when there is something to say rather than browsed. Being routes anyway is
+ * what makes them linkable and gives them a working back button.
  */
-export const ROUTES = ['dashboard', 'journal', 'profile']
+export const ROUTES = ['dashboard', 'journal', 'coach', 'profile']
 
 const DEFAULT = 'dashboard'
 

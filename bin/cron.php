@@ -12,7 +12,8 @@ declare(strict_types=1);
  *   3. checkin_review      — send answered check-ins to Claude; act on late ones
  *   4. weekly_plan         — generate next week, using the check-in if answered
  *   5. drift_sweep         — classify recent days; ask questions only on real drift
- *   6. checkin_nudge       — chase an unanswered check-in
+ *   6. chat_replies        — answer what users have said (§6)
+ *   7. checkin_nudge       — chase an unanswered check-in
  *
  * The order is load-bearing and commented at the $jobs array.
  *
@@ -57,6 +58,7 @@ require YK_SRC . '/lib/CheckIn.php';
 require YK_SRC . '/lib/Notify.php';
 require YK_SRC . '/lib/Drift.php';
 require YK_SRC . '/lib/Nudge.php';
+require YK_SRC . '/lib/Chat.php';
 
 $args   = array_slice($argv, 1);
 $dryRun = in_array('--dry-run', $args, true);
@@ -838,7 +840,106 @@ function jobDriftSweep(?int $onlyUser, bool $dryRun): array
 }
 
 // ---------------------------------------------------------------------------
-// Job 6 — nudge unanswered check-ins
+// Job 6 — answer interjections
+// ---------------------------------------------------------------------------
+
+/**
+ * Reply to what users have said (SPEC-coaching §6).
+ *
+ * Split from the POST so a user is not made to wait on a model call while sending a
+ * message — and the call can be minutes when the outcome is a plan revision.
+ *
+ * This is also the structural boundary §6.1 asks for. The write path in routes/chat.php
+ * cannot touch a plan; only Chat::evaluate() can, and only through a decision the model
+ * returned as an enum that PHP then gates.
+ *
+ * Oldest first, and a few per sweep rather than all of them: a user who typed five things
+ * gets five replies in order, and a fifteen-minute cadence means the queue drains fast
+ * enough without one user's backlog holding up the rest of the sweep.
+ */
+function jobChatReplies(?int $onlyUser, bool $dryRun): array
+{
+    $results = ['answered' => 0, 'revised' => 0, 'failed' => 0];
+
+    $sql = 'SELECT c.id, c.user_id, c.body, u.display_name
+            FROM chat_turns c
+            JOIN users u    ON u.id = c.user_id
+            JOIN profiles p ON p.user_id = c.user_id
+            WHERE c.role = "user" AND c.answered_at IS NULL
+              AND u.status = "active"
+              AND p.coaching_paused = 0';
+    $params = [];
+    if ($onlyUser !== null) {
+        $sql .= ' AND c.user_id = ?';
+        $params[] = $onlyUser;
+    }
+    $sql .= ' ORDER BY c.id LIMIT 10';
+
+    foreach (DB::all($sql, $params) as $row) {
+        $turnId = (int) $row['id'];
+        $userId = (int) $row['user_id'];
+        $name   = $row['display_name'];
+        $said   = mb_substr((string) $row['body'], 0, 60);
+
+        if ($dryRun) {
+            say("  {$name}: WOULD answer turn #{$turnId} — \"{$said}\"");
+            $results['answered']++;
+            continue;
+        }
+
+        /*
+         * No cron_runs claim here, unlike every other job, and that is deliberate.
+         *
+         * The claim exists to stop two overlapping sweeps doing the same work. For this
+         * job the turn's own `answered_at` already does that: the query selects only
+         * unanswered turns, and Chat::evaluate stamps it inside a transaction. A claim
+         * would add a cron_runs row per message — the table is a log of scheduled work,
+         * and a chatty user would bury the weekly jobs in it.
+         *
+         * The cost of the race it does not guard: two sweeps 15 minutes apart could both
+         * pick up a turn whose evaluation is still running, producing a duplicate reply.
+         * A model call plus generation can exceed 15 minutes, so that is real — and the
+         * guard is that generation is itself claimed per (user, week), so the second
+         * attempt's revision fails and downgrades rather than writing a second plan.
+         */
+        try {
+            $r = Chat::evaluate($userId, $turnId);
+            if (!$r['ok']) {
+                say("  {$name}: reply FAILED — {$r['error']}");
+                $results['failed']++;
+                continue;
+            }
+
+            $note = $r['outcome'];
+            if ($r['plan_version_id'] !== null) {
+                $note .= ", plan_version {$r['plan_version_id']}";
+                $results['revised']++;
+                // Worth telling them: a plan that changed under a user without a word is
+                // the kind of surprise that costs trust.
+                Notify::create(
+                    $userId,
+                    'plan_ready',
+                    'Your coach changed this week based on what you said.',
+                    'plan_version',
+                    (int) $r['plan_version_id'],
+                    2
+                );
+            }
+            say("  {$name}: answered turn #{$turnId} ({$note})");
+            $results['answered']++;
+        } catch (Throwable $e) {
+            say("  {$name}: ERROR — " . $e->getMessage());
+            error_log('[yoked cron] chat reply failed for turn ' . $turnId . ': '
+                . $e->getMessage());
+            $results['failed']++;
+        }
+    }
+
+    return $results;
+}
+
+// ---------------------------------------------------------------------------
+// Job 7 — nudge unanswered check-ins
 // ---------------------------------------------------------------------------
 
 /**
@@ -970,6 +1071,8 @@ if ($released > 0) {
  *   plan        then generation, with whatever input arrived.
  *   drift       after plan, so a user who just received a week is assessed against
  *               the week they actually lived rather than one that arrived seconds ago.
+ *   chat        after drift, so a reply to a question the sweep just asked is not
+ *               generated in the same pass that asked it.
  *   nudge       last: it is bookkeeping, and chasing a check-in that this sweep
  *               just answered would be absurd.
  */
@@ -979,6 +1082,7 @@ $jobs = [
     'checkin_review'      => fn() => jobCheckinReview($onlyUser, $dryRun),
     'weekly_plan'         => fn() => jobWeeklyPlan($onlyUser, $dryRun),
     'drift_sweep'         => fn() => jobDriftSweep($onlyUser, $dryRun),
+    'chat_replies'        => fn() => jobChatReplies($onlyUser, $dryRun),
     'checkin_nudge'       => fn() => jobCheckinNudge($onlyUser, $dryRun),
 ];
 

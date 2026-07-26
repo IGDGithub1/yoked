@@ -168,6 +168,17 @@ export const api = {
   },
 
   /*
+   * Interjections (§6). POST records and returns; the reply arrives later, because the
+   * evaluation is a model call and can be minutes when it ends in a plan revision.
+   *
+   * That split is also the structural half of §6.1 — the write path cannot touch a plan.
+   */
+  chat: {
+    load: () => get('chat'),
+    send: (message) => post('chat', { message }),
+  },
+
+  /*
    * The Next Day Review (§4.1a). Whether it should appear at all is the SERVER's
    * decision: the evening hour is per-user in their own timezone, and a client computing
    * it would be a second implementation differing exactly at the boundary that matters.

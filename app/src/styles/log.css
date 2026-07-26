@@ -602,3 +602,52 @@
   padding: 9px 8px;
   text-align: center;
 }
+
+/* ---- the conversation ---------------------------------------------------- */
+
+/*
+ * A transcript, not a chat app.
+ *
+ * NO BUBBLES ON OPPOSITE SIDES. Two speakers alternating across a gutter is the messaging
+ * idiom, and it borrows the wrong expectations: instant replies, and a peer on the other
+ * end. This is a coach who takes minutes to answer and sometimes says no. So both turns
+ * are full-width blocks in reading order, distinguished by weight rather than position.
+ */
+.turn {
+  padding: 12px 14px;
+  border-radius: var(--r-card);
+  border: 1.5px solid var(--hairline);
+}
+
+/* The user's own words, recessed: a record of what they said, not the content. */
+.turn--mine {
+  background: none;
+  border-style: dashed;
+}
+.turn--mine .prose { color: var(--muted); }
+
+/* The coach speaking. Carries the accent edge the app uses for anything it authored. */
+.turn--coach {
+  background: var(--white);
+  border-left: 3px solid var(--yolk-deep);
+}
+
+/*
+ * A question the COACH opened rather than a reply.
+ *
+ * Louder on purpose. These are written by cron, so the user was not here when it arrived
+ * and has no memory of prompting it — a turn that looks like an answer to something they
+ * said is a turn they will scroll past.
+ */
+.turn--coach[data-raised='true'] {
+  border-color: var(--yolk-deep);
+  background: color-mix(in srgb, var(--yolk) 7%, var(--white));
+}
+
+/* Waiting. Dashed to read as not-yet-real, next to the solid turns around it. */
+.turn--thinking {
+  border-style: dashed;
+  border-left-width: 1.5px;
+  border-left-color: var(--hairline);
+  background: none;
+}

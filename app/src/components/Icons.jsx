@@ -20,6 +20,7 @@ import {
   Contrast,
   Gauge,
   LogOut,
+  MessageSquare,
   Moon,
   ScrollText,
   Sun,
@@ -62,3 +63,6 @@ export const LogOutIcon = wrap(LogOut)
 
 /** The profile card. Not in the nav, but from the same set. */
 export const UserIcon = wrap(UserCog)
+
+/** The coach card. Also not in the nav: entered when there is something to say. */
+export const MessageIcon = wrap(MessageSquare)

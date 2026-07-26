@@ -6,6 +6,7 @@ import Quiz from './screens/Quiz'
 import Ready from './screens/Ready'
 import Dashboard from './screens/Dashboard'
 import Journal from './screens/Journal'
+import Coach from './screens/Coach'
 import Profile from './screens/Profile'
 import Shell from './components/Shell'
 import Yolk from './components/Yolk'
@@ -18,12 +19,12 @@ import Yolk from './components/Yolk'
  * goes to the quiz whatever the URL says. Duplicating that logic here would be two
  * sources of truth that drift.
  *
- * THE HASH decides which of the two signed-in views they are looking at. That used to
- * be nothing — there was one destination past onboarding and a comment here saying "a
- * URL router adds nothing while the app is this linear", which was true at the time.
- * With a Dashboard for review and a Journal for entry it stops being true: you need to
- * land somewhere, get to the other, and come back without the back button ejecting you
- * from the app.
+ * THE HASH decides which signed-in view they are looking at. That used to be nothing —
+ * there was one destination past onboarding and a comment here saying "a URL router adds
+ * nothing while the app is this linear", which was true at the time. With a Dashboard for
+ * review, a Journal for entry, and the coach and profile behind Dashboard cards, it stops
+ * being true: you need to land somewhere, reach the others, and come back without the back
+ * button ejecting you from the app.
  */
 export default function App() {
   const [state, setState] = useState({ status: 'loading' })
@@ -148,10 +149,10 @@ export default function App() {
   }
 
   /*
-   * Past onboarding: the Dashboard for review, the Journal for entry, and the Profile
-   * behind a Dashboard card rather than the nav.
+   * Past onboarding: the Dashboard for review, the Journal for entry, and the coach and
+   * profile behind Dashboard cards rather than the nav.
    *
-   * All three live inside the same Shell so the header is defined once. Before the
+   * All of them live inside the same Shell so the header is defined once. Before the
    * split the logging screen owned its own appbar, and a second view would have copied
    * it — which is how two headers drift apart.
    */
@@ -164,6 +165,7 @@ export default function App() {
           baseline={state.baseline}
         />
       )}
+      {route === 'coach' && <Coach />}
       {route === 'profile' && (
         <Profile
           onClose={() => {

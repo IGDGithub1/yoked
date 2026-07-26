@@ -824,6 +824,38 @@ final class Plans
             unset($extra['check_in']);
         }
 
+        /*
+         * A mid-week interjection (§6), which is a different job from a weekly build.
+         *
+         * The week is already running: days before today have HAPPENED and cannot be
+         * reshuffled, so the instruction has to say so. Getting this wrong would produce a
+         * "revision" that moves Monday's session on a Thursday, which is not a plan, it is
+         * a rewrite of history.
+         */
+        if (isset($extra['interjection']) && is_array($extra['interjection'])) {
+            $ij = $extra['interjection'];
+            $out[] = '';
+            $out[] = '=== MID-WEEK REVISION (§7.1) ===';
+            $out[] = 'This week is already underway and you are revising it, not building '
+                   . 'it fresh.';
+            if (($ij['from_day'] ?? null) !== null) {
+                $out[] = "Today is {$ij['from_day']}. Days BEFORE today already happened: "
+                       . 'reproduce them exactly as they were prescribed. Only change today '
+                       . 'and the days after it.';
+            }
+            $out[] = '';
+            $out[] = 'They told you: ' . (string) ($ij['said'] ?? '');
+            if (($ij['change'] ?? '') !== '') {
+                $out[] = '';
+                $out[] = 'Your own decision about what to change: ' . (string) $ij['change'];
+                $out[] = 'Carry that out. Do not re-litigate it.';
+            }
+            $out[] = '';
+            $out[] = 'ADAPTATION IS NOT PUNISHMENT. Do not add make-up work, do not '
+                   . 'prescribe a corrective deficit, and do not frame anything as owed.';
+            unset($extra['interjection']);
+        }
+
         foreach ($extra as $label => $value) {
             $out[] = '';
             $out[] = '=== ' . strtoupper((string) $label) . ' ===';

@@ -1532,6 +1532,169 @@ await check('the review is absent for a user who turned it off', async () => {
 await rev.screenshot({ path: shot('logging-nextday.png'), fullPage: true })
 await rev.close()
 
+// ---- the coach conversation -------------------------------------------------
+
+console.log('\n15. the coach conversation')
+
+/*
+ * Its own page, because every other block in this suite left the shared context signed in
+ * as some other fixture.
+ *
+ * WHAT IS AND IS NOT ASSERTED HERE. The reply is a model call taken by cron, so this
+ * cannot wait for one — a passing suite would depend on a fifteen-minute cadence and a
+ * paid call. bin/test-chat.php covers the reply and the decision (20 assertions, 3 of them
+ * live). What the browser owns is the half cron cannot reach: the message goes in, appears
+ * immediately, says honestly that nothing has come back yet, and NO PLAN WAS TOUCHED on
+ * the way through.
+ */
+const chat = await ctx.newPage()
+await chat.goto(BASE, { waitUntil: 'domcontentloaded' })
+
+await check('the coach page signs in', async () => {
+  await chat.evaluate(async () => {
+    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
+    if (me.authenticated) {
+      await fetch('/api/logout', {
+        method: 'POST',
+        headers: { 'x-csrf-token': me.csrf, accept: 'application/json' },
+        credentials: 'same-origin',
+      })
+    }
+  })
+  await chat.reload({ waitUntil: 'networkidle' })
+  const f = chat.locator('form.card')
+  await f.waitFor({ timeout: 20000 })
+  await f.locator('input[type="text"]').first().fill(USER)
+  await f.locator('input[type="password"]').first().fill(PASS)
+  await f.getByRole('button', { name: /^sign in$/i }).click()
+  await chat.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+})
+
+/*
+ * A fingerprint of what is PRESCRIBED right now, taken before anything is said.
+ *
+ * This is the load-bearing assertion of the block. §6.1 says there is no code path from
+ * user text to a plan mutation: POST /api/chat records the turn and returns, and only the
+ * evaluation cron can revise. A regression that made the write path "helpful" would show
+ * up here as the prescription moving between two reads.
+ *
+ * Fingerprinting the prescription rather than reading a version id, because no endpoint
+ * exposes one — and this is the better test anyway. A version bump nobody can see is not
+ * the thing that would hurt a user; a session that silently became a different session is.
+ */
+const prescribed = () => chat.evaluate(async () => {
+  // The date is built from LOCAL parts inside the page, as everywhere else in this suite.
+  // toISOString() would roll a late-evening browser into tomorrow and read the wrong day.
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  const date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  const r = await fetch(`/api/training/day/${date}`, { credentials: 'same-origin' })
+  const b = await r.json()
+  /*
+   * Only the PRESCRIBED fields. The same payload carries what was logged, and an earlier
+   * block in this suite logged a session — including that would make the fingerprint
+   * sensitive to the user's own writes rather than to the plan, which is the opposite of
+   * what is being watched.
+   */
+  return JSON.stringify((b.sessions ?? []).map((x) => [
+    x.prescribed_session_id, x.session_type, x.focus, x.is_committed,
+    x.target_minutes, (x.exercises ?? []).length,
+  ]))
+})
+
+const planBefore = await prescribed()
+
+await check('the coach is reachable from the Dashboard, not the nav', async () => {
+  await goto('Dashboard', chat)
+  const card = chat.locator('.profilelink', { hasText: /coach/i })
+  if (!(await card.count())) return 'no coach card on the Dashboard'
+  // Deliberately NOT a nav item: the header carries the two daily views plus theme and
+  // sign out, and a conversation entered when something changes does not earn a fifth.
+  const inNav = await chat.locator('.navicons .navbtn[aria-label*="oach" i]').count()
+  if (inNav) return 'the coach turned into a nav item'
+  await card.first().click()
+  await chat.waitForFunction(() => window.location.hash === '#/coach', { timeout: 10000 })
+})
+
+await check('the conversation view loads', async () => {
+  await chat.getByRole('heading', { name: /anything i should know/i }).waitFor({ timeout: 20000 })
+  return true
+})
+
+const MESSAGE = 'Travelling Tuesday to Thursday for work, no gym access at the hotel.'
+
+await check('a message can be sent', async () => {
+  const box = chat.getByLabel(/tell your coach something/i)
+  await box.fill(MESSAGE)
+  await chat.getByRole('button', { name: /^send$/i }).click()
+  // The turn appears from the POST response, not from a poll: sending has to feel
+  // immediate even though the reply does not.
+  await chat.locator('.turn--mine', { hasText: /travelling tuesday/i })
+    .first().waitFor({ timeout: 20000 })
+  return true
+})
+
+await check('the composer clears after sending', async () => {
+  const v = await chat.getByLabel(/tell your coach something/i).inputValue()
+  return v === '' ? true : `the draft is still in the box: ${JSON.stringify(v)}`
+})
+
+await check('the wait is stated honestly rather than hidden', async () => {
+  /*
+   * A spinner would imply seconds. This one can be minutes when the decision ends in a
+   * regenerated week, and a progress indicator that lies about duration is worse than
+   * copy that admits it.
+   */
+  const t = chat.locator('.turn--thinking')
+  if (!(await t.count())) return 'no pending state after sending'
+  const text = (await t.first().innerText()).toLowerCase()
+  return /few minutes/.test(text) ? true : `the wait says: ${text}`
+})
+
+await check('nothing claims a plan changed before the coach has decided', async () => {
+  // The view only shows "your week was updated" against a real resulting_plan_version_id.
+  // Saying it on send would be a promise the evaluation may well decline to keep.
+  const claimed = await chat.locator('.turn', { hasText: /week was updated/i }).count()
+  return claimed === 0 ? true : 'a plan change was claimed with no reply yet'
+})
+
+await check('sending a message did NOT touch the plan', async () => {
+  const after = await prescribed()
+  return after === planBefore
+    ? true
+    : `the prescription changed on a chat write:
+  before ${planBefore}
+  after  ${after}`
+})
+
+await check('the message survives a reload', async () => {
+  /*
+   * Reload lands on the Dashboard (the router normalises a bare hash), so come back by
+   * URL. That IS the assertion: the coach is a real route, so a reload does not lose it
+   * and the address is linkable — which a modal transcript would not be.
+   */
+  await chat.reload({ waitUntil: 'networkidle' })
+  await chat.evaluate(() => { window.location.hash = '#/coach' })
+  await chat.getByRole('heading', { name: /anything i should know/i }).waitFor({ timeout: 20000 })
+  await chat.locator('.turn--mine', { hasText: /travelling tuesday/i })
+    .first().waitFor({ timeout: 20000 })
+  return true
+})
+
+await check('the Dashboard card reports the outstanding reply', async () => {
+  await goto('Dashboard', chat)
+  const card = chat.locator('.profilelink', { hasText: /coach/i })
+  const text = (await card.first().innerText()).toLowerCase()
+  return /thinking/.test(text)
+    ? true
+    : `the card says ${JSON.stringify(text)} with a reply outstanding`
+})
+
+await chat.evaluate(() => { window.location.hash = '#/coach' })
+await chat.waitForTimeout(500)
+await chat.screenshot({ path: shot('logging-coach.png'), fullPage: true })
+await chat.close()
+
 // ---- dark mode -------------------------------------------------------------
 
 const dark = await ctx.newPage()
