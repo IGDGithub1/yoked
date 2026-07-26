@@ -355,7 +355,14 @@ function FacilityPrompt({ s, busy, run }) {
   const labels = s.access_labels ?? {}
 
   return (
-    <div className="veto stack-sm">
+    /*
+     * Named so a test can scope to it.
+     *
+     * The offer form further down has its own facility buttons with the same labels, so an
+     * unscoped "click the home gym button" hits whichever renders first — which is how the
+     * browser suite ended up settling nothing and reporting the surviving prompt as a bug.
+     */
+    <div className="veto stack-sm" data-testid="facility-prompt">
       <p className="tiny" style={{ margin: 0, fontWeight: 600 }}>
         {s.unconfirmed_access.length === 1
           ? 'Where are you training together?'

@@ -2639,7 +2639,11 @@ await check('the app asks where they are training, and says what it assumed', as
    * houses.
    */
   const card = fr.locator('.card', { hasText: /days you train together/i }).first()
-  const text = (await card.innerText()).toLowerCase()
+  // Scoped: the offer form in the same card also names facilities, so reading the whole card
+  // would let this pass on text the facility prompt never rendered.
+  const prompt = card.locator('[data-testid="facility-prompt"]')
+  await prompt.waitFor({ timeout: 20000 })
+  const text = (await prompt.innerText()).toLowerCase()
 
   if (!/where are you training/.test(text)) {
     return `the app does not ask where they are meeting: ${text}`
@@ -2681,6 +2685,15 @@ await check('settling the facility sticks, and the question goes away', async ()
    */
   const card = fr.locator('.card', { hasText: /days you train together/i }).first()
 
+  /*
+   * Scoped to the facility prompt, NOT the whole card.
+   *
+   * The offer form in the same card has its own facility buttons with the same labels, so an
+   * unscoped match clicked whichever rendered first — settling nothing, then reporting the
+   * still-present prompt as a bug. Two runs were spent on that.
+   */
+  const prompt = card.locator('[data-testid="facility-prompt"]')
+
   // The less-equipped option, which is the case the most-capable guess gets wrong and the
   // reason this is settleable at all.
   for (let i = 0; i < 4; i++) {
@@ -2690,7 +2703,7 @@ await check('settling the facility sticks, and the question goes away', async ()
     })
     if (remaining === 0) break
 
-    const btn = card.getByRole('button', { name: /home gym/i })
+    const btn = prompt.getByRole('button', { name: /home gym/i })
     if ((await btn.count()) === 0) break
     await btn.first().click()
 

@@ -294,12 +294,13 @@ $router->add('GET', 'buddy/schedule', function (): void {
  * them to arrange, and all the coach needs is what equipment will be there.
  */
 $router->add('PUT', 'buddy/schedule/days/{weekday}/access', function (array $p): void {
+    // No CSRF call here: public_html/api/index.php runs Csrf::verify() for every mutating
+    // request before routing. A per-route check would be redundant, and the one I first wrote
+    // named a method that does not exist, which fatalled every call to this route.
     $user = Auth::require();
-    Csrf::require();
 
-    $body    = Response::body();
     $weekday = (int) $p['weekday'];
-    $access  = trim((string) ($body['access'] ?? ''));
+    $access  = trim((string) (Response::body()['access'] ?? ''));
 
     if ($weekday < 1 || $weekday > 7) {
         Response::error('That is not a day of the week.', 422);
