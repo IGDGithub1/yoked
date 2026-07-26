@@ -118,6 +118,23 @@ final class BuddySkeleton
             [(int) $buddyPlan['id']]
         );
 
+        /*
+         * The pair's resolved schedule, NOT the leader's raw session values.
+         *
+         * This distinction is load-bearing and getting it wrong produced a real failure. The
+         * leader's row says what THEY were prescribed — 60 minutes at a full gym — while the
+         * shared day resolves to the shorter window and the more restrictive access, because
+         * both of them have to be able to train there (§10.3). Handing the follower the leader's
+         * numbers under a "COPY EXACTLY" instruction tells them to fit a 60-minute full-gym
+         * session into their own 45-minute home window, and a measured run responded by pushing
+         * the overflow onto days the follower had marked unavailable.
+         *
+         * So minutes and location come from effective(), which is the same resolution the
+         * availability grid in the prompt already reflects. The SHAPE still comes from the
+         * leader's session, which is the point of the skeleton.
+         */
+        $effective = BuddySchedule::effective($userId, $pairId);
+
         $days = [];
         foreach ($rows as $r) {
             $date    = (string) $r['session_date'];
@@ -126,15 +143,33 @@ final class BuddySkeleton
                 continue;   // their own solo day, nothing to match
             }
 
+            $eff = $effective[$weekday] ?? null;
+
+            /*
+             * The warm-up is scaled rather than copied: ten minutes out of the leader's 60 is a
+             * sixth of the session, and the same ten out of 45 is nearly a quarter. Rounded to
+             * the nearest minute and floored at 5, since a 2-minute warm-up is not one.
+             */
+            $leaderMin  = $r['target_minutes'] === null ? null : (int) $r['target_minutes'];
+            $sharedMin  = $eff === null || $eff['minutes'] === null
+                ? $leaderMin
+                : (int) $eff['minutes'];
+            $leaderWarm = $r['warmup_minutes'] === null ? null : (int) $r['warmup_minutes'];
+            $sharedWarm = $leaderWarm;
+            if ($leaderWarm !== null && $leaderMin !== null && $sharedMin !== null
+                && $leaderMin > 0 && $sharedMin < $leaderMin) {
+                $sharedWarm = max(5, (int) round($leaderWarm * $sharedMin / $leaderMin));
+            }
+
             $days[$date] = [
                 'session_type'   => (string) $r['session_type'],
                 'focus'          => (string) $r['focus'],
                 'focus_detail'   => $r['focus_detail'],
-                'target_minutes' => $r['target_minutes'] === null
-                    ? null : (int) $r['target_minutes'],
-                'location'       => $r['location'],
-                'warmup_minutes' => $r['warmup_minutes'] === null
-                    ? null : (int) $r['warmup_minutes'],
+                'target_minutes' => $sharedMin,
+                'location'       => $eff === null || $eff['access'] === null
+                    ? $r['location']
+                    : (string) $eff['access'],
+                'warmup_minutes' => $sharedWarm,
                 'warmup_detail'  => $r['warmup_detail'],
                 // The shape that matters: pattern and order for the main work, and the core
                 // block in full (§10.2a).
@@ -208,8 +243,20 @@ final class BuddySkeleton
         $out[] = 'These days are trained TOGETHER, and their plan is already written. Match its '
                . 'shape so the two of them can train side by side.';
         $out[] = '';
-        $out[] = 'COPY EXACTLY: the day, the session type, the focus, the warm-up length, the '
-               . 'location, and the ORDER of movement patterns in the main block.';
+        $out[] = 'COPY EXACTLY: the day, the session type, the focus, and the ORDER of movement '
+               . 'patterns in the main block.';
+        /*
+         * Said explicitly because it is the one place a "match your buddy" instruction can push
+         * the model into an invalid plan rather than merely a suboptimal one.
+         *
+         * The length and location below are already the PAIR's resolved values — the shorter
+         * window and the access both of them have — not the leader's. A measured run handed the
+         * leader's 60-minute full-gym figures to a follower with a 45-minute home window, and
+         * the model put the overflow on three days the follower had marked unavailable.
+         */
+        $out[] = 'The length and location given below are the SHARED ones, already narrowed to '
+               . 'what suits both of them. Use exactly those. Never widen a session to match '
+               . 'what their buddy is doing, and never add a day to fit work that will not fit.';
         $out[] = 'COPY THE CORE BLOCK IN FULL: same exercises, same sets, same reps or holds. '
                . 'It is mostly floor work, so there is no loading problem, and ten minutes of '
                . 'matched work side by side is where a pair actually talks.';

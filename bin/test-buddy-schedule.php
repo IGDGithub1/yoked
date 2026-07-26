@@ -1538,6 +1538,60 @@ t('the follower reads the shared days of the leader plan', function () {
         ?: 'the core block did not come through';
 });
 
+t('the skeleton reports the SHARED window, not the leader own', function () {
+    /*
+     * The bug this exists to prevent, found by a live run rather than by reasoning.
+     *
+     * The leader's session row says 60 minutes at a full gym, because that is what THEY were
+     * prescribed. The shared day resolves to the shorter window and the access both of them
+     * have (§10.3). Handing the follower the leader's figures under a "copy exactly"
+     * instruction tells them to fit 60 minutes of full-gym work into a 45-minute home window —
+     * and the model's answer was to schedule the overflow on three days the follower had marked
+     * unavailable, which failed validation three times and cost a full generation.
+     */
+    $a = seedUser('skel_win_a', 3);
+    $b = seedUser('skel_win_b', 3);
+    // A has 75 minutes and a full gym; B has 45 at home. They share Mon and Wed.
+    grid($a, [1 => [75, 'full_gym'], 3 => [75, 'full_gym']]);
+    grid($b, [1 => [45, 'home_gym'], 3 => [45, 'home_gym']]);
+    pairUp($a, $b);
+
+    $week   = nextWeek();
+    $planId = leaderPlan($a, $week, [1, 3]);
+    // leaderPlan writes 60 minutes and full_gym, standing in for the leader's own prescription.
+    DB::run(
+        'UPDATE prescribed_sessions SET target_minutes = 75, location = "full_gym"
+         WHERE plan_version_id = ?',
+        [$planId]
+    );
+
+    $skel = BuddySkeleton::toFollow($b, $week);
+    if ($skel === null) {
+        return 'no skeleton';
+    }
+    $mon = date('Y-m-d', strtotime($week));
+    $day = $skel['days'][$mon];
+
+    if ($day['target_minutes'] !== 45) {
+        return "the skeleton offers {$day['target_minutes']} minutes against a 45 minute window";
+    }
+    if ($day['location'] !== 'home_gym') {
+        return "the skeleton sends them to {$day['location']}, which they do not have";
+    }
+    // And the warm-up is scaled to the shorter session rather than copied whole.
+    if ($day['warmup_minutes'] !== null && $day['warmup_minutes'] > 10) {
+        return "the warm-up is {$day['warmup_minutes']} min inside a 45 min session";
+    }
+
+    // The prompt must not tell them to copy a location, since that is the thing they cannot.
+    $text = BuddySkeleton::promptBlock($skel);
+    if (preg_match('/COPY EXACTLY:[^\n]*location/i', $text)) {
+        return 'the prompt still tells the follower to copy the location';
+    }
+    return str_contains($text, 'SHARED ones')
+        ?: 'the prompt does not say the length and location are already the shared ones';
+});
+
 t('a solo day of the leader is NOT in the skeleton', function () {
     /*
      * §10.1: only the shared days are shared. A day the leader trains alone is theirs to shape,
