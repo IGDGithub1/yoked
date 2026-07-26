@@ -97,7 +97,7 @@ $u = seedUser('read');
 
 t('the settings come back with the fields the quiz never asked', function () use ($u) {
     $s = Settings::forUser($u['id']);
-    foreach (['coaching_paused', 'checkin', 'plan', 'review_hour', 'core_emphasis'] as $k) {
+    foreach (['coaching_paused', 'checkin', 'plan', 'review_hour'] as $k) {
         if (!array_key_exists($k, $s)) {
             return "missing {$k}";
         }
@@ -325,12 +325,12 @@ t('a partial save leaves everything else alone', function () {
      * silently reset the day their check-in opens.
      */
     $p = seedUser('partial');
-    DB::run('UPDATE profiles SET checkin_weekday = 5, core_emphasis = "heavy"
+    DB::run('UPDATE profiles SET checkin_weekday = 5, review_hour = 21
              WHERE user_id = ?', [$p['id']]);
     Settings::save($p['id'], ['coaching_paused' => true]);
-    $r = DB::one('SELECT checkin_weekday, core_emphasis FROM profiles WHERE user_id = ?',
+    $r = DB::one('SELECT checkin_weekday, review_hour FROM profiles WHERE user_id = ?',
         [$p['id']]);
-    return ((int) $r['checkin_weekday'] === 5 && (string) $r['core_emphasis'] === 'heavy')
+    return ((int) $r['checkin_weekday'] === 5 && (int) $r['review_hour'] === 21)
         ?: 'a partial save clobbered other fields';
 });
 
@@ -395,7 +395,6 @@ t('out-of-range values are refused', function () {
         ['checkin_weekday' => 0], ['checkin_weekday' => 8],
         ['checkin_hour' => 24], ['checkin_hour' => -1],
         ['review_hour' => 24],
-        ['core_emphasis' => 'extreme'],
     ] as $i => $bad) {
         if (Settings::save($p['id'], $bad)['ok'] !== false) {
             return 'accepted ' . json_encode($bad);
@@ -409,15 +408,35 @@ t('an empty body changes nothing', function () {
     return Settings::save($p['id'], [])['ok'] === false ?: 'an empty save reported success';
 });
 
-t('core emphasis takes every value the plan rules understand', function () {
-    // Plans::rules reads this to decide core minutes, so the sets have to agree.
-    $p = seedUser('core');
-    foreach (['off', 'light', 'standard', 'heavy'] as $v) {
-        if (!Settings::save($p['id'], ['core_emphasis' => $v])['ok']) {
-            return "rejected {$v}";
-        }
+t('core work is no longer a setting', function () {
+    /*
+     * §3.3b: "Built in by default, not asked as a preference." A dial with an 'off' position
+     * contradicted that twice over — it let a user switch core work off, and it made a
+     * structural programming decision into a preference.
+     *
+     * Asserted from both ends: the save path must refuse the field, and the read must not
+     * offer it. A column left in the schema with nothing reading it is fine; a control that
+     * quietly still writes is not.
+     */
+    $p = seedUser('nocore');
+    if (Settings::save($p['id'], ['core_emphasis' => 'heavy'])['ok'] !== false) {
+        return 'core_emphasis is still writable through settings';
     }
-    return true;
+    return !array_key_exists('core_emphasis', Settings::forUser($p['id']))
+        ?: 'core_emphasis is still reported by forUser';
+});
+
+t('generation always prescribes core work, with no way to turn it off', function () {
+    // The other half: removing the dial must not have removed the RULE. Read the prompt
+    // rather than the source, so this fails if the rule stops reaching the model.
+    $ref = new ReflectionMethod(Plans::class, 'rules');
+    $ref->setAccessible(true);
+    $rules = (string) $ref->invoke(null, 4);
+    if (!str_contains($rules, 'CORE ON EVERY STRENGTH DAY')) {
+        return 'the core rule is no longer in the prompt';
+    }
+    return str_contains($rules, '8-12 minutes')
+        ?: 'the core rule no longer states 8-12 minutes';
 });
 
 // ---------------------------------------------------------------------------

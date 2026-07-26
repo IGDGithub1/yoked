@@ -193,8 +193,11 @@ export default function App() {
           <div>
             <p className="eyebrow">Friends</p>
             <h1 className="heading">Who you train with.</h1>
+            {/* Not "sync your weeks": §10.6 is not built, so nothing coordinates the inside
+                of a session yet. The honest promise is the accountability, which is the part
+                that actually works and the part the spec calls the mechanism. */}
             <p className="small muted prose" style={{ marginTop: 6 }}>
-              Connecting with someone here is what lets the two of you sync your weeks.
+              Pair up with a friend and you will each see whether the other showed up.
             </p>
           </div>
           {/* Re-reads the badge whenever the screen changes something, so accepting a

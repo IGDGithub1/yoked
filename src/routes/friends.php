@@ -127,3 +127,81 @@ $router->add('PATCH', 'friends/{id}', function (array $p): void {
         'friends' => Friends::forUser($userId),
     ]);
 });
+
+/* ---- buddy pairing (§10) --------------------------------------------------- */
+
+/**
+ * GET /api/buddy — the pairing state, and who could be asked.
+ *
+ * Separate from GET /api/friends rather than folded into it: the friends list is read on
+ * every boot for the nav badge, and the pairing state carries an availability intersection
+ * that nothing else needs. One endpoint would make every page load pay for a join it does
+ * not use.
+ */
+$router->add('GET', 'buddy', function (): void {
+    $user = Auth::require();
+
+    Response::json(['buddy' => Buddies::forUser((int) $user['id'])]);
+});
+
+/**
+ * POST /api/buddy — ask a friend to train together.
+ *
+ * Body: {user_id}
+ *
+ * §10.1 requires an accepted friendship, checked in Buddies::invite so it holds for every
+ * caller. Idempotent the same two ways a friend request is: asking twice is fine, and asking
+ * someone who already asked you accepts instead.
+ */
+$router->add('POST', 'buddy', function (): void {
+    $user   = Auth::require();
+    $userId = (int) $user['id'];
+
+    $targetId = Validate::id(Response::body()['user_id'] ?? null);
+    if ($targetId === null) {
+        Response::error('Who do you want to train with?', 422);
+    }
+
+    $r = Buddies::invite($userId, $targetId);
+    if (!$r['ok']) {
+        Response::error((string) $r['error'], 422);
+    }
+
+    Response::json(['ok' => true, 'status' => $r['status'],
+                    'buddy' => Buddies::forUser($userId)], 201);
+});
+
+/**
+ * PATCH /api/buddy — answer an invitation, or end the pairing.
+ *
+ * Body: {action: accept | decline | unpair}
+ *
+ * No id in the path, unlike the friends equivalent, because a user has at most one pair: the
+ * spec describes a pair rather than a group, and the schema has no notion of a set. Taking an
+ * id here would imply a choice the data cannot represent.
+ */
+$router->add('PATCH', 'buddy', function (): void {
+    $user   = Auth::require();
+    $userId = (int) $user['id'];
+
+    $action = Validate::enum(
+        Response::body()['action'] ?? null,
+        ['accept', 'decline', 'unpair']
+    );
+    if ($action === null) {
+        Response::error('Send an action: accept, decline or unpair.', 422);
+    }
+
+    $r = match ($action) {
+        'accept'  => Buddies::respond($userId, true),
+        'decline' => Buddies::respond($userId, false),
+        'unpair'  => Buddies::unpair($userId),
+    };
+
+    if (!$r['ok']) {
+        Response::error((string) $r['error'], 422);
+    }
+
+    Response::json(['ok' => true, 'status' => $r['status'],
+                    'buddy' => Buddies::forUser($userId)]);
+});

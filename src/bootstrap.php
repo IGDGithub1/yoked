@@ -104,6 +104,7 @@ require YK_SRC . '/lib/Goals.php';
 require YK_SRC . '/lib/Claude.php';
 require YK_SRC . '/lib/PlanSchema.php';
 require YK_SRC . '/lib/Friends.php';
+require YK_SRC . '/lib/Buddies.php';
 require YK_SRC . '/lib/Visibility.php';
 require YK_SRC . '/lib/ConstraintLabel.php';
 require YK_SRC . '/lib/Safety.php';

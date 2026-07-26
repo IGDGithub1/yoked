@@ -567,7 +567,7 @@ final class Plans
 
         $out[] = '';
         $out[] = '=== HOW TO BUILD THE WEEK ===';
-        $out[] = self::rules((int) $p['committed_days_per_week'], (string) ($p['core_emphasis'] ?? 'standard'));
+        $out[] = self::rules((int) $p['committed_days_per_week']);
 
         $out[] = '';
         $out[] = '=== EXERCISE VOCABULARY ===';
@@ -583,12 +583,8 @@ final class Plans
     }
 
     /** The rules that make a plan conform to the specs. */
-    private static function rules(int $committed, string $coreEmphasis): string
+    private static function rules(int $committed): string
     {
-        $coreMinutes = match ($coreEmphasis) {
-            'light' => '5-8', 'heavy' => '12-15', 'off' => '0', default => '8-12',
-        };
-
         $rules = [
             "COMMITTED VS OPTIONAL: mark exactly {$committed} sessions as "
             . 'is_committed true. That is the week. Anything beyond is '
@@ -602,16 +598,23 @@ final class Plans
             . 'drop the last day of the week.',
         ];
 
-        if ($coreEmphasis !== 'off') {
-            $rules[] = "CORE ON EVERY STRENGTH DAY: {$coreMinutes} minutes, block "
-                . '"core", placed AFTER the main work — a fatigued core before '
-                . 'heavy squats is a form risk. Pattern-match it to the day: '
-                . 'lower/squat gets anti-rotation + lower back + isometric holds; '
-                . 'lower/hinge gets lower back + anti-rotation + loaded carries; '
-                . 'upper/horizontal gets anti-extension + flexion; upper/vertical '
-                . 'gets anti-lateral-flexion + overhead stability. Brief '
-                . 'anti-rotation activation may go in the warm-up.';
-        }
+        /*
+         * Unconditional, and 8-12 minutes always.
+         *
+         * §3.3b: "Built in by default, not asked as a preference." This was briefly wired to
+         * a profiles.core_emphasis dial with an 'off' setting, which contradicted the spec in
+         * both directions at once — it let a user switch core work off entirely, and it made
+         * a structural decision about programming into a preference. Core work is the app's
+         * business, like the warm-up. Removed.
+         */
+        $rules[] = 'CORE ON EVERY STRENGTH DAY: 8-12 minutes, block '
+            . '"core", placed AFTER the main work — a fatigued core before '
+            . 'heavy squats is a form risk. Pattern-match it to the day: '
+            . 'lower/squat gets anti-rotation + lower back + isometric holds; '
+            . 'lower/hinge gets lower back + anti-rotation + loaded carries; '
+            . 'upper/horizontal gets anti-extension + flexion; upper/vertical '
+            . 'gets anti-lateral-flexion + overhead stability. Brief '
+            . 'anti-rotation activation may go in the warm-up.';
 
         return implode("\n\n", array_merge($rules, [
             'WARM-UPS ARE PRESCRIBED, not left to the user. Set warmup_minutes and '
@@ -779,15 +782,21 @@ final class Plans
             $out[] = 'Work around these. They are facts about their week, not preferences.';
         }
 
-        if ($ctx['buddy'] !== null) {
-            $out[] = '';
-            $out[] = '=== TRAINING BUDDY ===';
-            $out[] = "They train with {$ctx['buddy']['buddy_name']}. Where a session "
-                   . 'is shared, the CORE BLOCK should be identical between them — '
-                   . 'same exercises, same sets, same reps. Loaded core work shares '
-                   . 'the movement and scales the weight. Main lifts diverge freely '
-                   . 'by ability.';
-        }
+        /*
+         * The buddy block used to sit here, telling the model to make the core block
+         * identical across a pair (§10.2a).
+         *
+         * Removed along with the core_emphasis dial: core work is the app's business, and
+         * coordinating it across two users is a claim this code cannot keep. Generation is
+         * still per-user, so "identical between them" was an instruction the model had no way
+         * to honour — it can see one user, and it cannot know what the other was told. It
+         * read as synced without being synced.
+         *
+         * §10.6 is where this belongs: generate the shared skeleton once for the PAIR, then
+         * each user's prescriptions against it. Until that exists, the honest position is
+         * that pairing grants visibility and a shared day list, and says nothing about the
+         * inside of a session. $ctx['buddy'] is still gathered, for whoever builds that.
+         */
 
         if ($ctx['history'] === []) {
             $out[] = '';

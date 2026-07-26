@@ -225,6 +225,21 @@ export const api = {
     act: (userId, action) => patch(`friends/${userId}`, { action }),
   },
 
+  /*
+   * Buddy pairing (§10). Sits alongside friends because it is reached from that screen, but
+   * its own endpoint: the friends list is read on every boot for the nav badge, and the
+   * pairing state carries an availability intersection nothing else needs.
+   *
+   * No id on the PATCH, because a user has at most one pair — the spec describes a pair
+   * rather than a group and the schema has no notion of a set.
+   */
+  buddy: {
+    load: () => get('buddy'),
+    invite: (userId) => post('buddy', { user_id: userId }),
+    /* accept | decline | unpair */
+    act: (action) => patch('buddy', { action }),
+  },
+
   constraints: {
     load: () => get('constraints'),
     setActive: (id, active) => patch(`constraints/${id}`, { active }),

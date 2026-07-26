@@ -560,3 +560,46 @@ printf(
     "seeded the social graph — %s is friends with %s and has a request from %s\n",
     UI_USER, UI_BASE_USER, UI_REVIEW_USER
 );
+
+/*
+ * Availability grids for the two friends, so the buddy intersection has something to compute.
+ *
+ * Deliberately only PARTIALLY overlapping: uitest_logging trains Mon/Wed/Fri/Sat and
+ * uitest_baseline Wed/Fri/Sun, so the shared list is Wednesday and Friday. A full overlap
+ * would pass a test that a broken intersection would also pass.
+ *
+ * Friday minutes differ (90 against 45), so the "shorter of the two" rule has a case where
+ * the two figures actually disagree.
+ */
+$grids = [
+    $seed['user_id'] => [1 => 60, 3 => 60, 5 => 90, 6 => 120],
+    $blUser          => [3 => 45, 5 => 45, 7 => 60],
+];
+foreach ($grids as $gridUser => $days) {
+    for ($d = 1; $d <= 7; $d++) {
+        DB::run(
+            'INSERT INTO availability (user_id, weekday, can_train, minutes, access,
+                                       preferred_time)
+             VALUES (?, ?, ?, ?, "full_gym", "early_morning")
+             ON DUPLICATE KEY UPDATE can_train = VALUES(can_train), minutes = VALUES(minutes)',
+            [$gridUser, $d, isset($days[$d]) ? 'yes' : 'no', $days[$d] ?? null]
+        );
+    }
+}
+
+/*
+ * A pending buddy invitation from the friend, so the accept path is drivable in one session.
+ *
+ * The browser suite signs in as one user at a time, so it cannot both send and accept. Same
+ * reason the friend request above is seeded rather than created by the suite.
+ */
+DB::run(
+    'INSERT INTO buddy_pairs (user_lo, user_hi, status, requested_by)
+     VALUES (?, ?, "pending", ?)',
+    [min($seed['user_id'], $blUser), max($seed['user_id'], $blUser), $blUser]
+);
+
+printf(
+    "seeded a buddy invite from %s (they share Wednesday and Friday)\n",
+    UI_BASE_USER
+);

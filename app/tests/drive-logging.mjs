@@ -2249,6 +2249,17 @@ await check('the coaching voice is editable here now, not in the quiz', async ()
   return true
 })
 
+await check('core work is not offered as a setting', async () => {
+  /*
+   * §3.3b: core work is "built in by default, not asked as a preference". A dial with an
+   * 'off' position let a user switch it off entirely, which the spec forbids. Asserted as an
+   * absence, so it needs the page to have rendered first — the settings heading above is
+   * already waited for by the tests preceding this one.
+   */
+  const control = await prof.getByRole('radiogroup', { name: /core work/i }).count()
+  return control === 0 ? true : 'the core work dial is still on the profile'
+})
+
 await check('the privacy toggles say who they are keeping things from', async () => {
   /*
    * These govern what a training BUDDY sees and nothing else. "Keep private" with no object
@@ -2273,25 +2284,6 @@ await check('the quiz no longer offers a section 9', async () => {
     return !Object.keys(b.progress?.sections || {}).includes('9')
   })
   return gone ? true : 'the server still lists section 9'
-})
-
-await check('core work offers every level the plan rules understand', async () => {
-  const group = prof.getByRole('radiogroup', { name: /core work/i })
-  if (!(await group.count())) return 'no core work control'
-  const n = await group.getByRole('radio').count()
-  return n === 4 ? true : `${n} core options, expected 4 (off/light/standard/heavy)`
-})
-
-await check('changing core work saves', async () => {
-  await prof.getByRole('radio', { name: /^heavy$/i }).click()
-  await prof.waitForFunction(async () => {
-    const r = await fetch('/api/settings', { credentials: 'same-origin' })
-    const b = await r.json()
-    return b.settings.core_emphasis === 'heavy'
-  }, null, { timeout: 20000 })
-  // Put it back, so a re-run starts from the same place.
-  await prof.getByRole('radio', { name: /^standard$/i }).click()
-  return true
 })
 
 await check('the tomorrow preview can be set and turned off', async () => {
@@ -2499,6 +2491,119 @@ await check('removing a friend takes effect on the server', async () => {
     return !(b.friends.friends || []).some((p) => /review/i.test(p.username))
   }, null, { timeout: 20000 })
   return true
+})
+
+await check('a pending buddy invitation is shown, with what accepting grants', async () => {
+  /*
+   * The fixture seeds the invitation because the suite signs in as one user at a time and so
+   * cannot both send and accept.
+   *
+   * What matters on screen is that the consequences are stated BEFORE the accept: someone
+   * deciding should not have to go and read the privacy settings to learn what a buddy sees.
+   */
+  const card = fr.locator('.card', { hasText: /training buddy/i }).first()
+  await card.waitFor({ timeout: 20000 })
+  const text = (await card.innerText()).toLowerCase()
+  if (!/wants to train with you/.test(text)) {
+    return `no pending invitation on screen: ${text}`
+  }
+  if (!/trained/.test(text)) {
+    return `the card does not say a buddy sees whether you trained: ${text}`
+  }
+  // 10.4: "pairing up to train is not consent to share body metrics."
+  return /private/.test(text)
+    ? true
+    : `the card does not say body metrics stay private: ${text}`
+})
+
+await check('the page itself does not promise synced weeks', async () => {
+  /*
+   * The subtitle said "lets the two of you sync your weeks", which is the same overpromise the
+   * buddy card is checked for below and the same one the prompt line was removed for. §10.6
+   * generates one skeleton per pair; until that exists, nothing coordinates a session.
+   */
+  const text = (await fr.locator('.wrap').first().innerText()).toLowerCase()
+  return !/sync your week/.test(text)
+    ? true
+    : 'the friends page still promises synced weeks'
+})
+
+await check('the card does not claim the sessions will be identical', async () => {
+  /*
+   * 10.6 is not built: generation still runs per-user, so nothing coordinates the inside of a
+   * session. Copy promising a shared workout would be the first thing a real pair noticed was
+   * false, and the prompt line that implied it was removed for the same reason.
+   */
+  const text = (await fr.locator('.card', { hasText: /training buddy/i }).first().innerText())
+    .toLowerCase()
+  const lies = ['same workout', 'same session', 'identical', 'same exercises', 'synced']
+  for (const lie of lies) {
+    if (text.includes(lie)) return `the card overpromises: "${lie}"`
+  }
+  return true
+})
+
+await check('accepting pairs them and the state is read from the server', async () => {
+  const card = fr.locator('.card', { hasText: /training buddy/i }).first()
+  await card.getByRole('button', { name: /train together/i }).click()
+
+  await fr.waitForFunction(async () => {
+    const r = await fetch('/api/buddy', { credentials: 'same-origin' })
+    return (await r.json()).buddy.status === 'active'
+  }, null, { timeout: 20000 })
+  return true
+})
+
+await check('an active pair shows the days they are both free', async () => {
+  /*
+   * 10.3, and the one concrete thing pairing delivers today. The fixture grids overlap on
+   * Wednesday and Friday only, so a broken intersection cannot pass this by returning
+   * everything.
+   */
+  const card = fr.locator('.card', { hasText: /training buddy/i }).first()
+  const text = await card.innerText()
+  if (!/Wednesday/.test(text) || !/Friday/.test(text)) {
+    return `the shared days are not shown: ${text}`
+  }
+  // Monday and Saturday are the main fixture's own days, not shared ones.
+  if (/Monday|Saturday|Sunday/.test(text)) {
+    return `a non-shared day is listed as shared: ${text}`
+  }
+  return true
+})
+
+await check('the shared duration is the shorter of the two', async () => {
+  // Friday is 90 minutes for one and 45 for the other: a shared session cannot outlast
+  // whichever of them has to leave. Both shared days come to 45 once intersected.
+  const text = await fr.locator('.card', { hasText: /training buddy/i }).first().innerText()
+  if (/90 minutes/.test(text)) return 'the longer duration was reported'
+  return /45 minutes/.test(text) ? true : `no duration shown: ${text}`
+})
+
+await check('unpairing takes effect and revokes the pairing', async () => {
+  // 10.5: either side, any time, no reason. Nothing about the user's own plan changes.
+  const card = fr.locator('.card', { hasText: /training buddy/i }).first()
+  await card.getByRole('button', { name: /stop training together/i }).click()
+
+  await fr.waitForFunction(async () => {
+    const r = await fetch('/api/buddy', { credentials: 'same-origin' })
+    return (await r.json()).buddy.status === 'none'
+  }, null, { timeout: 20000 })
+  return true
+})
+
+await check('after unpairing, a free friend is offered again', async () => {
+  /*
+   * The invitable list comes from the server: accepted friends not already paired with
+   * somebody. Rendering from it is what stops the UI offering a button whose only possible
+   * outcome is a refusal.
+   */
+  const card = fr.locator('.card', { hasText: /training buddy/i }).first()
+  const row = card.locator('.prefrow', { hasText: /baseline/i })
+  await row.first().waitFor({ timeout: 20000 })
+  return (await row.getByRole('button', { name: /^ask$/i }).count()) > 0
+    ? true
+    : 'no way to ask a free friend'
 })
 
 await fr.screenshot({ path: shot('logging-friends.png'), fullPage: true })

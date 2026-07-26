@@ -149,6 +149,12 @@ day count.
 
 **Built in by default, not asked as a preference.**
 
+> Briefly violated and now fixed: a `profiles.core_emphasis` dial was added to the Profile
+> with None/Light/Standard/Heavy, which contradicted this section twice over — it let a user
+> switch core work off entirely, and it turned a structural programming decision into a
+> preference. Removed. The column remains in the schema with a 'standard' default and nothing
+> reads it. Core is always 8-12 minutes, as below.
+
 Every strength session carries **8–12 minutes of core work**, pattern-matched to the
 day's focus:
 
@@ -555,6 +561,15 @@ overhead with a barbell; a knee constraint swaps a squat variant. Same day, same
 same hour.
 
 ### 10.2a The core block is shared, not individualized
+
+> **NOT BUILT, and the prompt line that gestured at it has been removed.** Generation runs
+> per-user: it sees one person and cannot know what the other was told, so an instruction to
+> "make the core block identical between them" was a claim the code could not keep. It read
+> as synced without being synced.
+>
+> This lands with §10.6, where the shared skeleton is generated once for the PAIR. The
+> reasoning below still holds and is worth keeping — it is the argument for why shared core
+> is right, not a description of what exists.
 
 **Exception to §10.1.** For a buddy pair the core block is **identical** — same
 exercises, same sets, same reps, same holds — where the main lifts diverge freely.

@@ -12,7 +12,12 @@ declare(strict_types=1);
  *   checkin_weekday/hour      when the weekly check-in opens
  *   plan_generation_*         when next week gets written
  *   review_hour               the Next Day Review, 0 meaning off
- *   core_emphasis             how much core work every session carries
+ *
+ * `core_emphasis` was briefly here too, as a None/Light/Standard/Heavy dial. Removed:
+ * §3.3b says core work is "built in by default, not asked as a preference", and the dial
+ * contradicted that in both directions — it let a user switch core work off entirely, and it
+ * turned a structural programming decision into a preference. The column keeps its
+ * 'standard' default and nothing reads it.
  *
  * `coaching_paused` was the worst of them: a user on holiday or hurt had no way to stop the
  * app writing plans and chasing them for answers, short of abandoning the account.
@@ -53,8 +58,6 @@ final class Settings
     private const MIN_HOUR = 0;
     private const MAX_HOUR = 23;
 
-    private const CORE_EMPHASIS = ['off', 'light', 'standard', 'heavy'];
-
     /* ---- what used to be section 9 ---------------------------------------- */
 
     private const TONES = [
@@ -74,7 +77,7 @@ final class Settings
         $p = DB::one(
             'SELECT coaching_paused, checkin_weekday, checkin_hour,
                     plan_generation_weekday, plan_generation_hour, review_hour,
-                    core_emphasis, timezone, units,
+                    timezone, units,
                     tone, explanation_depth, nudge_intensity, nudge_after_days,
                     hide_photos, hide_measurements
              FROM profiles WHERE user_id = ?',
@@ -97,7 +100,6 @@ final class Settings
             ],
             // 0 is a real value here, not a missing one: it means the review is off.
             'review_hour'     => (int) $p['review_hour'],
-            'core_emphasis'   => (string) $p['core_emphasis'],
             /*
              * Read-only, both of them, and included anyway.
              *
@@ -185,14 +187,6 @@ final class Settings
                 return self::fail('Pick an hour, or 0 to turn the preview off.');
             }
             $put('review_hour', $v);
-        }
-
-        if (array_key_exists('core_emphasis', $body)) {
-            $v = Validate::enum($body['core_emphasis'], self::CORE_EMPHASIS);
-            if ($v === null) {
-                return self::fail('Core work has to be off, light, standard or heavy.');
-            }
-            $put('core_emphasis', $v);
         }
 
         /*

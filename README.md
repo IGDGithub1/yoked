@@ -31,7 +31,8 @@ baseline, and report their week back to the coach that plans the next one.
 | Profile | ✅ quiz sections, the settings the quiz never asked, and an off switch for soft preferences only |
 | Visibility | ✅ one authority for who sees what; the privacy flags finally bite (§10.4) |
 | Friends | ✅ §10.1 the social graph: search, request, block. Prefix on handles, full email only |
-| Buddy system | ⬜ §10 pairing. Generation is already buddy-aware, and friendships now exist |
+| Buddy pairing | ✅ §10.1 handshake, §10.3 shared-day intersection, §10.5 either side unpairs |
+| Synced weeks | ⬜ §10.6 one shared skeleton per pair. Plans are still generated per user |
 
 ### Running the tests
 
@@ -114,6 +115,7 @@ php bin/test-vetoes.php       # SPEC-safety 7: promotion is SOFT-only
 php bin/test-settings.php     # the profile; a hard constraint has no off switch
 php bin/test-visibility.php   # who sees what; the privacy flags
 php bin/test-friends.php      # search cannot enumerate; blocking reveals nothing
+php bin/test-buddies.php      # no pairing without a friendship; either side can unpair
 php bin/test-claude.php       # API client; --offline for shape checks only
 php bin/test-logging.php      # over real HTTP: food, training, check-in
 php bin/test-plans.php        # generation; --live to actually generate

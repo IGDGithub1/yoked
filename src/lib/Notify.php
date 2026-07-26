@@ -42,6 +42,10 @@ final class Notify
         // so both are created with dedupe disabled: suppressing a second request after an
         // unfriend-and-retry would silently swallow it.
         'friend_request', 'friend_accepted',
+        // Buddy pairing (§10). buddy_ended fires only when a LIVE pair ends: someone whose
+        // invitation was withdrawn before they answered needs no notice about a thing that
+        // never started, but someone whose buddy's sessions are about to stop appearing does.
+        'buddy_request', 'buddy_accepted', 'buddy_ended',
     ];
 
     /**

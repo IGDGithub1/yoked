@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
+import Buddy from './Buddy'
 
 /**
  * Friends (SPEC-coaching §10.1).
@@ -104,6 +105,16 @@ export default function Friends({ onCount }) {
           ))}
         </div>
       )}
+
+      {/*
+        Pairing sits ABOVE the friend list, because it is the reason the list exists (§10.1).
+        Friends are the prerequisite; training together is the thing anyone actually wants.
+
+        Keyed on the friend count so it re-reads after a friendship changes: who is invitable
+        depends on who you are friends with, and a stale list would offer someone you just
+        removed.
+      */}
+      <Buddy key={data.friends.length} onChanged={load} />
 
       <AddFriend onChanged={load} />
 

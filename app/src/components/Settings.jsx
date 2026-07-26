@@ -5,7 +5,7 @@ import Help from './Help'
 /**
  * How the app behaves, as opposed to who the user is.
  *
- * Two groups. The schedule, core work and the pause switch were live in the database with a
+ * Two groups. The schedule and the pause switch were live in the database with a
  * default and no way to reach them. The coaching voice, explanation depth, nudges and the
  * privacy toggles were section 9 of the quiz until they moved here, because none of them was
  * really a question: asking someone to pick a coaching voice before they have read a word
@@ -48,13 +48,6 @@ const INTENSITIES = [
   { value: 'gentle', label: 'A nudge' },
   { value: 'persistent', label: 'Keep at me' },
   { value: 'relentless', label: 'Relentless' },
-]
-
-const CORE = [
-  { value: 'off', label: 'None' },
-  { value: 'light', label: 'Light' },
-  { value: 'standard', label: 'Standard' },
-  { value: 'heavy', label: 'Heavy' },
 ]
 
 /** 24-hour values, labelled the way a person reads a clock. */
@@ -191,28 +184,6 @@ export default function Settings() {
               <option key={h.value} value={h.value}>{h.label}</option>
             ))}
           </select>
-        </div>
-      </div>
-
-      <div className="card stack-sm">
-        <h3 className="subheading">Core work</h3>
-        <p className="tiny muted prose" style={{ margin: 0 }}>
-          How much core work your sessions carry. Standard unless you say otherwise.
-        </p>
-        <div className="chips" role="radiogroup" aria-label="Core work">
-          {CORE.map((c) => (
-            <button
-              key={c.value}
-              type="button"
-              role="radio"
-              aria-checked={s.core_emphasis === c.value}
-              className="chip"
-              disabled={busy}
-              onClick={() => save({ core_emphasis: c.value })}
-            >
-              {c.label}
-            </button>
-          ))}
         </div>
       </div>
 
