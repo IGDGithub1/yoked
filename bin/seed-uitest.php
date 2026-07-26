@@ -150,6 +150,34 @@ $seed = DB::tx(function () use ($prescribe, $monday): array {
          VALUES (?, "food", "soft", "salmon", "turned it down", "veto_promotion")',
         [$userId]
     );
+    /*
+     * A condition and a dietary pattern, because those are the two that read badly and the
+     * first fixture had neither.
+     *
+     * Subjects here are the real stored shapes, not tidied ones: `diabetes_t2` and
+     * `dietary_pattern:vegetarian` are exactly what onboarding writes, and the whole point
+     * is that the screen must not show them that way. Seeding a pre-tidied subject would
+     * make the fixture pass a test the real data would fail.
+     */
+    DB::run(
+        'INSERT INTO user_constraints
+            (user_id, kind, tier, subject, reason, guidance, source)
+         VALUES (?, "condition", "hard", "diabetes_t2", "Reported at onboarding", ?,
+                 "onboarding")',
+        [$userId, 'Carb distribution and meal timing matter. Avoid large isolated carb '
+                . 'loads; spread carbs across meals. NOT a carb ban.']
+    );
+    DB::run(
+        'INSERT INTO user_constraints (user_id, kind, tier, subject, reason, source)
+         VALUES (?, "food", "hard", "dietary_pattern:vegetarian",
+                 "Dietary pattern reported at onboarding", "onboarding")',
+        [$userId]
+    );
+    DB::run(
+        'INSERT INTO user_constraints (user_id, kind, tier, subject, reason, source)
+         VALUES (?, "cardio", "soft", "stair-machine", "Refused at onboarding", "onboarding")',
+        [$userId]
+    );
 
     $planId = DB::insert(
         'INSERT INTO plan_versions (user_id, week_start, version, reason, summary)

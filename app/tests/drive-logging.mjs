@@ -1988,13 +1988,73 @@ await check('both constraint tiers are listed', async () => {
    * no controls on a row that did not exist yet. An absence assertion is only meaningful
    * once the thing it is about is present.
    */
-  await prof.getByRole('heading', { name: /what your coach avoids/i })
+  await prof.getByRole('heading', { name: /what your coach knows/i })
     .waitFor({ timeout: 20000 })
   await prof.locator('.prefrow', { hasText: /peanuts/i }).first()
     .waitFor({ timeout: 20000 })
   await prof.locator('.prefrow', { hasText: /salmon/i }).first()
     .waitFor({ timeout: 20000 })
   return true
+})
+
+await check('nothing on the profile shows a raw database key', async () => {
+  /*
+   * The reported bug, asserted directly. Subjects are written for the generator, so the
+   * profile was showing "diabetes_t2" and "dietary_pattern:vegan" to a person. Scanned across
+   * the whole preferences area rather than per row, because the next such subject will be one
+   * nobody thought to add a case for.
+   */
+  const text = await prof.locator('.prefrow').allInnerTexts()
+  const joined = text.join(' | ')
+  const leaks = ['diabetes_t2', 'dietary_pattern', '_t2', 'stair-machine']
+    .filter((k) => joined.includes(k))
+  return leaks.length === 0
+    ? true
+    : `database keys on screen: ${leaks.join(', ')} in ${joined}`
+})
+
+await check('a condition reads as planned around, not avoided', async () => {
+  /*
+   * "What does Never: diabetes_t2 mean to an end user?" It meant the app was avoiding their
+   * diabetes, which is the opposite of true: the code calls conditions MODIFIERS and says
+   * "diabetes means carb timing matters, not that carbs are banned".
+   */
+  const row = prof.locator('.prefrow', { hasText: /type 2 diabetes/i })
+  await row.first().waitFor({ timeout: 20000 })
+
+  // It must not be filed under the ban headings.
+  const never = prof.locator('.card', { hasText: /^Never/ })
+  if (await never.count()) {
+    const inNever = await never.first().locator('.prefrow', { hasText: /diabetes/i }).count()
+    if (inNever) return 'the condition is filed under "Never"'
+  }
+  const card = prof.locator('.card', { hasText: /type 2 diabetes/i }).first()
+  const heading = (await card.locator('.subheading').first().innerText()).toLowerCase()
+  return /planned around/.test(heading)
+    ? true
+    : `the condition sits under a heading reading "${heading}"`
+})
+
+await check('the condition carries its guidance, which is the useful part', async () => {
+  // Naming a condition tells the user nothing. What changes because of it does.
+  const row = prof.locator('.prefrow', { hasText: /type 2 diabetes/i }).first()
+  const text = (await row.innerText()).toLowerCase()
+  return /carb/.test(text) ? true : `no guidance shown: ${text}`
+})
+
+await check('a dietary pattern reads as how you eat', async () => {
+  const row = prof.locator('.prefrow', { hasText: /vegetarian/i })
+  await row.first().waitFor({ timeout: 20000 })
+  const card = prof.locator('.card', { hasText: /vegetarian/i }).first()
+  const heading = (await card.locator('.subheading').first().innerText()).toLowerCase()
+  return /how you eat/.test(heading)
+    ? true
+    : `the dietary pattern sits under "${heading}"`
+})
+
+await check('a hyphenated value reads as words', async () => {
+  const row = prof.locator('.prefrow', { hasText: /stair machine/i })
+  return (await row.count()) ? true : 'stair-machine did not become "Stair machine"'
 })
 
 await check('a HARD constraint has no off switch', async () => {
@@ -2172,6 +2232,44 @@ await check('a check-in after the plan is refused, with a reason', async () => {
   return /before/i.test(String(r.body?.error))
     ? true
     : `the error does not explain the ordering: ${r.body?.error}`
+})
+
+await check('the coaching voice is editable here now, not in the quiz', async () => {
+  // Section 9 moved: asking someone to pick a voice before they have read a word the coach
+  // writes is asking them to guess.
+  const group = prof.getByRole('radiogroup', { name: /^voice$/i })
+  if (!(await group.count())) return 'no voice control on the profile'
+  await prof.getByRole('radio', { name: /sarcastic hardass/i }).click()
+  await prof.waitForFunction(async () => {
+    const r = await fetch('/api/settings', { credentials: 'same-origin' })
+    return (await r.json()).settings.tone === 'sarcastic_hardass'
+  }, null, { timeout: 20000 })
+  return true
+})
+
+await check('the privacy toggles admit that sharing does not exist yet', async () => {
+  /*
+   * hide_photos and hide_measurements are written and read by nothing. A toggle labelled
+   * "keep private" implies protection against something already happening, which would be a
+   * promise the app is not keeping.
+   */
+  const card = prof.locator('.card', { hasText: /privacy/i }).first()
+  if (!(await card.count())) return 'no privacy card'
+  const text = (await card.innerText()).toLowerCase()
+  return /nothing is shared/.test(text)
+    ? true
+    : `the privacy copy does not say sharing is not live: ${text}`
+})
+
+await check('the quiz no longer offers a section 9', async () => {
+  // Both sides had to ship together: the client hiding §9 while the server still required it
+  // would 409 on start-baseline forever, on a section nobody could reach.
+  const gone = await prof.evaluate(async () => {
+    const r = await fetch('/api/onboarding', { credentials: 'same-origin' })
+    const b = await r.json()
+    return !Object.keys(b.progress?.sections || {}).includes('9')
+  })
+  return gone ? true : 'the server still lists section 9'
 })
 
 await check('core work offers every level the plan rules understand', async () => {

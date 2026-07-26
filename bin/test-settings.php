@@ -23,8 +23,11 @@ require YK_SRC . '/lib/RateLimit.php';
 require YK_SRC . '/lib/Goals.php';
 require YK_SRC . '/lib/Claude.php';
 require YK_SRC . '/lib/PlanSchema.php';
+require YK_SRC . '/lib/ConstraintLabel.php';
 require YK_SRC . '/lib/Safety.php';
 require YK_SRC . '/lib/Plans.php';
+require YK_SRC . '/lib/Nutrition.php';
+require YK_SRC . '/lib/Onboarding.php';
 require YK_SRC . '/lib/Settings.php';
 
 $keep = in_array('--keep', array_slice($argv, 1), true);
@@ -415,6 +418,206 @@ t('core emphasis takes every value the plan rules understand', function () {
         }
     }
     return true;
+});
+
+// ---------------------------------------------------------------------------
+echo "\n5. the settings that used to be section 9\n";
+
+t('the six former quiz fields are readable and writable', function () {
+    $p = seedUser('sec9');
+    foreach ([
+        ['tone', 'sarcastic_hardass'],
+        ['explanation_depth', 'explain'],
+        ['nudge_intensity', 'relentless'],
+        ['nudge_after_days', 7],
+        ['hide_photos', false],
+        ['hide_measurements', false],
+    ] as [$key, $val]) {
+        $r = Settings::save($p['id'], [$key => $val]);
+        if (!$r['ok']) {
+            return "{$key}: " . (string) $r['error'];
+        }
+        $back = Settings::forUser($p['id'])[$key];
+        if ($back !== $val) {
+            return "{$key} came back as " . var_export($back, true)
+                 . ', expected ' . var_export($val, true);
+        }
+    }
+    return true;
+});
+
+t('section 9 is gone from onboarding, both list and required keys', function () {
+    // Shipping one side without the other is the failure mode: the client would never show
+    // section 9, and startBaseline would 409 forever on a section nobody could reach.
+    $ref = new ReflectionClass(Onboarding::class);
+    $sections = $ref->getConstant('SECTIONS');
+    $required = $ref->getConstant('REQUIRED_KEYS');
+    if (isset($sections['9'])) {
+        return 'SECTIONS still has a 9';
+    }
+    return !isset($required['9']) ?: 'REQUIRED_KEYS still has a 9';
+});
+
+t('a 9.x answer is no longer accepted by the quiz save path', function () {
+    // isKnownKey is derived from SECTIONS, so this follows from the removal. Asserted
+    // because it is what would break a Profile save if one were ever routed through
+    // PUT /api/onboarding by mistake.
+    $p = seedUser('nokey');
+    $r = Onboarding::saveAnswers($p['id'], ['9.1' => 'sarcastic_hardass']);
+    return ($r['ok'] ?? true) === false
+        ?: 'the quiz still accepts a 9.1 answer';
+});
+
+t('the section list is 1 to 8 plus the optional 10', function () {
+    $ref = new ReflectionClass(Onboarding::class);
+    /*
+     * Cast to string, and sort as strings. Two traps in one line.
+     *
+     * PHP turns numeric-looking ARRAY KEYS into integers, so array_keys returns [1, 10, 2…]
+     * rather than ['1', '10', '2'…] and a === against string literals fails while printing
+     * something that looks identical. And sort() compares numeric strings numerically unless
+     * told otherwise, so the expected order depends on which sort you happened to use.
+     */
+    $sections = array_map('strval', array_keys($ref->getConstant('SECTIONS')));
+    sort($sections, SORT_STRING);
+    return $sections === ['1', '10', '2', '3', '4', '5', '6', '7', '8']
+        ?: 'sections are now ' . implode(',', $sections);
+});
+
+t('out-of-range values for the moved fields are refused', function () {
+    $p = seedUser('sec9bad');
+    foreach ([
+        ['tone' => 'shouty'],
+        ['explanation_depth' => 'essay'],
+        ['nudge_intensity' => 'nuclear'],
+        ['nudge_after_days' => 0],
+        ['nudge_after_days' => 31],
+    ] as $bad) {
+        if (Settings::save($p['id'], $bad)['ok'] !== false) {
+            return 'accepted ' . json_encode($bad);
+        }
+    }
+    return true;
+});
+
+// ---------------------------------------------------------------------------
+echo "\n6. constraints read as English, not as database keys\n";
+
+t('condition keys get their question label', function () {
+    // A user saw "diabetes_t2" on their profile. This map has to agree with questions.js 3.2
+    // and with the guidance map in Onboarding::extractConditions.
+    foreach ([
+        ['diabetes_t2', 'Type 2 diabetes'],
+        ['heart', 'Heart condition'],
+        ['gi', 'IBS or another gut condition'],
+    ] as [$subject, $want]) {
+        $got = ConstraintLabel::of('condition', $subject);
+        if ($got !== $want) {
+            return "{$subject} -> {$got}, expected {$want}";
+        }
+    }
+    return true;
+});
+
+t('the dietary pattern prefix is unwrapped', function () {
+    return ConstraintLabel::of('food', 'dietary_pattern:vegan') === 'Vegan'
+        ?: 'got ' . ConstraintLabel::of('food', 'dietary_pattern:vegan');
+});
+
+t('hyphenated cardio values read properly', function () {
+    return ConstraintLabel::of('cardio', 'stair-machine') === 'Stair machine'
+        ?: 'got ' . ConstraintLabel::of('cardio', 'stair-machine');
+});
+
+t('free text is tidied rather than mangled', function () {
+    // Allergies, injuries and anything a veto promoted have no closed vocabulary, so the
+    // fallback has to be safe for arbitrary input.
+    foreach ([
+        ['peanuts', 'Peanuts'],
+        ['left knee', 'Left knee'],
+        ['', ''],
+    ] as [$in, $want]) {
+        $got = ConstraintLabel::of('food', $in);
+        if ($got !== $want) {
+            return var_export($in, true) . ' -> ' . var_export($got, true);
+        }
+    }
+    return true;
+});
+
+t('the facet distinguishes a ban from a modifier', function () {
+    /*
+     * The reframing. Filing a condition under "never" told a user their diabetes was being
+     * avoided, and a dietary pattern is how they eat rather than something kept from them.
+     */
+    foreach ([
+        ['condition', 'diabetes_t2', 'manage'],
+        ['food', 'dietary_pattern:vegan', 'eating'],
+        ['target_floor', 'protein_g', 'floor'],
+        ['food', 'peanuts', 'avoid'],
+        ['movement', 'back squat', 'avoid'],
+    ] as [$kind, $subject, $want]) {
+        $got = ConstraintLabel::facet($kind, $subject);
+        if ($got !== $want) {
+            return "{$kind}/{$subject} -> {$got}, expected {$want}";
+        }
+    }
+    return true;
+});
+
+t('a condition is never described as never prescribed', function () {
+    $m = strtolower(ConstraintLabel::meaning('manage', 'hard'));
+    return !str_contains($m, 'never prescribed')
+        ?: 'a condition still reads as a ban: ' . $m;
+});
+
+t('the label rides beside the subject and never replaces it', function () {
+    /*
+     * THE HAZARD THIS GUARDS. Safety::promptBlock expands a food category into its members
+     * by an exact lowercase key lookup: "shellfish" becomes shrimp, prawn, crab, because
+     * validation rejects shrimp and so the prompt has to say shrimp. Relabel the subject
+     * anywhere Safety can see it and that expansion silently stops happening.
+     */
+    $p = seedUser('labelsafe');
+    DB::run('UPDATE user_constraints SET subject = "shellfish" WHERE id = ?', [$p['hard']]);
+
+    $rows = Settings::constraints($p['id']);
+    $row  = null;
+    foreach ($rows as $r) {
+        if ($r['id'] === $p['hard']) { $row = $r; }
+    }
+    if ($row === null) {
+        return 'the constraint vanished';
+    }
+    if ($row['subject'] !== 'shellfish') {
+        return 'the stored subject was rewritten to ' . $row['subject'];
+    }
+    if (($row['label'] ?? '') !== 'Shellfish') {
+        return 'no label alongside: ' . var_export($row['label'] ?? null, true);
+    }
+
+    // And the prompt still gets the expansion, which is the thing that actually matters.
+    $block = Safety::promptBlock($p['id']);
+    return str_contains($block, 'shrimp')
+        ?: 'the prompt no longer expands shellfish into its members';
+});
+
+t('nothing in the label path writes to the database', function () {
+    $src = (string) file_get_contents(YK_SRC . '/lib/ConstraintLabel.php');
+    foreach (['UPDATE ', 'INSERT ', 'DELETE ', 'DB::'] as $bad) {
+        if (str_contains($src, $bad)) {
+            return "ConstraintLabel touches the database: {$bad}";
+        }
+    }
+    return true;
+});
+
+t('Safety does not know about labels at all', function () {
+    // The boundary asserted from the other side: a label reaching Safety::forUser would leak
+    // into both the prompt and the validator.
+    $src = (string) file_get_contents(YK_SRC . '/lib/Safety.php');
+    return !str_contains($src, 'ConstraintLabel')
+        ?: 'Safety.php references ConstraintLabel';
 });
 
 // ---------------------------------------------------------------------------

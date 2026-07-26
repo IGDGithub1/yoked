@@ -166,7 +166,9 @@ export default function Profile({ onClose, standalone = false }) {
           sense after you have seen where those beliefs came from.
         */}
         <div>
-          <h2 className="subheading" style={{ marginBottom: 8 }}>What your coach avoids</h2>
+          {/* Not "what your coach avoids": half of what is listed is not avoidance. A
+              condition is planned around and a dietary pattern is how you eat. */}
+          <h2 className="subheading" style={{ marginBottom: 8 }}>What your coach knows</h2>
           <Preferences />
         </div>
 

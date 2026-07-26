@@ -157,11 +157,16 @@ $router->add('GET', 'onboarding/constraints', function (): void {
     foreach ($rows as &$r) {
         $r['progression'] = $r['progression'] !== null
             ? json_decode((string) $r['progression'], true) : null;
-        // Say plainly what each tier means, so "soft" is not mistaken for
-        // "ignored" or "hard" for "the app decided this".
-        $r['meaning'] = $r['tier'] === 'hard'
-            ? 'Never prescribed. Enforced in code; a plan that violates it is rejected.'
-            : 'Strongly avoided. May be proposed with a stated reason, and you can veto it.';
+
+        // Readable name and what sort of thing it is. Added beside the subject rather than
+        // over it: the client posts the subject back to confirm-tier, and Safety matches on
+        // the raw string to expand food categories.
+        $r['label'] = ConstraintLabel::of((string) $r['kind'], (string) $r['subject']);
+        $r['facet'] = ConstraintLabel::facet((string) $r['kind'], (string) $r['subject']);
+
+        // Say plainly what it means, per facet as well as tier: "never prescribed" is the
+        // wrong sentence for a condition, which is a modifier rather than a ban.
+        $r['meaning'] = ConstraintLabel::meaning($r['facet'], (string) $r['tier']);
     }
     unset($r);
 

@@ -25,11 +25,11 @@ nothing.
 ## Tiering
 
 - **§1–§3 are required** to generate anything. Blocking.
-- **§4–§9 are required** to finish onboarding, but can be completed across
+- **§4–§8 are required** to finish onboarding, but can be completed across
   sessions. The quiz is resumable; partial answers persist.
 - **§10 is optional** and can be skipped or revisited any time.
 
-Target: ~12 minutes for §1–§9 at a normal pace.
+Target: ~12 minutes for §1–§8 at a normal pace.
 
 ---
 
@@ -267,9 +267,26 @@ is only useful as a delta.
 
 ---
 
-## §9 Coaching style
+## §9 Coaching style — MOVED OUT OF THE QUIZ
 
 *Consumer: tone applied to all generated copy and nudges*
+
+> **These are no longer onboarding questions.** All six shipped fields moved to the
+> Profile's settings screen (`Settings::save`, `app/src/components/Settings.jsx`), and
+> section 9 was removed from `Onboarding::SECTIONS` and from `app/src/questions.js`.
+>
+> The reason: none of them is really a question about the user. They are controls over how
+> the app behaves, and asking someone to choose a coaching voice before they have read a
+> single word the coach writes is asking them to guess. Every column keeps its schema
+> default, so a user who never opens the Profile gets exactly what this section would have
+> given them.
+>
+> 9.7 and 9.8 were never built. They were declared in `SECTIONS` but had no question in the
+> client and no projector, so they inflated the section's "total" by two and accepted writes
+> that went nowhere. They are the buddy system (SPEC-coaching §10), and belong with that
+> feature rather than here.
+>
+> The table below is kept as the record of what the fields are and what their defaults mean.
 
 | # | Question | Type |
 |---|---|---|

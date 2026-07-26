@@ -74,9 +74,17 @@ export default function Ready({ onStarted, onReview }) {
             <ul className="clist">
               {hard.map((c, i) => (
                 <li key={i}>
-                  <span className="clist-tier clist-tier--hard">Never</span>
+                  {/* The tier word depends on WHAT it is. "Never: type 2 diabetes" told a
+                      user their condition was being avoided; it is planned around. */}
+                  <span className="clist-tier clist-tier--hard">
+                    {c.facet === 'manage' ? 'Planned for'
+                      : c.facet === 'eating' ? 'Always'
+                      : c.facet === 'floor' ? 'At least' : 'Never'}
+                  </span>
                   <span>
-                    <strong>{c.subject.replace(/_/g, ' ')}</strong>
+                    {/* The server's label, not the raw subject: subjects are written for the
+                        generator (diabetes_t2, dietary_pattern:vegan). */}
+                    <strong>{c.label || c.subject.replace(/_/g, ' ')}</strong>
                     {c.reason && <span className="muted"> — {c.reason}</span>}
                   </span>
                 </li>
@@ -92,9 +100,13 @@ export default function Ready({ onStarted, onReview }) {
               <ul className="clist">
                 {soft.map((c, i) => (
                   <li key={i}>
-                    <span className="clist-tier">Avoid</span>
+                    <span className="clist-tier">
+                      {c.facet === 'manage' ? 'Planned for'
+                        : c.facet === 'eating' ? 'Mostly'
+                        : c.facet === 'floor' ? 'At least' : 'Avoid'}
+                    </span>
                     <span>
-                      <strong>{c.subject.replace(/_/g, ' ')}</strong>
+                      <strong>{c.label || c.subject.replace(/_/g, ' ')}</strong>
                       {c.progression?.status === 'working_toward' && (
                         <span className="muted"> — working back up to it</span>
                       )}

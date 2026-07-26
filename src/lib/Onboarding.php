@@ -35,7 +35,6 @@ final class Onboarding
         '6'  => ['name' => 'Training history',   'keys' => ['6.1', '6.2', '6.3', '6.4', '6.5', '6.6', '6.7', '6.8', '6.9', '6.10', '6.11']],
         '7'  => ['name' => 'Schedule & access',  'keys' => ['7.1', '7.2', '7.3', '7.4']],
         '8'  => ['name' => 'Daily life',         'keys' => ['8.1', '8.2', '8.3', '8.4', '8.5', '8.6']],
-        '9'  => ['name' => 'Coaching style',     'keys' => ['9.1', '9.2', '9.3', '9.4', '9.5', '9.6', '9.7', '9.8']],
         '10' => ['name' => 'Optional context',   'keys' => ['10.1', '10.2', '10.3', '10.4']],
     ];
 
@@ -57,7 +56,6 @@ final class Onboarding
         '6' => ['6.1', '6.2', '6.8'],
         '7' => ['7.1'],
         '8' => ['8.1', '8.3', '8.5'],
-        '9' => ['9.1', '9.4'],
         '10' => [],
     ];
 
@@ -320,7 +318,6 @@ final class Onboarding
             '6'  => self::projectTraining($userId),
             '7'  => self::projectAvailability($userId),
             '8'  => self::projectDailyLife($userId),
-            '9'  => self::projectCoachingStyle($userId),
             default => null,
         };
     }
@@ -936,34 +933,20 @@ final class Onboarding
         return null;
     }
 
-    private static function projectCoachingStyle(int $userId): ?array
-    {
-        self::ensureProfile($userId);
-        DB::run(
-            'UPDATE profiles SET tone = ?, nudge_intensity = ?, nudge_after_days = ?,
-                                 explanation_depth = ?, hide_photos = ?, hide_measurements = ?
-             WHERE user_id = ?',
-            [
-                Validate::enum(self::answer($userId, '9.1'), [
-                    'sarcastic_hardass', 'high_school_coach', 'motivational_speaker',
-                    'funny_positive', 'friendly_encouraging', 'direct_no_fluff',
-                ]) ?? 'friendly_encouraging',
-                Validate::enum(self::answer($userId, '9.2'), [
-                    'leave_me_alone', 'gentle', 'persistent', 'relentless',
-                ]) ?? 'gentle',
-                Validate::intRange(self::answer($userId, '9.3'), 1, 30) ?? 3,
-                Validate::enum(self::answer($userId, '9.4'), [
-                    'just_tell_me', 'brief', 'explain',
-                ]) ?? 'brief',
-                // Default hidden: sharing a body metric should be a choice the
-                // user makes, not one they discover they made.
-                (Validate::bool(self::answer($userId, '9.5', true)) ?? true) ? 1 : 0,
-                (Validate::bool(self::answer($userId, '9.6', true)) ?? true) ? 1 : 0,
-                $userId,
-            ]
-        );
-        return null;
-    }
+    /*
+     * Section 9 used to live here: tone, explanation depth, nudge intensity and days, and
+     * the two privacy toggles, projected into `profiles` by projectCoachingStyle().
+     *
+     * They moved to Settings, on the Profile screen. None of them was really a question
+     * about the user; they are controls over how the app behaves, and a control belongs
+     * where you go to change your mind rather than in a one-way corridor answered once
+     * before you have used the thing. Every column keeps its schema default, so a user who
+     * never opens the Profile gets exactly what §9 would have given them.
+     *
+     * Settings::save also writes them one at a time, which this did not: it updated all six
+     * columns on every §9 save, so an unanswered question overwrote a stored value with its
+     * default.
+     */
 
     // ---- helpers -----------------------------------------------------------
 

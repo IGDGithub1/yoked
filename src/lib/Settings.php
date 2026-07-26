@@ -4,9 +4,9 @@ declare(strict_types=1);
 /**
  * The settings that were never questions.
  *
- * Onboarding asks about tone, nudges, units and the rest, and §9 of the quiz already edits
- * all of those — a second editor for them would be two implementations of one field, which
- * is how they drift. This file deliberately covers only what the quiz does NOT ask:
+ * Two groups, and both are about how the app BEHAVES rather than who the user is.
+ *
+ * Never asked anywhere, and every one live with a database default and no way to reach it:
  *
  *   coaching_paused           the kill switch on six cron jobs
  *   checkin_weekday/hour      when the weekly check-in opens
@@ -14,9 +14,19 @@ declare(strict_types=1);
  *   review_hour               the Next Day Review, 0 meaning off
  *   core_emphasis             how much core work every session carries
  *
- * Every one of those is read at runtime and every one had a database default and no way to
- * change it. `coaching_paused` is the worst of them: a user on holiday or hurt had no way to
- * stop the app writing plans and chasing them for answers, short of abandoning the account.
+ * `coaching_paused` was the worst of them: a user on holiday or hurt had no way to stop the
+ * app writing plans and chasing them for answers, short of abandoning the account.
+ *
+ * And the six that USED to be section 9 of the quiz:
+ *
+ *   tone, explanation_depth   the voice, and how much it explains
+ *   nudge_intensity, _days    how hard it chases silence
+ *   hide_photos, _measurements  privacy, for sharing that does not exist yet
+ *
+ * Those moved because they were never really questions about the user — they are controls
+ * over the app, and controls belong where you go to change your mind rather than in a
+ * one-way corridor answered once before you have used the thing. The quiz now asks nine
+ * sections about the person; this file owns how the app behaves.
  *
  * ALSO HERE: turning a soft constraint off.
  *
@@ -45,13 +55,28 @@ final class Settings
 
     private const CORE_EMPHASIS = ['off', 'light', 'standard', 'heavy'];
 
+    /* ---- what used to be section 9 ---------------------------------------- */
+
+    private const TONES = [
+        'friendly_encouraging', 'direct_no_fluff', 'high_school_coach',
+        'sarcastic_hardass', 'motivational_speaker', 'funny_positive',
+    ];
+    private const DEPTHS     = ['just_tell_me', 'brief', 'explain'];
+    private const INTENSITIES = ['leave_me_alone', 'gentle', 'persistent', 'relentless'];
+
+    /** Days of silence before the app says something. */
+    private const MIN_NUDGE_DAYS = 1;
+    private const MAX_NUDGE_DAYS = 30;
+
     /** Read the settings, with the labels the UI needs to render them. */
     public static function forUser(int $userId): array
     {
         $p = DB::one(
             'SELECT coaching_paused, checkin_weekday, checkin_hour,
                     plan_generation_weekday, plan_generation_hour, review_hour,
-                    core_emphasis, timezone, units
+                    core_emphasis, timezone, units,
+                    tone, explanation_depth, nudge_intensity, nudge_after_days,
+                    hide_photos, hide_measurements
              FROM profiles WHERE user_id = ?',
             [$userId]
         );
@@ -77,12 +102,20 @@ final class Settings
              * Read-only, both of them, and included anyway.
              *
              * The timezone is detected by the browser and corrects itself after a move, so
-             * an editor would be a worse source of truth than the device. Units are a §9
-             * quiz answer. But both change how every other line on this screen reads: "18:00"
-             * means nothing without knowing which zone it is in.
+             * an editor would be a worse source of truth than the device. Units are asked in
+             * §1, with height and weight, where the choice actually matters. But both change
+             * how the rest of this screen reads: "18:00" means nothing without a zone.
              */
             'timezone'        => $p['timezone'],
             'units'           => (string) $p['units'],
+
+            // The former section 9.
+            'tone'              => (string) $p['tone'],
+            'explanation_depth' => (string) $p['explanation_depth'],
+            'nudge_intensity'   => (string) $p['nudge_intensity'],
+            'nudge_after_days'  => (int) $p['nudge_after_days'],
+            'hide_photos'       => (bool) $p['hide_photos'],
+            'hide_measurements' => (bool) $p['hide_measurements'],
         ];
     }
 
@@ -160,6 +193,48 @@ final class Settings
                 return self::fail('Core work has to be off, light, standard or heavy.');
             }
             $put('core_emphasis', $v);
+        }
+
+        /*
+         * The former section 9.
+         *
+         * Same partial treatment as everything above, which is the improvement over how the
+         * quiz wrote them: projectCoachingStyle updated all six columns on every §9 save, so
+         * an unanswered question overwrote a stored value with its default. Tolerable when a
+         * whole section is submitted at once, wrong for six independent switches.
+         */
+        foreach ([
+            ['tone', self::TONES],
+            ['explanation_depth', self::DEPTHS],
+            ['nudge_intensity', self::INTENSITIES],
+        ] as [$key, $allowed]) {
+            if (array_key_exists($key, $body)) {
+                $v = Validate::enum($body[$key], $allowed);
+                if ($v === null) {
+                    return self::fail('That is not one of the choices.');
+                }
+                $put($key, $v);
+            }
+        }
+
+        if (array_key_exists('nudge_after_days', $body)) {
+            $v = Validate::intRange(
+                $body['nudge_after_days'], self::MIN_NUDGE_DAYS, self::MAX_NUDGE_DAYS
+            );
+            if ($v === null) {
+                return self::fail('Pick between 1 and 30 days.');
+            }
+            $put('nudge_after_days', $v);
+        }
+
+        foreach (['hide_photos', 'hide_measurements'] as $key) {
+            if (array_key_exists($key, $body)) {
+                $v = Validate::bool($body[$key]);
+                if ($v === null) {
+                    return self::fail('That has to be true or false.');
+                }
+                $put($key, $v ? 1 : 0);
+            }
         }
 
         if ($sets === []) {
@@ -259,11 +334,27 @@ final class Settings
 
         $out = [];
         foreach ($rows as $r) {
+            $kind    = (string) $r['kind'];
+            $subject = (string) $r['subject'];
+            /*
+             * The label rides ALONGSIDE the subject, never replacing it.
+             *
+             * Safety::promptBlock matches on the raw subject to expand a food category into
+             * its members ("shellfish" -> shrimp, prawn, crab), by exact lowercase key. And
+             * the client sends the subject back when confirming a tier. Overwriting it here
+             * would break both.
+             */
+            $facet = ConstraintLabel::facet($kind, $subject);
+
             $out[] = [
                 'id'       => (int) $r['id'],
-                'kind'     => (string) $r['kind'],
+                'kind'     => $kind,
                 'tier'     => (string) $r['tier'],
-                'subject'  => (string) $r['subject'],
+                'subject'  => $subject,
+                'label'    => ConstraintLabel::of($kind, $subject),
+                // avoid | manage | eating | floor. What KIND of thing this is, which the
+                // client groups by: a condition is not something being avoided.
+                'facet'    => $facet,
                 'reason'   => $r['reason'],
                 'guidance' => $r['guidance'],
                 'floor'    => $r['floor_value'] === null ? null : (float) $r['floor_value'],
@@ -277,9 +368,7 @@ final class Settings
                  * a hard constraint changes by re-answering the question behind it.
                  */
                 'switchable' => (string) $r['tier'] === 'soft',
-                'meaning'  => (string) $r['tier'] === 'hard'
-                    ? 'Never prescribed. Enforced in code; a plan that breaks it is rejected.'
-                    : 'Strongly avoided. Can be suggested with a reason, and you can turn it down.',
+                'meaning'  => ConstraintLabel::meaning($facet, (string) $r['tier']),
             ];
         }
         return $out;

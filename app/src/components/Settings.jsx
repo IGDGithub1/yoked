@@ -3,11 +3,14 @@ import { api } from '../api'
 import Help from './Help'
 
 /**
- * The settings the quiz never asked.
+ * How the app behaves, as opposed to who the user is.
  *
- * Every field here was live in the database with a default and no way to change it. §9 of
- * the quiz already edits tone, nudges and units, so none of those appear — two editors for
- * one field is how they drift.
+ * Two groups. The schedule, core work and the pause switch were live in the database with a
+ * default and no way to reach them. The coaching voice, explanation depth, nudges and the
+ * privacy toggles were section 9 of the quiz until they moved here, because none of them was
+ * really a question: asking someone to pick a coaching voice before they have read a word
+ * the coach writes is asking them to guess. Here they can change their mind after finding
+ * out.
  *
  * SAVES ON CHANGE, one field at a time, with no Save button. These are independent switches
  * rather than a form: there is no state in which half of them are valid together, and a
@@ -23,6 +26,28 @@ const DAYS = [
   { value: 5, label: 'Friday' },
   { value: 6, label: 'Saturday' },
   { value: 7, label: 'Sunday' },
+]
+
+const TONES = [
+  { value: 'friendly_encouraging', label: 'Friendly and encouraging', note: 'calm, patient' },
+  { value: 'direct_no_fluff', label: 'Direct, no fluff', note: 'says the thing and stops' },
+  { value: 'high_school_coach', label: 'High school coach', note: 'never satisfied, always in your corner' },
+  { value: 'sarcastic_hardass', label: 'Sarcastic hardass', note: 'roasts your excuses, not you' },
+  { value: 'motivational_speaker', label: 'Motivational speaker', note: 'big energy' },
+  { value: 'funny_positive', label: 'Funny and positive', note: 'light, a bit silly' },
+]
+
+const DEPTHS = [
+  { value: 'just_tell_me', label: 'Just tell me what to do' },
+  { value: 'brief', label: 'A quick reason' },
+  { value: 'explain', label: 'Explain the thinking' },
+]
+
+const INTENSITIES = [
+  { value: 'leave_me_alone', label: 'Leave me alone' },
+  { value: 'gentle', label: 'A nudge' },
+  { value: 'persistent', label: 'Keep at me' },
+  { value: 'relentless', label: 'Relentless' },
 ]
 
 const CORE = [
@@ -191,7 +216,113 @@ export default function Settings() {
         </div>
       </div>
 
+      {/*
+        The voice, and how much it explains. First of the former section 9, because it is the
+        one a user is most likely to want changed: a tone that grated is felt every day.
+      */}
+      <div className="card stack-sm">
+        <h3 className="subheading">How your coach talks to you</h3>
+        <p className="tiny muted prose" style={{ margin: 0 }}>
+          This applies everywhere, including about food and your body.
+        </p>
+        <Picker
+          label="Voice"
+          options={TONES}
+          value={s.tone}
+          busy={busy}
+          onChange={(v) => save({ tone: v })}
+        />
+        <Picker
+          label="How much explanation"
+          options={DEPTHS}
+          value={s.explanation_depth}
+          busy={busy}
+          onChange={(v) => save({ explanation_depth: v })}
+        />
+      </div>
+
+      <div className="card stack-sm">
+        <h3 className="subheading">If you go quiet</h3>
+        <Picker
+          label="How hard to push"
+          options={INTENSITIES}
+          value={s.nudge_intensity}
+          busy={busy}
+          onChange={(v) => save({ nudge_intensity: v })}
+        />
+        <label className="field">
+          <span className="label">Days of silence before we say something</span>
+          <select
+            className="input"
+            value={s.nudge_after_days}
+            disabled={busy}
+            onChange={(e) => save({ nudge_after_days: Number(e.target.value) })}
+          >
+            {[1, 2, 3, 4, 5, 7, 10, 14, 21, 30].map((d) => (
+              <option key={d} value={d}>{d === 1 ? '1 day' : `${d} days`}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="card stack-sm">
+        <h3 className="subheading">Privacy</h3>
+        <Switch
+          label="Keep progress photos private"
+          on={s.hide_photos}
+          busy={busy}
+          onChange={(v) => save({ hide_photos: v })}
+        />
+        <Switch
+          label="Keep weight and measurements private"
+          on={s.hide_measurements}
+          busy={busy}
+          onChange={(v) => save({ hide_measurements: v })}
+        />
+        {/*
+          Honest about what these do TODAY, which is nothing.
+          There is no sharing in the app yet, so a toggle labelled "keep private" would
+          otherwise read as protection against something that is already happening. Saying so
+          costs one line and avoids a promise the app is not keeping.
+        */}
+        <p className="tiny muted prose" style={{ margin: 0 }}>
+          Nothing is shared with anyone today. These are here for when sharing arrives, so
+          the answer is already on file rather than asked at the wrong moment.
+        </p>
+      </div>
+
       {error && <p className="error">{error}</p>}
+    </div>
+  )
+}
+
+/**
+ * A labelled set of chips.
+ *
+ * Chips rather than a select: these are short, mutually exclusive, and worth seeing all at
+ * once — picking a coaching voice is a comparison, not a lookup. The notes under each are
+ * what make the choice meaningful, and a dropdown cannot show them.
+ */
+function Picker({ label, options, value, busy, onChange }) {
+  return (
+    <div className="field">
+      <span className="label">{label}</span>
+      <div className="chips" role="radiogroup" aria-label={label}>
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={value === o.value}
+            className="chip"
+            disabled={busy}
+            onClick={() => onChange(o.value)}
+            title={o.note || undefined}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

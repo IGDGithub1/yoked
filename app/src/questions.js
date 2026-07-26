@@ -476,53 +476,19 @@ export const SECTIONS = [
     ],
   },
 
-  {
-    id: '9',
-    name: 'How to talk to you',
-    blurb: 'Your coach can be encouraging or a complete arsehole. Your call.',
-    questions: [
-      {
-        key: '9.1', type: 'choice', required: true,
-        label: 'Pick a voice',
-        // Says plainly that tone has no carve-outs, so nobody is surprised later.
-        help: 'This applies everywhere, including about food and your body.',
-        options: [
-          { value: 'friendly_encouraging', label: 'Friendly and encouraging', note: 'calm, patient' },
-          { value: 'direct_no_fluff', label: 'Direct, no fluff', note: 'says the thing and stops' },
-          { value: 'high_school_coach', label: 'High school coach', note: 'never satisfied, always in your corner' },
-          { value: 'sarcastic_hardass', label: 'Sarcastic hardass', note: 'roasts your excuses, not you' },
-          { value: 'motivational_speaker', label: 'Motivational speaker', note: 'big energy' },
-          { value: 'funny_positive', label: 'Funny and positive', note: 'light, a bit silly' },
-        ],
-      },
-      {
-        key: '9.4', type: 'choice', required: true,
-        label: 'How much explanation do you want?',
-        options: [
-          { value: 'just_tell_me', label: 'Just tell me what to do' },
-          { value: 'brief', label: 'A quick reason' },
-          { value: 'explain', label: 'Explain the thinking' },
-        ],
-      },
-      {
-        key: '9.2', type: 'choice',
-        label: 'If you go quiet, how hard should we push?',
-        options: [
-          { value: 'leave_me_alone', label: 'Leave me alone' },
-          { value: 'gentle', label: 'A nudge' },
-          { value: 'persistent', label: 'Keep at me' },
-          { value: 'relentless', label: 'Relentless' },
-        ],
-      },
-      { key: '9.3', type: 'number', integer: true, label: 'Days of silence before we say something' },
-      {
-        key: '9.5', type: 'bool',
-        label: 'Keep progress photos private',
-        help: 'On by default. Sharing is always something you choose.',
-      },
-      { key: '9.6', type: 'bool', label: 'Keep weight and measurements private' },
-    ],
-  },
+  /*
+   * There is no section 9.
+   *
+   * It was "How to talk to you": voice, explanation depth, nudge intensity and days, and two
+   * privacy toggles. All six moved to the Profile's settings, because none of them was
+   * really a question about the user. They are controls over how the app behaves, and asking
+   * someone to choose a coaching voice before they have read a single word the coach writes
+   * is asking them to guess. In the Profile they can change their mind after finding out.
+   *
+   * The gap in the numbering is deliberate and harmless: Quiz.jsx walks this array by
+   * POSITION, never by parsing an id, and §10 renders as "Optional" rather than "Section 10".
+   * Renumbering would invalidate every stored answer key.
+   */
 
   {
     id: '10',
