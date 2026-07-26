@@ -49,6 +49,9 @@ final class Notify
         // Schedule negotiation (§10.3a): one user offering a day outside their own grid, and
         // the other agreeing to it.
         'buddy_day_offer', 'buddy_day_agreed',
+        // Absence (§10.5). buddy_away covers travel, illness and anything else; the body says
+        // which and whether the week already built is affected.
+        'buddy_away', 'buddy_back',
     ];
 
     /**

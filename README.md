@@ -35,7 +35,7 @@ baseline, and report their week back to the coach that plans the next one.
 | Buddy schedules | ✅ §10.1a two schedules, §10.3a compromise, §10.3b the surplus choice. Generation puts both in the gym on the same days |
 | Synced sessions | ⬜ §10.6 one shared skeleton per pair. A shared day means both training, not the same workout |
 | Inherited limits | ✅ §10.2b a buddy's training avoids arrive SOFT; food and conditions never transfer |
-| Buddy absence | ⬜ §10.5 declared travel, mid-week illness, silent drift fallback |
+| Buddy absence | ✅ §10.5 declared travel, mid-week illness, silent fallback. The partner keeps a complete week |
 
 ### Running the tests
 

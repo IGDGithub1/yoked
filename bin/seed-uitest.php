@@ -81,6 +81,38 @@ DB::run(
      WHERE bucket LIKE "login:ip:%" AND window_start < (NOW() - INTERVAL 15 MINUTE)'
 );
 
+/*
+ * And the CALLER's own live bucket, when they tell us what it is.
+ *
+ * The expired sweep above is safe for anyone but useless for the case that actually bites: the
+ * browser suite signs in nine times per run against a 20-per-IP-per-15-minute limit, so a run
+ * plus a hand probe exhausts it and every later block fails at the sign-in screen. Thirty
+ * cascading failures that read like real regressions.
+ *
+ * This script runs over SSH on the server, so RateLimit::ip() here is 0.0.0.0 rather than the
+ * laptop doing the signing in — it cannot work the address out for itself. So bin/reseed-ui.ps1
+ * passes it: --clear-login-ip=1.2.3.4.
+ *
+ * Scoped deliberately. It clears ONE named bucket, not the table, and only the login limiter —
+ * so it cannot be used to reset a rate limit that matters (registration, food search, veto
+ * spam). A test fixture that can disarm arbitrary defences is worse than a slow test run.
+ */
+foreach (array_slice($argv, 1) as $arg) {
+    if (!str_starts_with($arg, '--clear-login-ip=')) {
+        continue;
+    }
+    $ip = substr($arg, strlen('--clear-login-ip='));
+    // Validated as an address, so the argument cannot smuggle a LIKE pattern.
+    if (filter_var($ip, FILTER_VALIDATE_IP) === false) {
+        fwrite(STDERR, "seed-uitest: --clear-login-ip needs a valid IP address.
+");
+        exit(1);
+    }
+    DB::run('DELETE FROM rate_limits WHERE bucket = ?', ['login:ip:' . $ip]);
+    printf("cleared the login throttle for %s
+", $ip);
+}
+
 if ($drop) {
     echo 'removed ' . implode(', ', $allUsers) . "\n";
     exit(0);

@@ -111,6 +111,14 @@ async function signInVia(target, username = USER, password = PASS) {
   await target.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
 }
 
+/** A local date N days from today, as YYYY-MM-DD. For absence return dates. */
+function inDays(n) {
+  const d = new Date()
+  d.setDate(d.getDate() + n)
+  const p = (x) => String(x).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 // ---- sign in ---------------------------------------------------------------
 
 console.log('\n1. signing in')
@@ -2767,6 +2775,113 @@ await check('dropping a shared day re-asks the surplus question', async () => {
       && b.schedule?.surplus?.mode === null
   }, null, { timeout: 20000 })
   return true
+})
+
+await check('a paired user can say they will be away', async () => {
+  /*
+   * 10.5. Declaring before Sunday's generation is the planned case: nothing is built yet, so
+   * nothing is disrupted and the partner simply hears that next week is theirs alone.
+   */
+  const card = fr.locator('.card', { hasText: /training buddy/i }).first()
+  const btn = card.getByRole('button', { name: /i will be away/i })
+  if (!(await btn.count())) return 'no way to declare an absence'
+  await btn.first().click()
+
+  // Travel and illness are separated because they behave differently: travel is declared
+  // before the week is planned, illness during it.
+  await card.getByRole('radio', { name: /away or travelling/i }).click()
+  await card.getByLabel(/^back on$/i).fill(inDays(9))
+  await card.getByRole('button', { name: /tell them/i }).click()
+
+  // Read the server: an optimistic render proves nothing about the write.
+  await fr.waitForFunction(async () => {
+    const r = await fetch('/api/buddy', { credentials: 'same-origin' })
+    const b = await r.json()
+    return b.away?.mine !== null && b.away?.mine !== undefined
+  }, null, { timeout: 20000 })
+  return true
+})
+
+await check('a blank return date is allowed, and says so', async () => {
+  /*
+   * Making somebody invent a recovery date for an illness they cannot predict produces a wrong
+   * date, which is worse than no date. The form has to say the field is optional or people
+   * will guess.
+   */
+  /*
+   * Waited for, not snapshotted. The card re-reads after the write — run() calls load() — so an
+   * immediate innerText catches it between renders and returns just the heading. Same race that
+   * bit the offer row and the agreed-day list.
+   */
+  const card = fr.locator('.card', { hasText: /training buddy/i }).first()
+  /*
+   * getByText, not locator('text=...').
+   *
+   * The latter matches an ELEMENT whose own text is the pattern, and "away from 26 July" sits
+   * mid-sentence inside a span with other content — so it never matched and the test timed out
+   * against a card that was rendering correctly. getByText does a substring search.
+   */
+  await card.getByText(/away from/i).first().waitFor({ timeout: 20000 })
+  return true
+})
+
+await check('the standing absence can be cancelled', async () => {
+  const card = fr.locator('.card', { hasText: /training buddy/i }).first()
+  await card.getByRole('button', { name: /i am back/i }).click()
+  await fr.waitForFunction(async () => {
+    const r = await fetch('/api/buddy', { credentials: 'same-origin' })
+    return (await r.json()).away?.mine === null
+  }, null, { timeout: 20000 })
+  return true
+})
+
+await check('an open-ended absence does not invent a return date', async () => {
+  const card = fr.locator('.card', { hasText: /training buddy/i }).first()
+  await card.getByRole('button', { name: /i will be away/i }).click()
+  await card.getByRole('radio', { name: /ill or injured/i }).click()
+  // Return date deliberately left blank.
+  await card.getByRole('button', { name: /tell them/i }).click()
+
+  await fr.waitForFunction(async () => {
+    const r = await fetch('/api/buddy', { credentials: 'same-origin' })
+    const mine = (await r.json()).away?.mine
+    return mine !== null && mine !== undefined && mine.returns_on === null
+  }, null, { timeout: 20000 })
+
+  // getByText for the same reason as above: the phrase is mid-sentence, not a whole element.
+  await card.getByText(/open-ended/i).first().waitFor({ timeout: 20000 })
+  return true
+})
+
+await check('the solo week is never framed as a setback', async () => {
+  /*
+   * Someone whose buddy is ill has done nothing wrong. 10.5: "In every case the partner keeps a
+   * complete, valid week" — so nothing here may read as falling behind.
+   */
+  const card = fr.locator('.card', { hasText: /training buddy/i }).first()
+  // Settled first: the test above already waited for the open-ended text, so the card is
+  // rendered. Reading a mid-render card would make this pass on an empty string.
+  await card.getByText(/open-ended/i).first().waitFor({ timeout: 20000 })
+
+  const text = (await card.innerText()).toLowerCase()
+  for (const bad of ['missed', 'behind', 'lost', 'failed', 'setback', 'unfortunately']) {
+    if (text.includes(bad)) return `the absence copy reads as a setback: "${bad}"`
+  }
+  return true
+})
+
+await check('declaring an absence leaves the agreed days alone', async () => {
+  /*
+   * The days are what the pair agreed, and the person is coming back. Clearing them would mean
+   * renegotiating from scratch after every holiday.
+   */
+  const agreed = await fr.evaluate(async () => {
+    const r = await fetch('/api/buddy/schedule', { credentials: 'same-origin' })
+    return (await r.json()).schedule?.agreed ?? []
+  })
+  return agreed.length > 0
+    ? true
+    : 'the agreed days were cleared by an absence'
 })
 
 await check('a buddy training avoid is inherited, as SOFT', async () => {

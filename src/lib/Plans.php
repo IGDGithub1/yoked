@@ -236,6 +236,25 @@ final class Plans
          */
         $pair     = BuddySchedule::activePair($userId);
         $pairId   = $pair === null ? null : (int) $pair['id'];
+
+        /*
+         * Is the buddy actually going to be there this week (§10.5)?
+         *
+         * Travel declared in advance, illness declared mid-week, or simply gone quiet — all
+         * three collapse to one question here. When the answer is no, the pair id is dropped
+         * and the schedule resolves to the user's OWN grid, which is why the fallback needs no
+         * separate generation path: "solo" is just what effective() returns with no pair.
+         *
+         * §10.5: "Pairing is an enhancement to a complete single-user plan, never a dependency
+         * of one." This is the line that makes that literally true.
+         */
+        $buddyAway = $pairId === null
+            ? null
+            : BuddyAbsence::availableFor($userId, $weekStart);
+        if ($buddyAway !== null && $buddyAway['available'] === false) {
+            $pairId = null;
+        }
+
         $effective = BuddySchedule::effective($userId, $pairId);
 
         foreach ($availability as &$a) {
@@ -261,6 +280,11 @@ final class Plans
         return [
             'error'        => null,
             'committed_target' => $target,
+            // Null when unpaired. Carries the reason so the prompt can say WHY this week is
+            // solo rather than silently producing one.
+            'buddy_away'   => $buddyAway !== null && $buddyAway['available'] === false
+                ? $buddyAway
+                : null,
             'user'         => $user,
             'profile'      => $profile,
             'goal'         => $goal,
@@ -867,6 +891,21 @@ final class Plans
                        . 'better split. Do not move work off a shared day to tidy the week.';
                 $out[] = 'You are writing one plan, for this user only. Do not describe what '
                        . 'their buddy is doing, and do not assume the two sessions match.';
+            } elseif (($ctx['buddy_away'] ?? null) !== null) {
+                /*
+                 * §10.5. The shared days were dropped upstream — gatherContext discards the
+                 * pair id when the buddy is away, so `availability` has no SHARED markers and
+                 * the week is already solo by construction.
+                 *
+                 * Said out loud anyway, because the model can see they HAVE a buddy and would
+                 * otherwise have to guess why none of the days are shared. A guess here reads
+                 * as "invent something buddy-ish", which is the opposite of what is wanted.
+                 */
+                $out[] = 'Their buddy is away this week, so plan it for them ALONE, from '
+                       . 'their own available days. Do not mention their buddy in the plan or '
+                       . 'hold days open for them.';
+                $out[] = 'This is not a setback and must not be framed as one. It is a normal '
+                       . 'week that happens to be solo.';
             } else {
                 $out[] = 'They have no shared days agreed yet, so plan this week normally.';
             }

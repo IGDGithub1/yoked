@@ -32,6 +32,7 @@ require YK_SRC . '/lib/CheckIn.php';
 require YK_SRC . '/lib/Notify.php';
 require YK_SRC . '/lib/Drift.php';
 require YK_SRC . '/lib/Nudge.php';
+require YK_SRC . '/lib/BuddyAbsence.php';  // Plans::gatherContext reads it
 
 $keep = in_array('--keep', array_slice($argv, 1), true);
 

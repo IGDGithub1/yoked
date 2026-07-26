@@ -48,7 +48,25 @@ if (-not $sgUser -or -not $sgHost -or -not $sgDir) {
 }
 
 Write-Host "-> re-seeding UI fixtures on $sgUser@$sgHost"
-& ssh -p $sgPort -o ConnectTimeout=40 "$sgUser@$sgHost" "cd '$sgDir' && php bin/seed-uitest.php"
+
+<#
+    Clear this machine's login throttle as part of seeding.
+
+    The browser suite signs in nine times per run against a 20-per-IP-per-15-minute limit, so a
+    run plus a hand-written probe exhausts it — and then every later block fails at the sign-in
+    screen, producing thirty cascading failures that all read like real regressions.
+
+    The server cannot work out our address: seed-uitest.php runs over SSH, where RateLimit::ip()
+    is 0.0.0.0. But the SSH connection itself knows it, in $SSH_CLIENT — so the address is taken
+    from there rather than from an external lookup service, which keeps this working offline and
+    avoids trusting a third party with a request.
+#>
+# awk rather than `cut -d" "`: PowerShell mangles the quoting around the delimiter before ssh
+# ever sees it, and cut then reports "the delimiter must be a single character". awk splits on
+# whitespace by default, so there is nothing to quote.
+$remote = "cd '$sgDir' && php bin/seed-uitest.php " +
+          '--clear-login-ip=$(echo $SSH_CLIENT | awk ''{print $1}'')'
+& ssh -p $sgPort -o ConnectTimeout=40 "$sgUser@$sgHost" $remote
 if ($LASTEXITCODE -ne 0) {
     throw "Seeding failed (exit $LASTEXITCODE)."
 }

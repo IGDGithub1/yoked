@@ -27,6 +27,8 @@ require YK_SRC . '/lib/Friends.php';
 require YK_SRC . '/lib/BuddySchedule.php';
 require YK_SRC . '/lib/Buddies.php';
 require YK_SRC . '/lib/Visibility.php';
+require YK_SRC . '/lib/Drift.php';         // BuddyAbsence reads lastLoggedDate
+require YK_SRC . '/lib/BuddyAbsence.php';  // Plans::gatherContext reads it
 
 $keep = in_array('--keep', array_slice($argv, 1), true);
 

@@ -21,11 +21,16 @@ import BuddySchedule from './BuddySchedule'
  */
 export default function Buddy({ onChanged }) {
   const [b, setB] = useState(null)
+  const [away, setAway] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
 
   const load = () => api.buddy.load()
-    .then((r) => setB(r.buddy))
+    .then((r) => {
+      setB(r.buddy)
+      // §10.5. Both directions: mine drives the control, theirs explains a solo week.
+      setAway(r.away ?? null)
+    })
     .catch((e) => setError(e.message || 'Could not load this.'))
 
   useEffect(() => { load() }, [])
@@ -35,7 +40,12 @@ export default function Buddy({ onChanged }) {
     setBusy(true)
     try {
       const r = await fn()
-      setB(r.buddy)
+      if (r?.buddy) {
+        setB(r.buddy)
+      }
+      // Absence endpoints return no buddy payload, and declaring one changes what the card
+      // should say, so re-read rather than patching from the response.
+      await load()
       // Pairing changes who can see what, and the friends list shows who is invitable.
       onChanged?.()
     } catch (e) {
@@ -54,7 +64,7 @@ export default function Buddy({ onChanged }) {
       <div className="card stack-sm">
         <h3 className="subheading">Training buddy</h3>
 
-        {b.status === 'active' && <Active b={b} busy={busy} run={run} />}
+        {b.status === 'active' && <Active b={b} away={away} busy={busy} run={run} />}
         {b.status === 'pending_in' && <Incoming b={b} busy={busy} run={run} />}
         {b.status === 'pending_out' && <Outgoing b={b} busy={busy} run={run} />}
         {b.status === 'none' && <Invite b={b} busy={busy} run={run} />}
@@ -79,7 +89,7 @@ export default function Buddy({ onChanged }) {
   )
 }
 
-function Active({ b, busy, run }) {
+function Active({ b, away, busy, run }) {
   return (
     <>
       <p className="small" style={{ margin: 0 }}>
@@ -102,6 +112,9 @@ function Active({ b, busy, run }) {
         They can see whether you trained, and you can see the same about them. Your weight,
         measurements and photos stay private.
       </p>
+
+      {/* §10.5, above the unpair control: being away is the common case and stopping is not. */}
+      <Away away={away} busy={busy} run={run} />
 
       <div className="row">
         <button
@@ -212,6 +225,197 @@ function Invite({ b, busy, run }) {
       ))}
     </>
   )
+}
+
+/**
+ * Telling your buddy you will be away, and hearing that they are (§10.5).
+ *
+ * "A buddy who travels, gets ill, or unpairs must never leave the other waiting."
+ *
+ * Two halves, and the asymmetry is the point. THEIRS is information: your next week will be
+ * solo, and here is when they are back. MINE is an action: say you are away so your partner
+ * finds out from the app rather than from an empty rack.
+ *
+ * The copy never treats a solo week as a setback. §10.5: "In every case the partner keeps a
+ * complete, valid week." Someone whose buddy is ill has done nothing wrong and should not be
+ * made to feel they are behind.
+ */
+function Away({ away, busy, run }) {
+  const [open, setOpen] = useState(false)
+  const [kind, setKind] = useState('travel')
+  const [starts, setStarts] = useState(today())
+  const [returns, setReturns] = useState('')
+
+  const theirs = away?.theirs
+  const mine = away?.mine
+
+  return (
+    <>
+      {/*
+        Their absence, when there is one. Read from the server's answer for the COMING week,
+        which is the week it affects — a Sunday generation is about next Monday.
+      */}
+      {theirs && theirs.available === false && theirs.reason !== 'unpaired' && (
+        <p className="tiny muted prose" style={{ margin: 0 }}>
+          {theirs.reason === 'silent'
+            /*
+             * The undeclared case. Deliberately gentle and non-accusatory: this is inferred
+             * from silence, not declared, so it may simply be wrong — and telling someone
+             * their friend has quit on the strength of a few quiet days would be worse than
+             * saying nothing.
+             */
+            ? `${theirs.buddy_name} has been quiet for a while, so your next week will be `
+              + 'planned for you alone. It will pick back up when they log again.'
+            : `${theirs.buddy_name} is away, so your next week will be yours alone.`
+            + (theirs.returns_on ? ` Back on ${prettyDay(theirs.returns_on)}.` : '')}
+        </p>
+      )}
+
+      {/* Mine: either the standing declaration, or the way to make one. */}
+      {mine ? (
+        <div className="row" style={{ flexWrap: 'wrap' }}>
+          <span className="tiny muted" style={{ flex: '1 1 auto' }}>
+            You are away from {prettyDay(mine.starts_on)}
+            {mine.returns_on ? ` until ${prettyDay(mine.returns_on)}` : ', open-ended'}.
+          </span>
+          <button
+            type="button"
+            className="btn btn--quiet btn--small"
+            disabled={busy}
+            onClick={() => run(() => api.buddy.back())}
+          >
+            I am back
+          </button>
+        </div>
+      ) : open ? (
+        <div className="veto stack-sm">
+          <p className="tiny" style={{ margin: 0, fontWeight: 600 }}>
+            Let your buddy know
+          </p>
+          {/*
+            Travel and illness are separated because they behave differently: travel is usually
+            declared before the week is planned, illness during it. The app uses that to decide
+            what the partner is told.
+          */}
+          <div className="chips" role="radiogroup" aria-label="Why">
+            {[
+              { value: 'travel', label: 'Away or travelling' },
+              { value: 'illness', label: 'Ill or injured' },
+              { value: 'other', label: 'Something else' },
+            ].map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                role="radio"
+                aria-checked={kind === o.value}
+                className="chip"
+                disabled={busy}
+                onClick={() => setKind(o.value)}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+
+          <label className="field">
+            <span className="label">From</span>
+            <input
+              className="input"
+              type="date"
+              value={starts}
+              aria-label="Away from"
+              onChange={(e) => setStarts(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span className="label">Back on</span>
+            <input
+              className="input"
+              type="date"
+              value={returns}
+              aria-label="Back on"
+              onChange={(e) => setReturns(e.target.value)}
+            />
+          </label>
+          {/*
+            Blank is allowed and says so. Making somebody invent a recovery date for an illness
+            they cannot predict produces a wrong date, which is worse than no date.
+          */}
+          <p className="tiny muted prose" style={{ margin: 0 }}>
+            Leave the return date blank if you do not know yet. Your own plan carries on either
+            way, and so does theirs.
+          </p>
+
+          <div className="row" style={{ gap: 6 }}>
+            <button
+              type="button"
+              className="btn btn--primary btn--small"
+              disabled={busy || starts === ''}
+              onClick={() => run(async () => {
+                await api.buddy.away({
+                  kind,
+                  starts_on: starts,
+                  returns_on: returns === '' ? undefined : returns,
+                })
+                setOpen(false)
+              })}
+            >
+              Tell them
+            </button>
+            <button
+              type="button"
+              className="btn btn--quiet btn--small"
+              disabled={busy}
+              onClick={() => setOpen(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="btn btn--quiet btn--small"
+          disabled={busy}
+          onClick={() => {
+            /*
+             * Reset on OPEN, not on close.
+             *
+             * The fields are component state and survive a close, so reopening the form showed
+             * whatever was typed last time — including a return date from a previous, now
+             * cancelled absence. Somebody declaring an open-ended illness would silently send a
+             * stale recovery date they never chose, which is the exact thing the blank field is
+             * there to avoid.
+             *
+             * Resetting here rather than on close covers cancel, submit and unmount in one
+             * place: whatever happened last, the form opens clean.
+             */
+            setKind('travel')
+            setStarts(today())
+            setReturns('')
+            setOpen(true)
+          }}
+        >
+          I will be away
+        </button>
+      )}
+    </>
+  )
+}
+
+/** Today, as YYYY-MM-DD in local time. */
+function today() {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+/** "2026-08-04" -> "4 August". A date, not a timestamp. */
+function prettyDay(iso) {
+  const [y, m, d] = String(iso).split('-').map(Number)
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+    'August', 'September', 'October', 'November', 'December']
+  return `${d} ${months[m - 1] || ''}`.trim() || String(iso)
 }
 
 /** "Tuesday, Thursday and Saturday" — an Oxford-comma-free list, as the copy voice prefers. */

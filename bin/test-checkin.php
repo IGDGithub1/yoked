@@ -27,6 +27,8 @@ require YK_SRC . '/lib/Safety.php';
 require YK_SRC . '/lib/Plans.php';
 require YK_SRC . '/lib/Nutrition.php';
 require YK_SRC . '/lib/CheckIn.php';
+require YK_SRC . '/lib/Drift.php';         // BuddyAbsence reads lastLoggedDate
+require YK_SRC . '/lib/BuddyAbsence.php';  // Plans::gatherContext reads it
 
 $base = 'https://yoked.lil-boxes.com';
 $keep = false;

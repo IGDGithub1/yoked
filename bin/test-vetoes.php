@@ -33,6 +33,8 @@ require YK_SRC . '/lib/Plans.php';
 require YK_SRC . '/lib/Nutrition.php';
 require YK_SRC . '/lib/Notify.php';
 require YK_SRC . '/lib/Vetoes.php';
+require YK_SRC . '/lib/Drift.php';         // BuddyAbsence reads lastLoggedDate
+require YK_SRC . '/lib/BuddyAbsence.php';  // Plans::gatherContext reads it
 
 $args = array_slice($argv, 1);
 $live = in_array('--live', $args, true);

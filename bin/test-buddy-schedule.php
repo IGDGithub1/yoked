@@ -36,6 +36,8 @@ require YK_SRC . '/lib/Buddies.php';
 require YK_SRC . '/lib/Plans.php';
 require YK_SRC . '/lib/ConstraintLabel.php';
 require YK_SRC . '/lib/Settings.php';
+require YK_SRC . '/lib/Drift.php';         // BuddyAbsence reads lastLoggedDate
+require YK_SRC . '/lib/BuddyAbsence.php';  // Plans::gatherContext reads it
 
 $keep = in_array('--keep', array_slice($argv, 1), true);
 
@@ -951,6 +953,463 @@ t('the profile lists an inherited limit, without a switch', function () {
     // Readable, not the raw slug.
     return $found['label'] === 'Stair machine'
         ?: 'the label is ' . var_export($found['label'], true);
+});
+
+// ---------------------------------------------------------------------------
+echo "\n8. absence never strands the other user (§10.5)\n";
+
+/** Next Monday, which is the week generation is usually about. */
+function nextWeek(): string
+{
+    return date('Y-m-d', strtotime('next monday'));
+}
+
+t('with both present, the buddy is available', function () {
+    $a = seedUser('av_present_a');
+    $b = seedUser('av_present_b');
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    $r = BuddyAbsence::availableFor($a, nextWeek());
+    return ($r['available'] === true && $r['reason'] === 'available')
+        ?: json_encode($r);
+});
+
+t('an unpaired user is always "available"', function () {
+    // Nothing to be absent from. The reason distinguishes it so a caller can tell "no buddy"
+    // from "buddy present".
+    $solo = seedUser('av_solo');
+    grid($solo, [1 => [60, 'full_gym']]);
+    $r = BuddyAbsence::availableFor($solo, nextWeek());
+    return ($r['available'] === true && $r['reason'] === 'unpaired') ?: json_encode($r);
+});
+
+t('declared travel over the coming week makes the buddy unavailable', function () {
+    $a = seedUser('trav_a');
+    $b = seedUser('trav_b');
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    $week = nextWeek();
+    $r = BuddyAbsence::record($b, 'travel', $week,
+        date('Y-m-d', strtotime($week . ' +9 days')));
+    if (!$r['ok']) {
+        return 'declaring failed: ' . (string) $r['error'];
+    }
+
+    $q = BuddyAbsence::availableFor($a, $week);
+    if ($q['available'] !== false) {
+        return 'the buddy still reads as available';
+    }
+    if ($q['reason'] !== 'declared_travel') {
+        return 'reason is ' . (string) $q['reason'];
+    }
+    // The return date is the useful part: "back on the 4th" beats "away".
+    return $q['returns_on'] !== null ?: 'no return date reported';
+});
+
+t('an absence is measured by OVERLAP, not containment', function () {
+    /*
+     * Someone away Wednesday to the following Tuesday is away for parts of two weeks, and both
+     * partners' weeks should be solo. Containment would miss the second week entirely.
+     */
+    $a = seedUser('ovl_a');
+    $b = seedUser('ovl_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    $week = nextWeek();
+    // Starts mid-week, ends mid the NEXT week.
+    BuddyAbsence::record($b, 'travel',
+        date('Y-m-d', strtotime($week . ' +2 days')),
+        date('Y-m-d', strtotime($week . ' +9 days')));
+
+    if (BuddyAbsence::availableFor($a, $week)['available'] !== false) {
+        return 'the first week was not affected';
+    }
+    return BuddyAbsence::availableFor($a, date('Y-m-d', strtotime($week . ' +7 days')))
+        ['available'] === false
+        ?: 'the second week was not affected';
+});
+
+t('a week outside the absence is unaffected', function () {
+    // The absence must not leak into weeks it does not cover, or a solo week becomes permanent.
+    $a = (int) DB::one('SELECT id FROM users WHERE username = "bsch_ovl_a"')['id'];
+    $week = nextWeek();
+    return BuddyAbsence::availableFor($a, date('Y-m-d', strtotime($week . ' +21 days')))
+        ['available'] === true
+        ?: 'a distant week was treated as covered by the absence';
+});
+
+t('an open-ended absence covers every week from its start', function () {
+    // Illness with no known return. Treated as "away until they say otherwise" rather than as
+    // a single week, and never as forever-in-the-past.
+    $a = seedUser('open_a');
+    $b = seedUser('open_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    BuddyAbsence::record($b, 'illness', nextWeek(), null);
+
+    foreach ([0, 7, 28] as $offset) {
+        $week = date('Y-m-d', strtotime(nextWeek() . " +{$offset} days"));
+        if (BuddyAbsence::availableFor($a, $week)['available'] !== false) {
+            return "week +{$offset} was not covered";
+        }
+    }
+    return true;
+});
+
+t('cancelling brings the buddy back', function () {
+    $a = (int) DB::one('SELECT id FROM users WHERE username = "bsch_open_a"')['id'];
+    $b = (int) DB::one('SELECT id FROM users WHERE username = "bsch_open_b"')['id'];
+
+    $r = BuddyAbsence::cancel($b);
+    if (!$r['ok']) {
+        return 'cancelling failed: ' . (string) $r['error'];
+    }
+    return BuddyAbsence::availableFor($a, nextWeek())['available'] === true
+        ?: 'the buddy is still away after cancelling';
+});
+
+t('a cancelled absence is kept, not deleted', function () {
+    // "I was away that week" survives as an explanation for a quiet stretch.
+    $b = (int) DB::one('SELECT id FROM users WHERE username = "bsch_open_b"')['id'];
+    $n = (int) DB::one(
+        'SELECT COUNT(*) AS n FROM buddy_absences
+         WHERE user_id = ? AND cancelled_at IS NOT NULL', [$b]
+    )['n'];
+    return $n > 0 ?: 'the cancelled absence was deleted';
+});
+
+t('a second declaration replaces the first rather than stacking', function () {
+    /*
+     * A corrected date is a correction, not a second absence. Two live rows would make "when
+     * are they back" ambiguous, and availableFor would answer from whichever sorted first.
+     */
+    $a = seedUser('twice_a');
+    $b = seedUser('twice_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    $week = nextWeek();
+    BuddyAbsence::record($b, 'travel', $week, date('Y-m-d', strtotime($week . ' +3 days')));
+    BuddyAbsence::record($b, 'travel', $week, date('Y-m-d', strtotime($week . ' +10 days')));
+
+    $live = (int) DB::one(
+        'SELECT COUNT(*) AS n FROM buddy_absences
+         WHERE user_id = ? AND cancelled_at IS NULL', [$b]
+    )['n'];
+    if ($live !== 1) {
+        return "{$live} live absences, expected 1";
+    }
+    // And it is the corrected one.
+    $mine = BuddyAbsence::mine($b);
+    return $mine['returns_on'] === date('Y-m-d', strtotime($week . ' +10 days'))
+        ?: 'the return date is ' . var_export($mine['returns_on'] ?? null, true);
+});
+
+t('you cannot be back before you leave', function () {
+    $b = (int) DB::one('SELECT id FROM users WHERE username = "bsch_twice_b"')['id'];
+    $week = nextWeek();
+    return BuddyAbsence::record($b, 'travel', $week,
+        date('Y-m-d', strtotime($week . ' -3 days')))['ok'] === false
+        ?: 'a return date before the start was accepted';
+});
+
+t('a bad kind is refused', function () {
+    $b = (int) DB::one('SELECT id FROM users WHERE username = "bsch_twice_b"')['id'];
+    return BuddyAbsence::record($b, 'abducted', nextWeek(), null)['ok'] === false
+        ?: 'an unknown absence kind was accepted';
+});
+
+// ---------------------------------------------------------------------------
+echo "\n9. undeclared silence is the safety net\n";
+
+t('a buddy who has logged nothing for longer than their window reads as silent', function () {
+    /*
+     * §10.5's third case. Not the primary path, and deliberately conservative: it uses the
+     * buddy's OWN nudge window, so somebody who told us a week of quiet is normal is not
+     * written off after three days.
+     */
+    $a = seedUser('sil_a');
+    $b = seedUser('sil_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    // Age the buddy's account past their window so "never logged" counts.
+    DB::run('UPDATE users SET created_at = ? WHERE id = ?',
+        [date('Y-m-d H:i:s', strtotime('-30 days')), $b]);
+
+    $r = BuddyAbsence::availableFor($a, nextWeek());
+    if ($r['available'] !== false) {
+        return 'a long-silent buddy still reads as available';
+    }
+    return $r['reason'] === 'silent' ?: 'reason is ' . (string) $r['reason'];
+});
+
+t('a brand-new buddy is NOT read as a quitter', function () {
+    /*
+     * The failure this guards. Somebody who pairs up on the day they join has logged nothing
+     * yet, and treating that as silence would strand their partner from the very first week —
+     * for a buddy who has done nothing wrong.
+     */
+    $a = seedUser('new_a');
+    $b = seedUser('new_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    pairUp($a, $b);
+    // created_at defaults to now, so no ageing.
+
+    return BuddyAbsence::availableFor($a, nextWeek())['available'] === true
+        ?: 'a brand-new buddy was treated as having quit';
+});
+
+t('a buddy who logged recently is available', function () {
+    $a = seedUser('rec_a');
+    $b = seedUser('rec_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    pairUp($a, $b);
+    DB::run('UPDATE users SET created_at = ? WHERE id = ?',
+        [date('Y-m-d H:i:s', strtotime('-90 days')), $b]);
+
+    // A logged day with real content, which is what Drift::lastLoggedDate looks for.
+    $dayId = (int) DB::insert(
+        'INSERT INTO logged_days (user_id, log_date) VALUES (?, CURDATE())', [$b]
+    );
+    $mealId = (int) DB::insert(
+        'INSERT INTO logged_meals (logged_day_id, slot) VALUES (?, "breakfast")', [$dayId]
+    );
+    DB::run(
+        'INSERT INTO logged_entries (logged_meal_id, name, calories, protein_g, fat_g, carbs_g)
+         VALUES (?, "eggs", 200, 12, 14, 2)',
+        [$mealId]
+    );
+
+    return BuddyAbsence::availableFor($a, nextWeek())['available'] === true
+        ?: 'a buddy who logged today reads as silent';
+});
+
+t('a longer nudge window buys a buddy more rope', function () {
+    // Somebody who set nudge_after_days to 14 has told us a fortnight of quiet is normal for
+    // them. Writing them off after 4 days would contradict their own setting.
+    $a = seedUser('rope_a');
+    $b = seedUser('rope_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    pairUp($a, $b);
+    DB::run('UPDATE users SET created_at = ? WHERE id = ?',
+        [date('Y-m-d H:i:s', strtotime('-90 days')), $b]);
+    DB::run('UPDATE profiles SET nudge_after_days = 14 WHERE user_id = ?', [$b]);
+
+    // Last logged 8 days ago: past a default window, inside a 14-day one.
+    $dayId = (int) DB::insert(
+        'INSERT INTO logged_days (user_id, log_date) VALUES (?, ?)',
+        [$b, date('Y-m-d', strtotime('-8 days'))]
+    );
+    $mealId = (int) DB::insert(
+        'INSERT INTO logged_meals (logged_day_id, slot) VALUES (?, "breakfast")', [$dayId]
+    );
+    DB::run(
+        'INSERT INTO logged_entries (logged_meal_id, name, calories, protein_g, fat_g, carbs_g)
+         VALUES (?, "eggs", 200, 12, 14, 2)',
+        [$mealId]
+    );
+
+    return BuddyAbsence::availableFor($a, nextWeek())['available'] === true
+        ?: 'a buddy with a 14-day window was written off after 8';
+});
+
+// ---------------------------------------------------------------------------
+echo "\n10. the partner keeps a complete week\n";
+
+t('an away buddy drops the shared days from the effective schedule', function () {
+    /*
+     * §10.5: "Pairing is an enhancement to a complete single-user plan, never a dependency of
+     * one." The fallback is the individual grid, which is what effective() returns with no
+     * pair — so generation needs no separate solo path.
+     */
+    $a = seedUser('fall_a', 2);
+    $b = seedUser('fall_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    $pairId = pairUp($a, $b);
+
+    // Paired and present: both days shared.
+    $shared = 0;
+    foreach (BuddySchedule::effective($a, $pairId) as $d) {
+        if ($d['shared']) { $shared++; }
+    }
+    if ($shared !== 2) {
+        return "{$shared} shared days before the absence, expected 2";
+    }
+
+    // The fallback: no pair id, which is what gatherContext passes when the buddy is away.
+    $soloShared = 0;
+    $solo = BuddySchedule::effective($a, null);
+    foreach ($solo as $d) {
+        if ($d['shared']) { $soloShared++; }
+    }
+    if ($soloShared !== 0) {
+        return 'the fallback still reports shared days';
+    }
+    // And the user keeps their own days — a complete week, not an empty one.
+    return ($solo[1]['can_train'] === 'yes' && $solo[3]['can_train'] === 'yes')
+        ?: 'the fallback lost the user own days';
+});
+
+t('generation drops the pair when the buddy is away', function () {
+    /*
+     * The wiring, checked through gatherContext rather than inferred. This is the line that
+     * makes the solo fallback real: the pair id is discarded, so the availability block has no
+     * SHARED markers and the week is solo by construction.
+     */
+    $a = seedUser('gen_a', 2);
+    $b = seedUser('gen_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    DB::run(
+        'INSERT INTO goals (user_id, primary_goal, success_statement, requested_timeline,
+                            horizon_weeks, scale_vs_feel, status)
+         VALUES (?, "lose_fat", "x", "16_weeks", 16, "both", "active")', [$a]
+    );
+    pairUp($a, $b);
+
+    $week = nextWeek();
+    BuddyAbsence::record($b, 'travel', $week, date('Y-m-d', strtotime($week . ' +6 days')));
+
+    $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+    $gather->setAccessible(true);
+    $ctx = $gather->invoke(null, $a, $week);
+    if (($ctx['error'] ?? null) !== null) {
+        return 'context failed: ' . (string) $ctx['error'];
+    }
+
+    if (($ctx['buddy_away'] ?? null) === null) {
+        return 'the context does not report the buddy as away';
+    }
+    foreach ($ctx['availability'] as $day) {
+        if (($day['shared'] ?? false) === true) {
+            return 'a shared day survived into a solo week';
+        }
+    }
+    return true;
+});
+
+t('the prompt says WHY the week is solo', function () {
+    /*
+     * The model can see the user has a buddy, so an unexplained absence of shared days invites
+     * it to guess — and a guess here reads as "invent something buddy-ish". Saying it plainly
+     * also stops the week being framed as a setback, which it is not.
+     */
+    $a = (int) DB::one('SELECT id FROM users WHERE username = "bsch_gen_a"')['id'];
+    $week = nextWeek();
+
+    $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+    $gather->setAccessible(true);
+    $ctx = $gather->invoke(null, $a, $week);
+
+    $prompt = new ReflectionMethod(Plans::class, 'userPrompt');
+    $prompt->setAccessible(true);
+    $text = (string) $prompt->invoke(null, $ctx, $week, []);
+
+    if (!str_contains($text, 'buddy is away this week')) {
+        return 'the prompt does not explain the solo week';
+    }
+    return str_contains($text, 'must not be framed as one')
+        ?: 'the prompt does not say this is not a setback';
+});
+
+t('the partner is told, and the mid-week case says the plan is unchanged', function () {
+    /*
+     * §10.5: "reshuffling a week someone is halfway through is worse than letting them finish
+     * it." So a mid-week illness notifies and changes nothing — but the notice has to SAY the
+     * plan is unchanged, or a shared Thursday still on screen looks like a bug.
+     */
+    $a = seedUser('tell_a');
+    $b = seedUser('tell_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    // Starting TODAY, which is inside the week the partner already has.
+    $today = date('Y-m-d');
+    BuddyAbsence::record($b, 'illness', $today, date('Y-m-d', strtotime('+5 days')));
+
+    $n = DB::one(
+        'SELECT body FROM notifications WHERE user_id = ? AND type = "buddy_away"
+         ORDER BY id DESC LIMIT 1', [$a]
+    );
+    if ($n === null) {
+        return 'the partner was not told';
+    }
+    $body = strtolower((string) $n['body']);
+    if (!str_contains($body, 'unchanged')) {
+        return 'the mid-week notice does not say the plan is unchanged: ' . $body;
+    }
+    // And it names the return date, which is the difference between adjusting and wondering.
+    return str_contains($body, 'back on') ?: 'no return date in the notice: ' . $body;
+});
+
+t('a future absence is announced as next week being solo', function () {
+    // Declared before generation, nothing is built yet, so nothing is disrupted — and the
+    // wording should reflect that rather than talking about the current week.
+    $a = seedUser('fut_a');
+    $b = seedUser('fut_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    BuddyAbsence::record($b, 'travel', date('Y-m-d', strtotime('+10 days')), null);
+
+    $n = DB::one(
+        'SELECT body FROM notifications WHERE user_id = ? AND type = "buddy_away"
+         ORDER BY id DESC LIMIT 1', [$a]
+    );
+    if ($n === null) {
+        return 'the partner was not told';
+    }
+    $body = strtolower((string) $n['body']);
+    if (str_contains($body, 'unchanged')) {
+        return 'a future absence was announced as a mid-week drop-out';
+    }
+    // Open-ended, so it must not invent a return date.
+    return str_contains($body, 'not said when')
+        ?: 'an open-ended absence did not say the return is unknown: ' . $body;
+});
+
+t('cancelling tells the partner too', function () {
+    $a = (int) DB::one('SELECT id FROM users WHERE username = "bsch_fut_a"')['id'];
+    $b = (int) DB::one('SELECT id FROM users WHERE username = "bsch_fut_b"')['id'];
+    BuddyAbsence::cancel($b);
+    $n = DB::one(
+        'SELECT 1 AS x FROM notifications WHERE user_id = ? AND type = "buddy_back" LIMIT 1',
+        [$a]
+    );
+    return $n !== null ?: 'the partner was not told their buddy is back';
+});
+
+t('an absence never rewrites the buddy schedule', function () {
+    /*
+     * The agreed days survive an absence: they are what the pair agreed, and the person is
+     * coming back. Deleting them would mean renegotiating from scratch after every holiday.
+     */
+    $a = seedUser('keepsched_a', 2);
+    $b = seedUser('keepsched_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    $pairId = pairUp($a, $b);
+
+    BuddyAbsence::record($b, 'travel', nextWeek(), null);
+    return BuddySchedule::agreedDays($pairId) === [1, 3]
+        ?: 'the agreed days are ' . implode(',', BuddySchedule::agreedDays($pairId));
 });
 
 // ---------------------------------------------------------------------------

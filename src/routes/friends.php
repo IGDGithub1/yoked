@@ -141,7 +141,26 @@ $router->add('PATCH', 'friends/{id}', function (array $p): void {
 $router->add('GET', 'buddy', function (): void {
     $user = Auth::require();
 
-    Response::json(['buddy' => Buddies::forUser((int) $user['id'])]);
+    $userId = (int) $user['id'];
+    $tz     = Baseline::timezoneOf($userId);
+
+    Response::json([
+        'buddy' => Buddies::forUser($userId),
+        /*
+         * Absence, both directions (§10.5).
+         *
+         * `mine` drives the "I am away" control; `theirs` is what tells the partner why their
+         * week is solo. Asked for the COMING week rather than today, because that is the week
+         * the answer affects — a Sunday generation is about next Monday.
+         */
+        'away'  => [
+            'mine'   => BuddyAbsence::mine($userId),
+            'theirs' => BuddyAbsence::availableFor(
+                $userId,
+                date('Y-m-d', strtotime(Schedule::weekStart($tz) . ' +7 days'))
+            ),
+        ],
+    ]);
 });
 
 /**
@@ -370,4 +389,53 @@ $router->add('PUT', 'buddy/schedule/surplus', function (): void {
     }
 
     Response::json(['ok' => true, 'mode' => $r['status']]);
+});
+
+/* ---- buddy absence (§10.5) -------------------------------------------------- */
+
+/**
+ * POST /api/buddy/away — say you will not be training with your buddy for a while.
+ *
+ * Body: {kind: travel|illness|other, starts_on, returns_on?}
+ *
+ * The partner is told immediately, and what they are told depends on whether the absence
+ * starts inside a week they have already been given: "next week is yours alone" before
+ * generation, "your buddy has dropped out, your week is unchanged" after. §10.5 is emphatic
+ * that a week someone is halfway through is left alone.
+ *
+ * `returns_on` may be omitted, which means open-ended — honest for an illness nobody can put a
+ * date on, and better than making someone invent one.
+ */
+$router->add('POST', 'buddy/away', function (): void {
+    $user = Auth::require();
+    $b    = Response::body();
+
+    $r = BuddyAbsence::record(
+        (int) $user['id'],
+        (string) ($b['kind'] ?? ''),
+        (string) ($b['starts_on'] ?? ''),
+        isset($b['returns_on']) && $b['returns_on'] !== '' ? (string) $b['returns_on'] : null
+    );
+    if (!$r['ok']) {
+        Response::error((string) $r['error'], 422);
+    }
+
+    Response::json(['ok' => true, 'notified' => $r['notified']], 201);
+});
+
+/**
+ * DELETE /api/buddy/away — back early, or it turned out to be nothing.
+ *
+ * Cancels rather than deletes, so "I was away that week" survives as an explanation for a
+ * quiet stretch when the coach reviews it later.
+ */
+$router->add('DELETE', 'buddy/away', function (): void {
+    $user = Auth::require();
+
+    $r = BuddyAbsence::cancel((int) $user['id']);
+    if (!$r['ok']) {
+        Response::error((string) $r['error'], 422);
+    }
+
+    Response::json(['ok' => true]);
 });

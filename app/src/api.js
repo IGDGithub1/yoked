@@ -251,6 +251,16 @@ export const api = {
     dropDay: (weekday) => del(`buddy/schedule/days/${weekday}`),
     /* keep_commitment | extras_optional | match_buddy */
     setSurplus: (mode) => put('buddy/schedule/surplus', { mode }),
+
+    /*
+     * Absence (§10.5). Declared before Sunday's generation, next week is built solo; declared
+     * mid-week, the week already built STAYS built and the partner is simply told.
+     *
+     * returns_on may be omitted for an open-ended absence, which is honest for an illness
+     * nobody can put a date on.
+     */
+    away: (fields) => post('buddy/away', fields),
+    back: () => del('buddy/away'),
   },
 
   constraints: {
