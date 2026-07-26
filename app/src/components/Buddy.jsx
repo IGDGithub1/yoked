@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import BuddySchedule from './BuddySchedule'
 
 /**
  * Your training buddy (SPEC-coaching §10).
@@ -49,16 +50,32 @@ export default function Buddy({ onChanged }) {
   if (b === null) return null
 
   return (
-    <div className="card stack-sm">
-      <h3 className="subheading">Training buddy</h3>
+    <>
+      <div className="card stack-sm">
+        <h3 className="subheading">Training buddy</h3>
 
-      {b.status === 'active' && <Active b={b} busy={busy} run={run} />}
-      {b.status === 'pending_in' && <Incoming b={b} busy={busy} run={run} />}
-      {b.status === 'pending_out' && <Outgoing b={b} busy={busy} run={run} />}
-      {b.status === 'none' && <Invite b={b} busy={busy} run={run} />}
+        {b.status === 'active' && <Active b={b} busy={busy} run={run} />}
+        {b.status === 'pending_in' && <Incoming b={b} busy={busy} run={run} />}
+        {b.status === 'pending_out' && <Outgoing b={b} busy={busy} run={run} />}
+        {b.status === 'none' && <Invite b={b} busy={busy} run={run} />}
 
-      {error && <p className="error tiny">{error}</p>}
-    </div>
+        {error && <p className="error tiny">{error}</p>}
+      </div>
+
+      {/*
+        Its own card, below the pairing one. The schedule is a bigger thing than the pairing
+        state — a day list, sometimes a negotiation, sometimes a question — and nesting it
+        would make one card that does two jobs.
+
+        Keyed on the pairing status so it re-reads when a pair goes active: the schedule is
+        seeded at that moment and would otherwise show nothing until a reload.
+      */}
+      <BuddySchedule
+        key={b.status}
+        paired={b.status === 'active'}
+        onChanged={load}
+      />
+    </>
   )
 }
 
@@ -70,22 +87,14 @@ function Active({ b, busy, run }) {
       </p>
 
       {/*
-        The days you are both free (§10.3), which is the one concrete thing pairing gives you
-        today. Named days rather than a calendar: this is a weekly rhythm, not an appointment.
+        A one-line summary only. The day list, the compromise prompt and the surplus question
+        all live in the schedule card below — saying the days twice on one screen makes the
+        second telling read as a different fact.
       */}
-      {b.shared_days.length > 0 ? (
+      {b.shared_days.length > 0 && (
         <p className="tiny muted prose" style={{ margin: 0 }}>
-          You are both free on {joinDays(b.shared_days.map((d) => d.name))}
+          You train together on {joinDays(b.shared_days.map((d) => d.name))}
           {sharedMinutes(b.shared_days)}.
-        </p>
-      ) : (
-        /*
-          §10.3: where availability does not overlap, the surplus days generate solo. So no
-          overlap is a normal state to be explained, not an error.
-        */
-        <p className="tiny muted prose" style={{ margin: 0 }}>
-          Your available days do not overlap at the moment, so you are both training on your
-          own. Change a day in your week and this will pick it up.
         </p>
       )}
 

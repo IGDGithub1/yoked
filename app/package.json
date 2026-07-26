@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "drive:logging": "node tests/drive-logging.mjs",
-    "drive:seed": "powershell -NoProfile -File ../bin/reseed-ui.ps1",
+    "drive:seed": "powershell -NoProfile -ExecutionPolicy Bypass -File ../bin/reseed-ui.ps1",
     "drive": "npm run drive:seed && npm run drive:logging"
   },
   "dependencies": {

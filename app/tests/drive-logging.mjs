@@ -50,6 +50,67 @@ const consoleErrors = []
 page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()) })
 page.on('pageerror', (e) => consoleErrors.push(`pageerror: ${e.message}`))
 
+/**
+ * Sign a page in through the API rather than the form.
+ *
+ * THE SUITE WAS THROTTLING ITSELF. It signs in nine times — once per fixture per section —
+ * against src/routes/auth.php's limit of 20 logins per IP per 15 minutes. Two consecutive
+ * runs, or one run plus a hand-written probe, exhausts that bucket, and then EVERY remaining
+ * block fails at `locator.waitFor` on the sign-in form. Thirty-odd cascading failures that all
+ * read like real regressions while the app is defending itself correctly.
+ *
+ * The form path is still exercised, once, by section 1 — that is the thing actually under
+ * test. Every later block only needs a session, so it posts to /api/login directly. Same
+ * endpoint, same rate bucket, but one request instead of a page load plus a form fill plus a
+ * navigation, and no dependence on the sign-in screen rendering.
+ *
+ * Returns nothing and throws on failure, so a caller that forgets to check still fails loudly
+ * rather than proceeding anonymously — which is how the 401 cascade above got mistaken for
+ * missing UI in the first place.
+ */
+async function signInVia(target, username = USER, password = PASS) {
+  await target.goto(BASE, { waitUntil: 'domcontentloaded' })
+
+  const result = await target.evaluate(async ({ u, p }) => {
+    // Log out first: the shared browser context carries whichever fixture the previous block
+    // left signed in, and /api/login on top of a live session is not guaranteed to switch.
+    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
+    if (me.authenticated) {
+      await fetch('/api/logout', {
+        method: 'POST',
+        headers: { 'x-csrf-token': me.csrf, accept: 'application/json' },
+        credentials: 'same-origin',
+      })
+    }
+
+    // A fresh token: logout rotates it as session-fixation defence.
+    const fresh = await (await fetch('/api/csrf', { credentials: 'same-origin' })).json()
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-csrf-token': fresh.csrf,
+        accept: 'application/json',
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({ identifier: u, password: p }),
+    })
+    return { status: res.status, body: await res.json() }
+  }, { u: username, p: password })
+
+  if (result.status !== 200) {
+    throw new Error(
+      `API sign-in for ${username} failed with ${result.status}: `
+      + (result.body?.error || 'no message')
+      + (result.status === 429 ? ' (login rate limit — wait out the 15-minute window)' : '')
+    )
+  }
+
+  // The SPA reads the session on boot, so it has to load after the cookie exists.
+  await target.reload({ waitUntil: 'networkidle' })
+  await target.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+}
+
 // ---- sign in ---------------------------------------------------------------
 
 console.log('\n1. signing in')
@@ -1270,16 +1331,10 @@ await check('a mid-baseline user signs in', async () => {
       credentials: 'same-origin',
     })
   })
-  await obs.reload({ waitUntil: 'networkidle' })
-
-  const form = obs.locator('form.card')
-  await form.waitFor({ timeout: 20000 })
-  await form.locator('input[type="text"]').first().fill('uitest_baseline')
-  await form.locator('input[type="password"]').first().fill(PASS)
-  await form.getByRole('button', { name: /^sign in$/i }).click()
-  // Lands on the Dashboard like anyone else, then into the Journal where the
-  // countdown rail lives.
-  await obs.getByRole('button', { name: /^Journal$/ }).waitFor({ timeout: 20000 })
+  // Through the API. See signInVia: nine form sign-ins in one run exhausted the
+  // 20-per-IP login limit and every later block failed at the sign-in screen.
+  await signInVia(obs, 'uitest_baseline')
+  // Then into the Journal, where the countdown rail lives.
   await goto('Journal', obs)
   await obs.getByRole('heading', { name: /how are you today/i }).waitFor({ timeout: 20000 })
 })
@@ -1431,14 +1486,7 @@ await check('the review user signs in', async () => {
       credentials: 'same-origin',
     })
   })
-  await rev.reload({ waitUntil: 'networkidle' })
-
-  const f = rev.locator('form.card')
-  await f.waitFor({ timeout: 20000 })
-  await f.locator('input[type="text"]').first().fill('uitest_review')
-  await f.locator('input[type="password"]').first().fill(PASS)
-  await f.getByRole('button', { name: /^sign in$/i }).click()
-  await rev.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+  await signInVia(rev, 'uitest_review')
 })
 
 await check('tomorrow is shown, with the session and the meals', async () => {
@@ -1554,13 +1602,7 @@ await check('the review is absent for a user who turned it off', async () => {
       credentials: 'same-origin',
     })
   })
-  await off.reload({ waitUntil: 'networkidle' })
-  const f = off.locator('form.card')
-  await f.waitFor({ timeout: 20000 })
-  await f.locator('input[type="text"]').first().fill(USER)
-  await f.locator('input[type="password"]').first().fill(PASS)
-  await f.getByRole('button', { name: /^sign in$/i }).click()
-  await off.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+  await signInVia(off)
   await off.waitForTimeout(1500)
 
   const n = await off.locator('.nextday').count()
@@ -1591,23 +1633,8 @@ const chat = await ctx.newPage()
 await chat.goto(BASE, { waitUntil: 'domcontentloaded' })
 
 await check('the coach page signs in', async () => {
-  await chat.evaluate(async () => {
-    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
-    if (me.authenticated) {
-      await fetch('/api/logout', {
-        method: 'POST',
-        headers: { 'x-csrf-token': me.csrf, accept: 'application/json' },
-        credentials: 'same-origin',
-      })
-    }
-  })
-  await chat.reload({ waitUntil: 'networkidle' })
-  const f = chat.locator('form.card')
-  await f.waitFor({ timeout: 20000 })
-  await f.locator('input[type="text"]').first().fill(USER)
-  await f.locator('input[type="password"]').first().fill(PASS)
-  await f.getByRole('button', { name: /^sign in$/i }).click()
-  await chat.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+  // Through the API: the form path is covered once, in section 1. See signInVia.
+  await signInVia(chat)
 })
 
 /*
@@ -1755,23 +1782,8 @@ const veto = await ctx.newPage()
 await veto.goto(BASE, { waitUntil: 'domcontentloaded' })
 
 await check('the veto page signs in', async () => {
-  await veto.evaluate(async () => {
-    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
-    if (me.authenticated) {
-      await fetch('/api/logout', {
-        method: 'POST',
-        headers: { 'x-csrf-token': me.csrf, accept: 'application/json' },
-        credentials: 'same-origin',
-      })
-    }
-  })
-  await veto.reload({ waitUntil: 'networkidle' })
-  const f = veto.locator('form.card')
-  await f.waitFor({ timeout: 20000 })
-  await f.locator('input[type="text"]').first().fill(USER)
-  await f.locator('input[type="password"]').first().fill(PASS)
-  await f.getByRole('button', { name: /^sign in$/i }).click()
-  await veto.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+  // Through the API: the form path is covered once, in section 1. See signInVia.
+  await signInVia(veto)
   await goto('Journal', veto)
   await veto.getByRole('heading', { name: /how are you today/i }).waitFor({ timeout: 20000 })
 })
@@ -1922,23 +1934,8 @@ const prof = await ctx.newPage()
 await prof.goto(BASE, { waitUntil: 'domcontentloaded' })
 
 await check('the profile page signs in', async () => {
-  await prof.evaluate(async () => {
-    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
-    if (me.authenticated) {
-      await fetch('/api/logout', {
-        method: 'POST',
-        headers: { 'x-csrf-token': me.csrf, accept: 'application/json' },
-        credentials: 'same-origin',
-      })
-    }
-  })
-  await prof.reload({ waitUntil: 'networkidle' })
-  const f = prof.locator('form.card')
-  await f.waitFor({ timeout: 20000 })
-  await f.locator('input[type="text"]').first().fill(USER)
-  await f.locator('input[type="password"]').first().fill(PASS)
-  await f.getByRole('button', { name: /^sign in$/i }).click()
-  await prof.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+  // Through the API: the form path is covered once, in section 1. See signInVia.
+  await signInVia(prof)
 })
 
 await check('the profile is reachable from the Dashboard, not the nav', async () => {
@@ -2332,23 +2329,8 @@ const fr = await ctx.newPage()
 await fr.goto(BASE, { waitUntil: 'domcontentloaded' })
 
 await check('the friends page signs in', async () => {
-  await fr.evaluate(async () => {
-    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
-    if (me.authenticated) {
-      await fetch('/api/logout', {
-        method: 'POST',
-        headers: { 'x-csrf-token': me.csrf, accept: 'application/json' },
-        credentials: 'same-origin',
-      })
-    }
-  })
-  await fr.reload({ waitUntil: 'networkidle' })
-  const f = fr.locator('form.card')
-  await f.waitFor({ timeout: 20000 })
-  await f.locator('input[type="text"]').first().fill(USER)
-  await f.locator('input[type="password"]').first().fill(PASS)
-  await f.getByRole('button', { name: /^sign in$/i }).click()
-  await fr.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+  // Through the API: the form path is covered once, in section 1. See signInVia.
+  await signInVia(fr)
 })
 
 await check('a waiting request shows a badge in the nav', async () => {
@@ -2580,6 +2562,213 @@ await check('the shared duration is the shorter of the two', async () => {
   return /45 minutes/.test(text) ? true : `no duration shown: ${text}`
 })
 
+await check('accepting seeds the shared days from the natural overlap', async () => {
+  /*
+   * 10.3: the common case needs no negotiation. The fixture grids overlap on Wednesday and
+   * Friday, so accepting should produce exactly those two without anyone being asked anything.
+   */
+  await fr.waitForFunction(async () => {
+    const r = await fetch('/api/buddy/schedule', { credentials: 'same-origin' })
+    const b = await r.json()
+    return JSON.stringify(b.schedule?.agreed ?? []) === '[3,5]'
+  }, null, { timeout: 20000 })
+  return true
+})
+
+await check('the shared days are listed by name', async () => {
+  /*
+   * Scoped to the AGREED rows, not the whole card.
+   *
+   * The first version scanned the card text for any non-shared day name and failed, because
+   * the same card legitimately lists Monday, Tuesday, Thursday and Saturday as days that could
+   * be OFFERED (§10.3a). Two different meanings of a weekday name in one card, and a loose
+   * assertion cannot tell them apart.
+   */
+  const card = fr.locator('.card', { hasText: /days you train together/i }).first()
+  await card.waitFor({ timeout: 20000 })
+
+  // Waited for, not snapshotted: the panel re-reads after the pair goes active, so an
+  // immediate read catches it mid-render.
+  await card.locator('.prefrow', { hasText: /Wednesday/i }).first()
+    .waitFor({ timeout: 20000 })
+  await card.locator('.prefrow', { hasText: /Friday/i }).first()
+    .waitFor({ timeout: 20000 })
+
+  const agreed = (await card.locator('.prefrow').allInnerTexts()).join(' | ')
+  if (!/Wednesday/.test(agreed) || !/Friday/.test(agreed)) {
+    return `the shared days are not listed: ${agreed}`
+  }
+  // Monday and Saturday are the main fixture's own days; Sunday is the buddy's.
+  return !/Monday|Saturday|Sunday/.test(agreed)
+    ? true
+    : `a non-shared day is listed as agreed: ${agreed}`
+})
+
+await check('a natural overlap says so, rather than claiming someone conceded', async () => {
+  // "You both had Wednesday free" reads differently from "you agreed to add Wednesday", and a
+  // conceded day is the one worth revisiting if the pairing stops working.
+  const row = fr.locator('.prefrow', { hasText: /Wednesday/i }).first()
+  const text = (await row.innerText()).toLowerCase()
+  return /both free/.test(text) ? true : `the origin is not shown: ${text}`
+})
+
+await check('the card does not claim the workouts will match', async () => {
+  /*
+   * 10.6 is unbuilt: generation still runs per-user, so a shared day means both people are in
+   * the gym, never that they are doing the same session. This is the promise a real pair would
+   * catch within a week, so it is asserted on the page as well as in the prompt.
+   */
+  const card = fr.locator('.card', { hasText: /days you train together/i }).first()
+  const text = (await card.innerText()).toLowerCase()
+  for (const lie of ['same workout', 'same session', 'same exercises', 'identical', 'synced']) {
+    if (text.includes(lie)) return `the card overpromises: "${lie}"`
+  }
+  // And it says the honest version out loud.
+  return /your own/.test(text)
+    ? true
+    : `the card does not say the exercises stay individual: ${text}`
+})
+
+await check('a thin overlap asks the pair to compromise', async () => {
+  /*
+   * 10.3a. Two shared days against a three-day commitment is thin, and the app must say so
+   * rather than generating two nearly-solo weeks and leaving both users to wonder why pairing
+   * did nothing.
+   */
+  const card = fr.locator('.card', { hasText: /days you train together/i }).first()
+  const text = (await card.innerText()).toLowerCase()
+  if (!/only share/.test(text)) return `no compromise prompt: ${text}`
+  // Names the target, because "compromise" without a number is a vague ask.
+  return /3 shared day/.test(text)
+    ? true
+    : `the prompt does not say how many days are wanted: ${text}`
+})
+
+await check('a day only the buddy has free is not offered to us', async () => {
+  /*
+   * Sunday is in the buddy's grid and not ours, so it is THEIRS to offer. Offering a day the
+   * other person already has free would be a request they cannot act on.
+   */
+  const card = fr.locator('.card', { hasText: /days you train together/i }).first()
+  const chips = await card.getByRole('group', { name: /offer a day/i })
+    .getByRole('button').allInnerTexts()
+  if (chips.length === 0) return 'no days offered at all'
+  return !chips.some((c) => /sunday/i.test(c))
+    ? true
+    : `Sunday was offered despite being the buddy's own day: ${chips.join(', ')}`
+})
+
+await check('offering a day records it and reports it as waiting', async () => {
+  const card = fr.locator('.card', { hasText: /days you train together/i }).first()
+  // Monday is ours and not theirs, which is exactly the day worth offering.
+  await card.getByRole('button', { name: /^Monday$/i }).click()
+  await card.getByLabel(/how long/i).selectOption('60')
+  await card.getByRole('button', { name: /offer it/i }).click()
+
+  // Read the server rather than the DOM: an optimistic render proves nothing about the write.
+  await fr.waitForFunction(async () => {
+    const r = await fetch('/api/buddy/schedule', { credentials: 'same-origin' })
+    const b = await r.json()
+    return (b.schedule?.offers?.outgoing ?? []).some((o) => o.weekday === 1)
+  }, null, { timeout: 20000 })
+
+  /*
+   * WAIT for the row rather than snapshotting it.
+   *
+   * The server already has the offer — the waitForFunction above proved that — but the panel
+   * re-reads and re-renders after the write, so an immediate allInnerTexts() catches the DOM
+   * mid-update. It returned just the Wednesday row and reported the offer missing, which reads
+   * as a broken feature rather than a race.
+   *
+   * Scoped to the offer row on purpose: "Monday" also appears among the offerable chips, so
+   * matching the whole card would pass without the offer existing at all.
+   */
+  await card.locator('.prefrow', { hasText: /you offered monday/i })
+    .first().waitFor({ timeout: 20000 })
+  return true
+})
+
+await check('the offer can be withdrawn', async () => {
+  const card = fr.locator('.card', { hasText: /days you train together/i }).first()
+  await card.getByRole('button', { name: /withdraw/i }).click()
+  await fr.waitForFunction(async () => {
+    const r = await fetch('/api/buddy/schedule', { credentials: 'same-origin' })
+    const b = await r.json()
+    return (b.schedule?.offers?.outgoing ?? []).length === 0
+  }, null, { timeout: 20000 })
+  return true
+})
+
+await check('the surplus question is asked, not guessed', async () => {
+  /*
+   * 10.3b. Two shared days against a three-day commitment leaves one surplus day, and the user
+   * decides what happens to it. Three options, and until they pick, the app keeps the
+   * commitment they made rather than silently shrinking their week.
+   */
+  const card = fr.locator('.card', { hasText: /days you train together/i }).first()
+  const text = (await card.innerText()).toLowerCase()
+  if (!/other 1|other one/.test(text)) {
+    return `the surplus question is not asked: ${text}`
+  }
+  const options = await card.locator('.profilelink').count()
+  return options === 3 ? true : `${options} surplus options, expected 3`
+})
+
+/*
+ * Captured HERE, not at the end of the block.
+ *
+ * This is the only moment the panel shows everything at once: the agreed days, the compromise
+ * prompt, and the surplus question still unanswered. The tests below answer it and then drop a
+ * day, and the end-of-block shot shows the post-unpair state — correct for the friends card,
+ * useless for reviewing step 2.
+ */
+await fr.screenshot({ path: shot('logging-buddy-schedule.png'), fullPage: true })
+
+await check('until answered, the week keeps its stated commitment', async () => {
+  // The failure this guards: a paired user quietly training less than they asked to, and not
+  // noticing for weeks.
+  const committed = await fr.evaluate(async () => {
+    const r = await fetch('/api/buddy/schedule', { credentials: 'same-origin' })
+    const b = await r.json()
+    return b.schedule?.surplus ?? null
+  })
+  if (committed === null) return 'no surplus payload'
+  if (committed.needs_choice !== true) return 'the question is not flagged as outstanding'
+  return committed.committed === 3
+    ? true
+    : `the week shrank to ${committed.committed} before the user answered`
+})
+
+await check('answering the surplus question sticks', async () => {
+  const card = fr.locator('.card', { hasText: /days you train together/i }).first()
+  await card.locator('.profilelink', { hasText: /just the 2 shared days/i }).click()
+  await fr.waitForFunction(async () => {
+    const r = await fetch('/api/buddy/schedule', { credentials: 'same-origin' })
+    const b = await r.json()
+    return b.schedule?.surplus?.mode === 'match_buddy'
+      && b.schedule?.surplus?.committed === 2
+  }, null, { timeout: 20000 })
+  return true
+})
+
+await check('dropping a shared day re-asks the surplus question', async () => {
+  /*
+   * 10.3b: "re-asked if the shared schedule changes." A stale answer describes a week that no
+   * longer exists.
+   */
+  const card = fr.locator('.card', { hasText: /days you train together/i }).first()
+  await card.locator('.prefrow', { hasText: /Wednesday/i })
+    .getByRole('button', { name: /drop/i }).click()
+
+  await fr.waitForFunction(async () => {
+    const r = await fetch('/api/buddy/schedule', { credentials: 'same-origin' })
+    const b = await r.json()
+    return (b.schedule?.agreed ?? []).length === 1
+      && b.schedule?.surplus?.mode === null
+  }, null, { timeout: 20000 })
+  return true
+})
+
 await check('unpairing takes effect and revokes the pairing', async () => {
   // 10.5: either side, any time, no reason. Nothing about the user's own plan changes.
   const card = fr.locator('.card', { hasText: /training buddy/i }).first()
@@ -2633,14 +2822,10 @@ await check('dark mode picks up the dark shell', async () => {
    * sign back in first. Both users render a Journal, so waiting on a heading alone
    * would pass while measuring the wrong user's day.
    */
-  const form = dark.locator('form.card')
-  if (await form.count()) {
-    await form.locator('input[type="text"]').first().fill(USER)
-    await form.locator('input[type="password"]').first().fill(PASS)
-    await form.getByRole('button', { name: /^sign in$/i }).click()
-  }
-  // The Dashboard is where sign-in lands, and the shell is what carries the theme.
-  await dark.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+  // Unconditionally, through the API: the previous block left this shared context signed in
+  // as another fixture, and both users render a Journal, so waiting on a heading alone would
+  // pass while measuring the wrong user's day.
+  await signInVia(dark)
 
   const bg = await dark.evaluate(() => getComputedStyle(document.body).backgroundColor)
   // --shell dark is #17140F.

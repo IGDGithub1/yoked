@@ -238,6 +238,19 @@ export const api = {
     invite: (userId) => post('buddy', { user_id: userId }),
     /* accept | decline | unpair */
     act: (action) => patch('buddy', { action }),
+
+    /*
+     * The schedule (§10.1a, §10.3a, §10.3b). Its own endpoint rather than part of load():
+     * two availability grids, the agreed days, offers both ways and the surplus question is
+     * a heavier read than the pairing card needs on every boot.
+     */
+    schedule: () => get('buddy/schedule'),
+    offerDay: (fields) => post('buddy/schedule/offers', fields),
+    /* accept | decline | withdraw */
+    actOnOffer: (id, action) => patch(`buddy/schedule/offers/${id}`, { action }),
+    dropDay: (weekday) => del(`buddy/schedule/days/${weekday}`),
+    /* keep_commitment | extras_optional | match_buddy */
+    setSurplus: (mode) => put('buddy/schedule/surplus', { mode }),
   },
 
   constraints: {
