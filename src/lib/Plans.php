@@ -217,8 +217,50 @@ final class Plans
             return ['error' => 'User has no availability grid; onboarding is incomplete.'];
         }
 
+        /*
+         * Overlay the buddy schedule (SPEC-coaching §10.1a).
+         *
+         * A shared day replaces whatever the individual grid said, including a `no`: agreeing
+         * to a Wednesday you never offered has to make Wednesday trainable, or Safety rejects
+         * the plan the agreement was for. The shared day brings its own minutes and access,
+         * because the grid has nothing useful to say about a day that was never offered.
+         *
+         * The grid's other columns are kept as-is. `equipment` and `is_chaotic` are facts
+         * about the user's week that a shared day does not change, and `preferred_time` is a
+         * preference rather than a constraint.
+         *
+         * Done here rather than inside BuddySchedule::effective because the prompt needs those
+         * extra columns and the validator does not. effective() stays the narrow authority on
+         * "can they train, how long, where"; this is the prompt's richer view of the same
+         * answer, and the two agree by construction because this reads from that.
+         */
+        $pair     = BuddySchedule::activePair($userId);
+        $pairId   = $pair === null ? null : (int) $pair['id'];
+        $effective = BuddySchedule::effective($userId, $pairId);
+
+        foreach ($availability as &$a) {
+            $wd  = (int) $a['weekday'];
+            $eff = $effective[$wd] ?? null;
+            if ($eff === null) {
+                continue;
+            }
+            $a['can_train'] = $eff['can_train'];
+            $a['minutes']   = $eff['minutes'];
+            $a['access']    = $eff['access'];
+            // What the prompt renders as "shared with their buddy".
+            $a['shared']    = (bool) $eff['shared'];
+        }
+        unset($a);
+
+        /*
+         * How many committed sessions this user should get, and where the surplus comes from
+         * (§10.3b). Unpaired this is simply their stated count.
+         */
+        $target = BuddySchedule::committedTarget($userId, $pairId);
+
         return [
             'error'        => null,
+            'committed_target' => $target,
             'user'         => $user,
             'profile'      => $profile,
             'goal'         => $goal,
@@ -487,6 +529,9 @@ final class Plans
             if ($a['access'])  { $line .= ", {$a['access']}"; }
             if ($a['preferred_time']) { $line .= ", prefers {$a['preferred_time']}"; }
             if ((int) $a['is_chaotic'] === 1) { $line .= ' [usually chaotic]'; }
+            // §10.1a: a day the pair agreed to train together. Marked so the model puts a
+            // committed session there rather than treating it as one option among seven.
+            if (($a['shared'] ?? false) === true) { $line .= ' [SHARED with their buddy]'; }
             if ($a['equipment']) {
                 $eq = json_decode((string) $a['equipment'], true);
                 if (is_array($eq) && $eq !== []) {
@@ -567,7 +612,14 @@ final class Plans
 
         $out[] = '';
         $out[] = '=== HOW TO BUILD THE WEEK ===';
-        $out[] = self::rules((int) $p['committed_days_per_week']);
+        /*
+         * The committed count the model should hit, which is not always the stated one.
+         *
+         * §10.3b: a paired user whose shared days do not cover their commitment CHOOSES what
+         * happens to the difference, and two of the three answers lower the committed count.
+         * Passing the stated figure regardless would produce a plan the validator rejects.
+         */
+        $out[] = self::rules((int) ($ctx['committed_target']['committed'] ?? $p['committed_days_per_week']));
 
         $out[] = '';
         $out[] = '=== EXERCISE VOCABULARY ===';
@@ -783,19 +835,70 @@ final class Plans
         }
 
         /*
-         * The buddy block used to sit here, telling the model to make the core block
-         * identical across a pair (§10.2a).
+         * What a shared day means, and deliberately nothing more.
          *
-         * Removed along with the core_emphasis dial: core work is the app's business, and
-         * coordinating it across two users is a claim this code cannot keep. Generation is
-         * still per-user, so "identical between them" was an instruction the model had no way
-         * to honour — it can see one user, and it cannot know what the other was told. It
-         * read as synced without being synced.
+         * Generation is still per-user (§10.6 is unbuilt), so this cannot promise the two
+         * sessions match. What it CAN do is get both people in the gym on the same days, which
+         * is where the accountability comes from — and tell the model that a shared day is not
+         * a free choice among seven.
          *
-         * §10.6 is where this belongs: generate the shared skeleton once for the PAIR, then
-         * each user's prescriptions against it. Until that exists, the honest position is
-         * that pairing grants visibility and a shared day list, and says nothing about the
-         * inside of a session. $ctx['buddy'] is still gathered, for whoever builds that.
+         * §10.0 is the licence for the last line: where individual optimisation and staying
+         * synced conflict, the pairing wins. Without saying so, the model will move a session
+         * off a shared day whenever the split would be marginally better, which quietly
+         * defeats the whole feature.
+         */
+        if ($ctx['buddy'] !== null) {
+            $shared = [];
+            foreach ($ctx['availability'] as $a) {
+                if (($a['shared'] ?? false) === true) {
+                    $shared[] = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][(int) $a['weekday']];
+                }
+            }
+
+            $out[] = '';
+            $out[] = '=== TRAINING BUDDY ===';
+            $out[] = "They train with {$ctx['buddy']['buddy_name']}.";
+
+            if ($shared !== []) {
+                $out[] = 'Days marked SHARED are days the two of them train together: '
+                       . implode(', ', $shared) . '.';
+                $out[] = 'PUT A COMMITTED SESSION ON EVERY SHARED DAY. Being there at the same '
+                       . 'time as their buddy is the point, and it outranks a marginally '
+                       . 'better split. Do not move work off a shared day to tidy the week.';
+                $out[] = 'You are writing one plan, for this user only. Do not describe what '
+                       . 'their buddy is doing, and do not assume the two sessions match.';
+            } else {
+                $out[] = 'They have no shared days agreed yet, so plan this week normally.';
+            }
+
+            $surplus = $ctx['committed_target'] ?? [];
+            if (($surplus['surplus'] ?? 0) > 0 && ($surplus['mode'] ?? null) !== null) {
+                $out[] = '';
+                $out[] = match ((string) $surplus['mode']) {
+                    // §10.3b, in the model's terms rather than the schema's.
+                    'keep_commitment' => 'Beyond the shared days they still want their full '
+                        . 'committed count, so fill the rest from their own available days.',
+                    'extras_optional' => 'Beyond the shared days, any further sessions are '
+                        . 'OPTIONAL: is_committed false, no adherence cost.',
+                    'match_buddy'     => 'They want their week to match the shared days only. '
+                        . 'Do not add extra training days beyond them.',
+                    default           => '',
+                };
+            }
+        }
+
+        /*
+         * The old buddy block told the model to make the core block identical across a pair
+         * (§10.2a).
+         *
+         * That part stays removed. Coordinating the inside of a session across two users is a
+         * claim this code cannot keep while generation is per-user: the model sees one person
+         * and cannot know what the other was told, so "identical between them" would agree
+         * only by coincidence.
+         *
+         * §10.6 is where it belongs — generate the shared skeleton once for the PAIR, then
+         * each user's prescriptions against it. Until then the block above says only what is
+         * true: same days, nothing about the sessions.
          */
 
         if ($ctx['history'] === []) {

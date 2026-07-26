@@ -546,15 +546,28 @@ t('the intersection is withheld until the pair is ACTIVE', function () {
 // ---------------------------------------------------------------------------
 echo "\n6. generation is not claiming to be synced\n";
 
-t('the shared-core prompt instruction is gone', function () {
+t('the buddy prompt block claims days, not sessions', function () {
     /*
-     * It told the model to make core blocks identical across a pair. Generation runs per-user
-     * and cannot know what the other was told, so it read as synced without being synced.
-     * §10.6 is where that belongs: one skeleton per pair, then each user's prescriptions.
+     * There IS a buddy block again, and that is correct — it tells the model to put a committed
+     * session on every shared day (§10.0: the pairing outranks a marginally better split).
+     * What it must not do is claim the two sessions match, which generation cannot deliver
+     * while it runs per-user: the model sees one person and cannot know what the other was
+     * told, so "identical between them" would agree only by coincidence.
+     *
+     * The earlier version of this test asserted the whole block was ABSENT, which was right
+     * when it had just been deleted and became wrong the moment an honest version came back.
+     * Asserting the claim rather than the section is what actually protects §10.6.
+     *
+     * Checked against the source here because the rendered form needs a paired fixture with a
+     * goal and a grid; bin/test-buddy-schedule.php does that properly against both halves of
+     * the real prompt.
      */
     $src = (string) file_get_contents(YK_SRC . '/lib/Plans.php');
-    return !str_contains($src, '=== TRAINING BUDDY ===')
-        ?: 'the buddy prompt block is still emitted';
+    if (!str_contains($src, 'PUT A COMMITTED SESSION ON EVERY SHARED DAY')) {
+        return 'the buddy block no longer insists on the shared days';
+    }
+    return str_contains($src, 'do not assume the two sessions match')
+        ?: 'the buddy block does not warn against assuming synced sessions';
 });
 
 t('shared_skeleton_key is still unwritten, and nothing pretends otherwise', function () {

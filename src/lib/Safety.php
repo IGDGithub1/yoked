@@ -480,7 +480,25 @@ final class Safety
         if ($row === null) {
             return [];
         }
-        $want = (int) $row['committed_days_per_week'];
+
+        /*
+         * The target, not the stated count (SPEC-coaching §10.3b).
+         *
+         * A paired user whose shared days do not cover their commitment chooses what happens
+         * to the difference, and two of the three answers lower the committed count on purpose.
+         * Checking against the stated figure would reject a plan that correctly honours the
+         * choice the user made.
+         *
+         * Unpaired, or paired with no surplus, this returns the stated count unchanged — so
+         * the rule that "under-prescribing quietly shrinks their week" still holds everywhere
+         * it was holding before. What changed is that shrinking is now something the user can
+         * ASK for, rather than something the app does behind their back.
+         */
+        $pair = BuddySchedule::activePair($userId);
+        $want = (int) BuddySchedule::committedTarget(
+            $userId,
+            $pair === null ? null : (int) $pair['id']
+        )['committed'];
 
         $committed = 0;
         foreach ($plan['sessions'] ?? [] as $s) {

@@ -205,3 +205,169 @@ $router->add('PATCH', 'buddy', function (): void {
     Response::json(['ok' => true, 'status' => $r['status'],
                     'buddy' => Buddies::forUser($userId)]);
 });
+
+/* ---- the buddy schedule (§10.1a, §10.3a, §10.3b) --------------------------- */
+
+/**
+ * GET /api/buddy/schedule — the agreed days, the overlap analysis, and any open offers.
+ *
+ * Separate from GET /api/buddy because it is heavier: two availability grids, the agreed
+ * schedule, pending offers both ways, and the surplus question. The pairing card reads the
+ * lighter endpoint; only the schedule panel asks for this.
+ */
+$router->add('GET', 'buddy/schedule', function (): void {
+    $user   = Auth::require();
+    $userId = (int) $user['id'];
+
+    $pair = BuddySchedule::activePair($userId);
+    if ($pair === null) {
+        // Not an error: most users have no buddy, and the client renders nothing.
+        Response::json(['schedule' => null]);
+    }
+
+    $pairId  = (int) $pair['id'];
+    $otherId = (int) $pair['user_lo'] === $userId
+        ? (int) $pair['user_hi']
+        : (int) $pair['user_lo'];
+
+    $analysis = BuddySchedule::analyse($userId, $otherId, $pairId);
+
+    Response::json([
+        'schedule' => [
+            'agreed'    => BuddySchedule::agreedDays($pairId),
+            'day_names' => BuddySchedule::DAY_NAMES,
+            /*
+             * The natural overlap and each user's own days, so the negotiation UI can show
+             * what there is to work with. Not a privacy leak: they are already paired, and
+             * §10.3a cannot be explained without saying which days each person has free.
+             */
+            'overlap'   => $analysis['overlap'],
+            'mine_only' => $analysis['a_only'],
+            'theirs_only' => $analysis['b_only'],
+            'needed'    => $analysis['needed'],
+            // Drives the "you only overlap on Saturday, can either of you move?" prompt.
+            'thin'      => $analysis['thin'],
+            'offers'    => BuddySchedule::offers($userId),
+            // §10.3b. `needs_choice` is what the UI prompts on.
+            'surplus'   => BuddySchedule::committedTarget($userId, $pairId),
+        ],
+    ]);
+});
+
+/**
+ * POST /api/buddy/schedule/offers — offer to train on a day (§10.3a).
+ *
+ * Body: {weekday, minutes?, access?}
+ *
+ * The offerer states their own minutes and access, because the app has no other source for
+ * them: their grid says they cannot train that day. Offering a day the other person already
+ * offered ACCEPTS it, so two people reaching for the same compromise resolve rather than
+ * queueing two offers neither can action.
+ */
+$router->add('POST', 'buddy/schedule/offers', function (): void {
+    $user = Auth::require();
+    $b    = Response::body();
+
+    $weekday = Validate::intRange($b['weekday'] ?? null, 1, 7);
+    if ($weekday === null) {
+        Response::error('Which day?', 422);
+    }
+
+    $r = BuddySchedule::offerDay(
+        (int) $user['id'],
+        $weekday,
+        Validate::intRange($b['minutes'] ?? null, 10, 480),
+        Validate::enum($b['access'] ?? null, ['full_gym', 'home_gym', 'bodyweight', 'outdoors'])
+    );
+    if (!$r['ok']) {
+        Response::error((string) $r['error'], 422);
+    }
+
+    Response::json(['ok' => true, 'status' => $r['status']], 201);
+});
+
+/**
+ * PATCH /api/buddy/schedule/offers/{id} — answer or withdraw an offer.
+ *
+ * Body: {action: accept | decline | withdraw}
+ *
+ * Only the person who was OFFERED to can accept; only the offerer can withdraw. Both checks
+ * live in BuddySchedule so they hold for every caller.
+ */
+$router->add('PATCH', 'buddy/schedule/offers/{id}', function (array $p): void {
+    $user = Auth::require();
+
+    $offerId = Validate::id($p['id'] ?? null);
+    if ($offerId === null) {
+        Response::error('Which offer?', 422);
+    }
+
+    $action = Validate::enum(
+        Response::body()['action'] ?? null,
+        ['accept', 'decline', 'withdraw']
+    );
+    if ($action === null) {
+        Response::error('Send an action: accept, decline or withdraw.', 422);
+    }
+
+    $userId = (int) $user['id'];
+    $r = match ($action) {
+        'accept'   => BuddySchedule::respondToOffer($userId, $offerId, true),
+        'decline'  => BuddySchedule::respondToOffer($userId, $offerId, false),
+        'withdraw' => BuddySchedule::withdrawOffer($userId, $offerId),
+    };
+
+    if (!$r['ok']) {
+        Response::error((string) $r['error'], 422);
+    }
+
+    Response::json(['ok' => true, 'status' => $r['status']]);
+});
+
+/**
+ * DELETE /api/buddy/schedule/days/{weekday} — drop an agreed day.
+ *
+ * Either side, and no distinction between a natural overlap and a negotiated day: both are
+ * days the pair currently trains together, and either user can say they cannot make it any
+ * more. Re-seeding restores a natural overlap if both grids still allow it, which is correct
+ * — that is what their own grids say.
+ */
+$router->add('DELETE', 'buddy/schedule/days/{weekday}', function (array $p): void {
+    $user = Auth::require();
+
+    $weekday = Validate::intRange($p['weekday'] ?? null, 1, 7);
+    if ($weekday === null) {
+        Response::error('Which day?', 422);
+    }
+
+    $r = BuddySchedule::dropDay((int) $user['id'], $weekday);
+    if (!$r['ok']) {
+        Response::error((string) $r['error'], 422);
+    }
+
+    Response::json(['ok' => true, 'status' => $r['status']]);
+});
+
+/**
+ * PUT /api/buddy/schedule/surplus — answer the surplus question (§10.3b).
+ *
+ * Body: {mode: keep_commitment | extras_optional | match_buddy}
+ *
+ * Per-user, not per-pair: two people in one pair will usually answer differently, because the
+ * 5-day user has a surplus to think about and the 3-day user does not.
+ */
+$router->add('PUT', 'buddy/schedule/surplus', function (): void {
+    $user = Auth::require();
+
+    $mode = Validate::str(Response::body()['mode'] ?? null, 1, 40);
+    if ($mode === null) {
+        Response::error('Pick one of the three options.', 422);
+    }
+
+    $r = BuddySchedule::setSurplusMode((int) $user['id'], $mode);
+    if (!$r['ok']) {
+        Response::error((string) $r['error'], 422);
+    }
+
+    Response::json(['ok' => true, 'mode' => $r['status']]);
+});
