@@ -38,6 +38,7 @@ require YK_SRC . '/lib/ConstraintLabel.php';
 require YK_SRC . '/lib/Settings.php';
 require YK_SRC . '/lib/Drift.php';         // BuddyAbsence reads lastLoggedDate
 require YK_SRC . '/lib/BuddyAbsence.php';  // Plans::gatherContext reads it
+require YK_SRC . '/lib/BuddySkeleton.php';  // Plans::gatherContext and Plans::persist read it
 
 $keep = in_array('--keep', array_slice($argv, 1), true);
 
@@ -580,11 +581,15 @@ t('shared days are marked in the availability block', function () {
         ?: 'the user prompt does not insist on the shared days';
 });
 
-t('the prompt does not claim the sessions match', function () {
+t('the LEADER is not told the sessions match', function () {
     /*
-     * §10.6 is unbuilt, so generation cannot coordinate the inside of a session. An
-     * instruction to match core blocks was removed for exactly this reason and must not creep
-     * back through the shared-day block.
+     * §10.6. The follower is told to match, and that is now true, because the buddy's plan is
+     * written and being read back. The LEADER is a different case: nothing exists to match yet,
+     * so any claim that the sessions agree would be a guess dressed as an instruction.
+     *
+     * This is the same test that used to assert the claim was absent unconditionally. That was
+     * right while §10.6 was unbuilt; the invariant now is narrower and this fixture is the
+     * leading case (neither user has a plan for the week).
      */
     /*
      * Checked against the RENDERED prompt, not the source.
@@ -617,13 +622,19 @@ t('the prompt does not claim the sessions match', function () {
     $all = (string) $sys->invoke(null, $ctx)
          . (string) $prompt->invoke(null, $ctx, date('Y-m-d', strtotime('next monday')), []);
 
+    // No plan exists for either user, so this user leads and there is no skeleton to follow.
+    if (($ctx['skeleton'] ?? null) !== null) {
+        return 'a skeleton appeared for a pair where neither user has a plan';
+    }
+
     foreach (['identical between them', 'same exercises, same sets',
-              'same sets, same reps'] as $claim) {
+              'SHARED SESSIONS WITH'] as $claim) {
         if (str_contains($all, $claim)) {
-            return "the prompt claims synced sessions: \"{$claim}\"";
+            return "the leader is told the sessions are synced: \"{$claim}\"";
         }
     }
-    return true;
+    return str_contains($all, 'do not assume the two sessions match')
+        ?: 'the leader is not warned against assuming the sessions match';
 });
 
 // ---------------------------------------------------------------------------
@@ -1410,6 +1421,394 @@ t('an absence never rewrites the buddy schedule', function () {
     BuddyAbsence::record($b, 'travel', nextWeek(), null);
     return BuddySchedule::agreedDays($pairId) === [1, 3]
         ?: 'the agreed days are ' . implode(',', BuddySchedule::agreedDays($pairId));
+});
+
+// ---------------------------------------------------------------------------
+echo "\n11. the shared skeleton (§10.6)\n";
+
+/**
+ * Write a plan for a user with one session per given weekday.
+ *
+ * Direct inserts rather than Plans::generateWeek, which would cost a model call per fixture and
+ * take minutes. What is under test is the READING of a written plan, so a written plan is all
+ * that is needed — and hand-writing it is the only way to assert on a KNOWN shape.
+ */
+function leaderPlan(int $userId, string $week, array $days, bool $committed = true): int
+{
+    $planId = (int) DB::insert(
+        'INSERT INTO plan_versions (user_id, week_start, version, reason, summary)
+         VALUES (?, ?, 1, "initial", "Seeded for skeleton tests.")',
+        [$userId, $week]
+    );
+
+    // Two real system exercises with distinct patterns, plus a core one. Looked up rather than
+    // inserted: the seeded catalogue is what production reads, and a fixture exercise would not
+    // exercise the JOIN in blockShape.
+    $squat = DB::one('SELECT id FROM exercises WHERE pattern = "squat"  AND is_system = 1 LIMIT 1');
+    $hinge = DB::one('SELECT id FROM exercises WHERE pattern = "hinge"  AND is_system = 1 LIMIT 1');
+    $core  = DB::one('SELECT id FROM exercises WHERE category = "core" AND is_system = 1 LIMIT 1');
+    if ($squat === null || $hinge === null || $core === null) {
+        throw new RuntimeException('the exercise catalogue is not seeded');
+    }
+
+    foreach ($days as $i => $weekday) {
+        $date = date('Y-m-d', strtotime($week . ' +' . ($weekday - 1) . ' days'));
+        $sid = (int) DB::insert(
+            'INSERT INTO prescribed_sessions
+             (plan_version_id, session_date, session_type, focus, is_committed,
+              target_minutes, location, warmup_minutes, warmup_required, sort_order)
+             VALUES (?, ?, "strength", "lower", ?, 60, "full_gym", 10, 1, ?)',
+            [$planId, $date, $committed ? 1 : 0, $i]
+        );
+        // Order matters: squat then hinge is part of what the follower must reproduce.
+        DB::run(
+            'INSERT INTO prescribed_exercises (session_id, exercise_id, block, sort_order, sets, target_reps)
+             VALUES (?, ?, "main", 0, 4, "8")',
+            [$sid, (int) $squat['id']]
+        );
+        DB::run(
+            'INSERT INTO prescribed_exercises (session_id, exercise_id, block, sort_order, sets, target_reps)
+             VALUES (?, ?, "main", 1, 3, "10")',
+            [$sid, (int) $hinge['id']]
+        );
+        DB::run(
+            'INSERT INTO prescribed_exercises (session_id, exercise_id, block, sort_order, sets, target_seconds)
+             VALUES (?, ?, "core", 0, 3, 45)',
+            [$sid, (int) $core['id']]
+        );
+    }
+    return $planId;
+}
+
+t('with no buddy plan written, there is nothing to follow', function () {
+    // The leading case. Going first is not a mode; it is the absence of a skeleton.
+    $a = seedUser('skel_lead_a', 2);
+    $b = seedUser('skel_lead_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    return BuddySkeleton::toFollow($a, nextWeek()) === null
+        ?: 'a skeleton was returned for a pair with no plans';
+});
+
+t('an unpaired user never has a skeleton', function () {
+    $solo = seedUser('skel_solo', 3);
+    grid($solo, [1 => [60, 'full_gym']]);
+    return BuddySkeleton::toFollow($solo, nextWeek()) === null
+        ?: 'an unpaired user was given a skeleton to follow';
+});
+
+t('the follower reads the shared days of the leader plan', function () {
+    /*
+     * §10.6. The whole point: the second user to generate sees the first user's written sessions
+     * on the days they share.
+     */
+    $a = seedUser('skel_read_a', 2);
+    $b = seedUser('skel_read_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    $week = nextWeek();
+    leaderPlan($a, $week, [1, 3]);
+
+    $skel = BuddySkeleton::toFollow($b, $week);
+    if ($skel === null) {
+        return 'the follower sees no skeleton although the leader has a plan';
+    }
+    if (count($skel['days']) !== 2) {
+        return 'the skeleton covers ' . count($skel['days']) . ' days, expected 2';
+    }
+
+    $mon = date('Y-m-d', strtotime($week));
+    $day = $skel['days'][$mon] ?? null;
+    if ($day === null) {
+        return 'the shared Monday is missing from the skeleton';
+    }
+    if ($day['session_type'] !== 'strength' || $day['focus'] !== 'lower') {
+        return "the session shape did not survive: {$day['session_type']}/{$day['focus']}";
+    }
+    // Pattern AND order, which is the part that lets a mismatched pair train side by side.
+    $patterns = array_column($day['main'], 'pattern');
+    if ($patterns !== ['squat', 'hinge']) {
+        return 'the main patterns are ' . implode(',', $patterns) . ', expected squat,hinge';
+    }
+    return count($day['core']) === 1
+        ?: 'the core block did not come through';
+});
+
+t('a solo day of the leader is NOT in the skeleton', function () {
+    /*
+     * §10.1: only the shared days are shared. A day the leader trains alone is theirs to shape,
+     * and copying it would sync a session the two of them are not attending together.
+     */
+    $a = seedUser('skel_own_a', 3);
+    $b = seedUser('skel_own_b', 2);
+    // A trains Mon/Wed/Fri, B only Mon/Wed, so Friday is A's alone.
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym'], 5 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    $week = nextWeek();
+    leaderPlan($a, $week, [1, 3, 5]);
+
+    $skel = BuddySkeleton::toFollow($b, $week);
+    if ($skel === null) {
+        return 'no skeleton at all';
+    }
+    $friday = date('Y-m-d', strtotime($week . ' +4 days'));
+    return !isset($skel['days'][$friday])
+        ?: 'the leader own Friday leaked into the shared skeleton';
+});
+
+t('an OPTIONAL session of the leader is not a shared skeleton', function () {
+    /*
+     * §3.3a. An optional extra is a bonus they may or may not do. Building the pair's shared
+     * session around it would mean matching something that might never happen.
+     */
+    $a = seedUser('skel_opt_a', 2);
+    $b = seedUser('skel_opt_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    $week = nextWeek();
+    leaderPlan($a, $week, [1, 3], false);   // every session optional
+
+    return BuddySkeleton::toFollow($b, $week) === null
+        ?: 'an optional session became a shared skeleton';
+});
+
+t('a superseded plan is not followed', function () {
+    /*
+     * A superseded version is what the buddy USED to be doing. Matching a plan that has since
+     * been revised would put the pair back out of step, which is the opposite of the point.
+     */
+    $a = seedUser('skel_sup_a', 2);
+    $b = seedUser('skel_sup_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    $week   = nextWeek();
+    $planId = leaderPlan($a, $week, [1, 3]);
+    DB::run('UPDATE plan_versions SET superseded_at = NOW() WHERE id = ?', [$planId]);
+
+    return BuddySkeleton::toFollow($b, $week) === null
+        ?: 'a superseded plan was followed';
+});
+
+t('an away buddy leaves nothing to follow', function () {
+    /*
+     * §10.5. The week is solo by construction, so a skeleton would contradict the plan being
+     * generated. Their plan may well exist — they wrote it before declaring.
+     */
+    $a = seedUser('skel_away_a', 2);
+    $b = seedUser('skel_away_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    $week = nextWeek();
+    leaderPlan($a, $week, [1, 3]);
+    if (BuddySkeleton::toFollow($b, $week) === null) {
+        return 'no skeleton even before the absence';
+    }
+
+    BuddyAbsence::record($a, 'travel', $week, null);
+    return BuddySkeleton::toFollow($b, $week) === null
+        ?: 'an away buddy still supplied a skeleton';
+});
+
+t('persisting a plan stamps the shared days, and only those', function () {
+    $a = seedUser('skel_stamp_a', 3);
+    $b = seedUser('skel_stamp_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym'], 5 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    $pairId = pairUp($a, $b);
+
+    $week   = nextWeek();
+    $planId = leaderPlan($a, $week, [1, 3, 5]);
+    $n = BuddySkeleton::stamp($a, $planId, $week);
+    if ($n !== 2) {
+        return "{$n} sessions stamped, expected 2 (Mon and Wed, not the solo Fri)";
+    }
+
+    $mon = date('Y-m-d', strtotime($week));
+    $row = DB::one(
+        'SELECT shared_skeleton_key FROM prescribed_sessions
+         WHERE plan_version_id = ? AND session_date = ?',
+        [$planId, $mon]
+    );
+    if (($row['shared_skeleton_key'] ?? null) !== BuddySkeleton::keyFor($pairId, $mon)) {
+        return 'the Monday key is not the pair key for that date';
+    }
+
+    $friday = date('Y-m-d', strtotime($week . ' +4 days'));
+    $solo = DB::one(
+        'SELECT shared_skeleton_key FROM prescribed_sessions
+         WHERE plan_version_id = ? AND session_date = ?',
+        [$planId, $friday]
+    );
+    return ($solo['shared_skeleton_key'] ?? null) === null
+        ?: 'the solo Friday was stamped as shared';
+});
+
+t('BOTH halves of a pair end up on the same key', function () {
+    /*
+     * This is what makes the link real rather than decorative: adherence can tell a genuinely
+     * shared session from two people who happened to train the same day.
+     */
+    $a = seedUser('skel_both_a', 2);
+    $b = seedUser('skel_both_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    $week = nextWeek();
+    $pa = leaderPlan($a, $week, [1, 3]);
+    $pb = leaderPlan($b, $week, [1, 3]);
+    BuddySkeleton::stamp($a, $pa, $week);
+    BuddySkeleton::stamp($b, $pb, $week);
+
+    $mon  = date('Y-m-d', strtotime($week));
+    $keys = DB::all(
+        'SELECT DISTINCT shared_skeleton_key AS k FROM prescribed_sessions
+         WHERE plan_version_id IN (?, ?) AND session_date = ?',
+        [$pa, $pb, $mon]
+    );
+    if (count($keys) !== 1) {
+        return 'the two plans carry ' . count($keys) . ' distinct keys for the shared Monday';
+    }
+    return $keys[0]['k'] !== null ?: 'both sides are unstamped';
+});
+
+t('an unpaired plan is never stamped', function () {
+    $solo = seedUser('skel_nostamp', 3);
+    grid($solo, [1 => [60, 'full_gym']]);
+    $planId = leaderPlan($solo, nextWeek(), [1]);
+
+    if (BuddySkeleton::stamp($solo, $planId, nextWeek()) !== 0) {
+        return 'stamp() wrote something for an unpaired user';
+    }
+    $row = DB::one(
+        'SELECT COUNT(*) AS n FROM prescribed_sessions
+         WHERE plan_version_id = ? AND shared_skeleton_key IS NOT NULL',
+        [$planId]
+    );
+    return (int) ($row['n'] ?? 0) === 0
+        ?: 'a solo plan has skeleton keys';
+});
+
+t('the follower is told to match the shape and decide the loads', function () {
+    /*
+     * The failure modes run in both directions, so both are asserted. Told only "match your
+     * buddy", a model copies the loads too — which is exactly what §10.1 keeps individual, and
+     * what would put a beginner under an experienced lifter's working weight.
+     */
+    $a = seedUser('skel_prm_a', 2);
+    $b = seedUser('skel_prm_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    DB::run(
+        'INSERT INTO goals (user_id, primary_goal, success_statement, requested_timeline,
+                            horizon_weeks, scale_vs_feel, status)
+         VALUES (?, "lose_fat", "x", "16_weeks", 16, "both", "active")', [$b]
+    );
+    pairUp($a, $b);
+
+    $week = nextWeek();
+    leaderPlan($a, $week, [1, 3]);
+
+    $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+    $gather->setAccessible(true);
+    $ctx = $gather->invoke(null, $b, $week);
+    if (($ctx['error'] ?? null) !== null) {
+        return 'context failed: ' . (string) $ctx['error'];
+    }
+    if (($ctx['skeleton'] ?? null) === null) {
+        return 'gatherContext did not pick up the skeleton';
+    }
+
+    $prompt = new ReflectionMethod(Plans::class, 'userPrompt');
+    $prompt->setAccessible(true);
+    $text = (string) $prompt->invoke(null, $ctx, $week, []);
+
+    foreach (['SHARED SESSIONS WITH', 'COPY EXACTLY', 'COPY THE CORE BLOCK IN FULL',
+              'DECIDE FOR THEM', 'DIVERGE WHERE YOU MUST'] as $needed) {
+        if (!str_contains($text, $needed)) {
+            return "the follower block is missing \"{$needed}\"";
+        }
+    }
+    // The leading-case warning must be gone now that there IS something to match.
+    if (str_contains($text, 'do not assume the two sessions match')) {
+        return 'the follower is still told not to assume the sessions match';
+    }
+    // The patterns must be named, not just gestured at.
+    return str_contains($text, 'squat') && str_contains($text, 'hinge')
+        ?: 'the skeleton block does not name the movement patterns';
+});
+
+t('divergence on a hard constraint is explicitly allowed', function () {
+    /*
+     * §10.2. A skeleton must never be able to talk somebody into a movement they must not do.
+     * Belt and braces: the follower's plan is validated on its own regardless, but the prompt
+     * has to SAY that changing an exercise is expected rather than a failure, or the model
+     * treats matching as the harder requirement.
+     */
+    $a = seedUser('skel_div_a', 2);
+    $b = seedUser('skel_div_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    DB::run(
+        'INSERT INTO goals (user_id, primary_goal, success_statement, requested_timeline,
+                            horizon_weeks, scale_vs_feel, status)
+         VALUES (?, "lose_fat", "x", "16_weeks", 16, "both", "active")', [$b]
+    );
+    pairUp($a, $b);
+
+    // B cannot squat, and the leader's shared day opens with one.
+    constrain($b, 'movement', 'hard', 'squat', 'knee surgery');
+
+    $week = nextWeek();
+    leaderPlan($a, $week, [1, 3]);
+
+    $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+    $gather->setAccessible(true);
+    $ctx = $gather->invoke(null, $b, $week);
+
+    $sys = new ReflectionMethod(Plans::class, 'systemPrompt');
+    $sys->setAccessible(true);
+    $system = (string) $sys->invoke(null, $ctx);
+
+    $prompt = new ReflectionMethod(Plans::class, 'userPrompt');
+    $prompt->setAccessible(true);
+    $text = (string) $prompt->invoke(null, $ctx, $week, []);
+
+    /*
+     * The user's own limit is stated BEFORE the skeleton asks them to match anything.
+     *
+     * Across the two prompts rather than within one: constraints are in the SYSTEM prompt (the
+     * cached prefix, which is where a rarely-changing hard limit belongs) and the skeleton is in
+     * the USER prompt, which is per-request. The system prompt precedes the user prompt in the
+     * request, so the ordering is structural. An earlier version of this test measured strpos
+     * within userPrompt alone and reported a violation that could not happen.
+     */
+    if (!str_contains($system, 'HARD CONSTRAINTS')) {
+        return 'the hard constraint is not in the system prompt';
+    }
+    if (!str_contains($system, 'squat')) {
+        return 'the squat limit did not reach the prompt at all';
+    }
+    if (str_contains($system, 'SHARED SESSIONS WITH')) {
+        return 'the skeleton leaked into the cached system prefix';
+    }
+    if (!str_contains($text, 'SHARED SESSIONS WITH')) {
+        return 'no skeleton block in the user prompt';
+    }
+    return str_contains($text, 'hard constraints forbid')
+        ?: 'nothing tells the model it may diverge for a hard constraint';
 });
 
 // ---------------------------------------------------------------------------

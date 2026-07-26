@@ -2508,9 +2508,10 @@ await check('a pending buddy invitation is shown, with what accepting grants', a
 
 await check('the page itself does not promise synced weeks', async () => {
   /*
-   * The subtitle said "lets the two of you sync your weeks", which is the same overpromise the
-   * buddy card is checked for below and the same one the prompt line was removed for. §10.6
-   * generates one skeleton per pair; until that exists, nothing coordinates a session.
+   * The subtitle said "lets the two of you sync your weeks". Still an overpromise even with
+   * §10.6 built: what gets matched is the SHARED days, and a pair with two common days out of
+   * five has three individual sessions each. "Sync your weeks" says the whole week moves, which
+   * would make the individual grid look like a formality when it is the fallback (§10.5).
    */
   const text = (await fr.locator('.wrap').first().innerText()).toLowerCase()
   return !/sync your week/.test(text)
@@ -2518,19 +2519,26 @@ await check('the page itself does not promise synced weeks', async () => {
     : 'the friends page still promises synced weeks'
 })
 
-await check('the card does not claim the sessions will be identical', async () => {
+await check('the card promises a matched session, never matched weights', async () => {
   /*
-   * 10.6 is not built: generation still runs per-user, so nothing coordinates the inside of a
-   * session. Copy promising a shared workout would be the first thing a real pair noticed was
-   * false, and the prompt line that implied it was removed for the same reason.
+   * 10.6 IS built now, so the honest claim has moved: the two shared-day sessions really are
+   * built to the same shape. What must still never be implied is the same LOADS (10.1) — a
+   * beginner who reads "the same workout" and then finds their partner's working weight on the
+   * bar is the exact failure this copy prevents.
+   *
+   * This test used to assert the whole claim was absent, which was right while generation had
+   * nothing to coordinate against.
    */
   const text = (await fr.locator('.card', { hasText: /training buddy/i }).first().innerText())
     .toLowerCase()
-  const lies = ['same workout', 'same session', 'identical', 'same exercises', 'synced']
-  for (const lie of lies) {
+  for (const lie of ['same weights', 'same reps', 'identical']) {
     if (text.includes(lie)) return `the card overpromises: "${lie}"`
   }
-  return true
+  // "same kind of session" is the honest version; a bare "same workout" is not.
+  if (/same workout/.test(text)) return 'the card claims the same workout, not the same shape'
+  return /same kind of session/.test(text)
+    ? true
+    : `the card does not say the sessions are matched: ${text}`
 })
 
 await check('accepting pairs them and the state is read from the server', async () => {
@@ -2620,21 +2628,25 @@ await check('a natural overlap says so, rather than claiming someone conceded', 
   return /both free/.test(text) ? true : `the origin is not shown: ${text}`
 })
 
-await check('the card does not claim the workouts will match', async () => {
+await check('the schedule card says what is matched and what stays yours', async () => {
   /*
-   * 10.6 is unbuilt: generation still runs per-user, so a shared day means both people are in
-   * the gym, never that they are doing the same session. This is the promise a real pair would
-   * catch within a week, so it is asserted on the page as well as in the prompt.
+   * The same moved goalpost as above, on the schedule card. 10.6 delivers the shape — type,
+   * focus, movement order, core block — and 10.1 keeps the numbers individual. Both halves have
+   * to be on screen: the first is the reason to pair, the second is what stops a beginner
+   * loading the bar to their partner's weight.
    */
   const card = fr.locator('.card', { hasText: /days you train together/i }).first()
   const text = (await card.innerText()).toLowerCase()
-  for (const lie of ['same workout', 'same session', 'same exercises', 'identical', 'synced']) {
+  for (const lie of ['same weights', 'same reps', 'identical']) {
     if (text.includes(lie)) return `the card overpromises: "${lie}"`
   }
-  // And it says the honest version out loud.
-  return /your own/.test(text)
+  if (!/same kind of session|same core/.test(text)) {
+    return `the card does not say the sessions are matched: ${text}`
+  }
+  // And the numbers are still individual, said out loud.
+  return /still yours|your own/.test(text)
     ? true
-    : `the card does not say the exercises stay individual: ${text}`
+    : `the card does not say the loads stay individual: ${text}`
 })
 
 await check('a thin overlap asks the pair to compromise', async () => {

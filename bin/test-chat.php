@@ -37,6 +37,7 @@ require YK_SRC . '/lib/Drift.php';
 require YK_SRC . '/lib/Nudge.php';
 require YK_SRC . '/lib/Chat.php';
 require YK_SRC . '/lib/BuddyAbsence.php';  // Plans::gatherContext reads it
+require YK_SRC . '/lib/BuddySkeleton.php';  // gatherContext and persist read it
 
 $args = array_slice($argv, 1);
 $live = in_array('--live', $args, true);

@@ -301,6 +301,15 @@ final class Plans
             'checkins'     => self::recentCheckins($userId),
             'trend'        => self::weightTrend($userId),
             'buddy'        => self::buddy($userId),
+            /*
+             * The pair's shared session shape, when the buddy has already generated (§10.6).
+             *
+             * Null means this user LEADS: either they are unpaired, or their buddy's week is not
+             * written yet, in which case the plan they are about to get becomes the skeleton.
+             * Both cases generate identically — leading is not a mode, it is just what going
+             * first looks like.
+             */
+            'skeleton'     => BuddySkeleton::toFollow($userId, $weekStart),
         ];
     }
 
@@ -890,7 +899,21 @@ final class Plans
                        . 'time as their buddy is the point, and it outranks a marginally '
                        . 'better split. Do not move work off a shared day to tidy the week.';
                 $out[] = 'You are writing one plan, for this user only. Do not describe what '
-                       . 'their buddy is doing, and do not assume the two sessions match.';
+                       . 'their buddy is doing.';
+
+                if (($ctx['skeleton'] ?? null) === null) {
+                    /*
+                     * This user is generating FIRST, so there is nothing to match yet — and the
+                     * plan written here becomes the skeleton their buddy follows (§10.6).
+                     *
+                     * Not said out loud. Telling the model "you are setting the pattern for
+                     * someone else" invites it to hedge toward a generic middle, and the
+                     * follower needs a real plan for a real person to match, not a compromise
+                     * written for nobody.
+                     */
+                    $out[] = 'Their buddy\'s week is not written yet, so do not assume the two '
+                           . 'sessions match beyond the day itself.';
+                }
             } elseif (($ctx['buddy_away'] ?? null) !== null) {
                 /*
                  * §10.5. The shared days were dropped upstream — gatherContext discards the
@@ -927,18 +950,24 @@ final class Plans
         }
 
         /*
-         * The old buddy block told the model to make the core block identical across a pair
-         * (§10.2a).
+         * The shared skeleton (§10.6, §10.2a).
          *
-         * That part stays removed. Coordinating the inside of a session across two users is a
-         * claim this code cannot keep while generation is per-user: the model sees one person
-         * and cannot know what the other was told, so "identical between them" would agree
-         * only by coincidence.
+         * This is what makes the sessions themselves match rather than only the days. It was
+         * absent for a long time on purpose: coordinating the inside of a session is a claim
+         * per-user generation cannot keep, because the model sees one person and cannot know
+         * what the other was told, so "identical between them" would agree by coincidence.
          *
-         * §10.6 is where it belongs — generate the shared skeleton once for the PAIR, then
-         * each user's prescriptions against it. Until then the block above says only what is
-         * true: same days, nothing about the sessions.
+         * It can be kept now because the buddy's plan is already WRITTEN and is being read back
+         * here. The matching is against a real session, not an intention.
+         *
+         * Placed after the constraint block deliberately: whatever the skeleton asks for, the
+         * user's own limits were stated first and the divergence instruction below points back
+         * at them.
          */
+        if (($ctx['skeleton'] ?? null) !== null) {
+            $out[] = '';
+            $out[] = BuddySkeleton::promptBlock($ctx['skeleton']);
+        }
 
         if ($ctx['history'] === []) {
             $out[] = '';
@@ -1137,6 +1166,20 @@ final class Plans
 
             self::persistSessions($planVersionId, $plan);
             self::persistDays($planVersionId, $plan);
+
+            /*
+             * Link the shared days to the pair's skeleton (§10.6).
+             *
+             * After the sessions rather than inside the INSERT, because the key depends on the
+             * pair and the date, not on anything in the plan payload — and doing it here means
+             * one lookup per plan instead of one per session. Still inside the transaction, so
+             * a plan is never briefly visible with its shared days unlinked.
+             *
+             * Runs for BOTH users of a pair: the leader stamps so the follower can find the
+             * skeleton, the follower stamps so both rows carry the same key. A no-op when
+             * unpaired.
+             */
+            BuddySkeleton::stamp($userId, $planVersionId, $weekStart);
 
             return $planVersionId;
         });

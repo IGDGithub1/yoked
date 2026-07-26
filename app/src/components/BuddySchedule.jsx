@@ -103,13 +103,17 @@ export default function BuddySchedule({ paired, onChanged }) {
       )}
 
       {/*
-        What a shared day actually means. Stated once, plainly, because the obvious assumption
-        is that it means the same workout and it does not.
+        What a shared day actually means, stated once and plainly.
+
+        This used to say only that you both have a session. That was all the app could honestly
+        claim while generation was per-user. It now builds the two sessions to the same shape, so
+        the copy says so — and still says what stays yours, because the other wrong assumption is
+        that you will be lifting the same weights as someone months ahead of you.
       */}
       {s.agreed.length > 0 && (
         <p className="tiny muted prose" style={{ margin: 0 }}>
-          You will both have a session on these days, so you can train at the same time. Your
-          exercises and weights are still your own.
+          On these days you get the same kind of session, in the same order, with the same core
+          work, so you can train side by side. The weights and the reps are still yours.
         </p>
       )}
 

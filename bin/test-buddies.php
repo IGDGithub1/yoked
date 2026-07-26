@@ -29,6 +29,7 @@ require YK_SRC . '/lib/Buddies.php';
 require YK_SRC . '/lib/Visibility.php';
 require YK_SRC . '/lib/Drift.php';         // BuddyAbsence reads lastLoggedDate
 require YK_SRC . '/lib/BuddyAbsence.php';  // Plans::gatherContext reads it
+require YK_SRC . '/lib/BuddySkeleton.php';  // Plans::gatherContext and Plans::persist read it
 
 $keep = in_array('--keep', array_slice($argv, 1), true);
 
@@ -560,6 +561,10 @@ t('the buddy prompt block claims days, not sessions', function () {
      * when it had just been deleted and became wrong the moment an honest version came back.
      * Asserting the claim rather than the section is what actually protects §10.6.
      *
+     * It has since moved on again. The sessions DO match now, because §10.6 is built: the
+     * follower reads the leader's written plan. So the "do not assume they match" warning is
+     * conditional on there being no skeleton, and that condition is what this now checks.
+     *
      * Checked against the source here because the rendered form needs a paired fixture with a
      * goal and a grid; bin/test-buddy-schedule.php does that properly against both halves of
      * the real prompt.
@@ -568,21 +573,37 @@ t('the buddy prompt block claims days, not sessions', function () {
     if (!str_contains($src, 'PUT A COMMITTED SESSION ON EVERY SHARED DAY')) {
         return 'the buddy block no longer insists on the shared days';
     }
-    return str_contains($src, 'do not assume the two sessions match')
-        ?: 'the buddy block does not warn against assuming synced sessions';
+    if (!str_contains($src, 'do not assume the two')) {
+        return 'nothing warns against assuming synced sessions when there is no skeleton';
+    }
+    // The warning must be reachable only when leading. Unconditional, it would contradict the
+    // skeleton block sitting a few lines below it.
+    return preg_match('/skeleton\'\]\s*\?\?\s*null\)\s*===\s*null/', $src) === 1
+        ?: 'the no-skeleton warning is not gated on the absence of a skeleton';
 });
 
-t('shared_skeleton_key is still unwritten, and nothing pretends otherwise', function () {
-    // Honest bookkeeping: the column exists for §10.6 and nothing populates it yet. If this
-    // starts failing, someone has built the synced path and this test should become the
-    // assertion that it links the two plans.
-    foreach (['src/lib/Plans.php', 'src/lib/Buddies.php'] as $f) {
-        $src = (string) file_get_contents(dirname(YK_SRC) . '/' . $f);
-        if (preg_match('/(INSERT|UPDATE)[^;]*shared_skeleton_key/i', $src)) {
-            return "{$f} writes shared_skeleton_key — update this test";
-        }
+t('the skeleton key is written, and both halves of a pair agree on it', function () {
+    /*
+     * §10.6. This replaces a test that asserted the column was NEVER written, which was honest
+     * bookkeeping for as long as the synced path did not exist. It does now.
+     *
+     * The property worth protecting is not "something writes it" but that the two users arrive
+     * at the SAME value independently. It is derived from (pair, date) precisely so neither side
+     * has to read the other's row, and so a regenerated week re-links instead of orphaning.
+     */
+    $a = BuddySkeleton::keyFor(41, '2026-08-03');
+    $b = BuddySkeleton::keyFor(41, '2026-08-03');
+    if ($a !== $b) {
+        return 'the same pair and date produced two different keys';
     }
-    return true;
+    if (strlen($a) !== 36) {
+        return 'the key is ' . strlen($a) . ' chars; the column is CHAR(36)';
+    }
+    if ($a === BuddySkeleton::keyFor(41, '2026-08-05')) {
+        return 'two different days in a week share one key';
+    }
+    return $a !== BuddySkeleton::keyFor(42, '2026-08-03')
+        ?: 'two different pairs share one key';
 });
 
 // ---------------------------------------------------------------------------

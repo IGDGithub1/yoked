@@ -32,6 +32,7 @@ require YK_SRC . '/lib/Onboarding.php';
 require YK_SRC . '/lib/Settings.php';
 require YK_SRC . '/lib/Drift.php';         // BuddyAbsence reads lastLoggedDate
 require YK_SRC . '/lib/BuddyAbsence.php';  // Plans::gatherContext reads it
+require YK_SRC . '/lib/BuddySkeleton.php';  // gatherContext and persist read it
 
 $keep = in_array('--keep', array_slice($argv, 1), true);
 

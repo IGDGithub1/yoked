@@ -23,6 +23,7 @@ require YK_SRC . '/lib/BuddySchedule.php';   // Safety::checkAvailability reads 
 require YK_SRC . '/lib/Safety.php';
 require YK_SRC . '/lib/Drift.php';         // BuddyAbsence reads lastLoggedDate
 require YK_SRC . '/lib/BuddyAbsence.php';  // Plans::gatherContext reads it
+require YK_SRC . '/lib/BuddySkeleton.php';  // gatherContext and persist read it
 require YK_SRC . '/lib/Plans.php';
 
 $limit = max(1, min(200, (int) ($argv[1] ?? 20)));

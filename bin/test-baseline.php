@@ -28,6 +28,7 @@ require YK_SRC . '/lib/BuddySchedule.php';   // Safety::checkAvailability reads 
 require YK_SRC . '/lib/Safety.php';
 require YK_SRC . '/lib/Drift.php';         // BuddyAbsence reads lastLoggedDate
 require YK_SRC . '/lib/BuddyAbsence.php';  // Plans::gatherContext reads it
+require YK_SRC . '/lib/BuddySkeleton.php';  // gatherContext and persist read it
 require YK_SRC . '/lib/Plans.php';
 require YK_SRC . '/lib/Onboarding.php';
 

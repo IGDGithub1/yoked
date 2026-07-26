@@ -8,12 +8,18 @@ import BuddySchedule from './BuddySchedule'
  * "Unpaid accountability is the most effective adherence mechanism the app has." One person
  * needs a reason to show up; the other needs someone watching so she does not coast.
  *
- * WHAT THIS PROMISES, AND ONLY THIS. Pairing means your buddy can see whether you trained,
- * and shows you the days you are both free. It does NOT yet mean you get the same session:
- * §10.6 wants one skeleton generated per pair and each person's prescriptions written against
- * it, which is a change to how generation works rather than a flag on it. So the copy says
- * "you both train Tuesday", never "you are doing the same workout". Overstating that would be
- * the first thing a real pair noticed was false.
+ * WHAT THIS PROMISES. Pairing means your buddy can see whether you trained, shows you the days
+ * you are both free, and — since §10.6 — builds both of your shared-day sessions to the same
+ * shape: same type, same focus, same movement order, same core block.
+ *
+ * WHAT IT STILL DOES NOT PROMISE. The same weights, reps or exercise variants (§10.1). Those
+ * stay individual, and must not be implied anywhere: a beginner reading "the same workout" and
+ * finding their partner's working weight is the failure this copy exists to prevent. So the
+ * honest line is "the same kind of session, your own numbers".
+ *
+ * The copy here was deliberately weaker than this for a long time, claiming only that you both
+ * train on Tuesday. That was all the app could deliver while generation ran per-user with
+ * nothing to coordinate against.
  *
  * Body metrics stay private regardless (§10.4): "pairing up to train is not consent to share
  * body metrics." Said out loud here, because someone deciding whether to accept should not
@@ -136,11 +142,18 @@ function Incoming({ b, busy, run }) {
       <p className="small" style={{ margin: 0 }}>
         <strong>{b.buddy?.display_name}</strong> wants to train with you.
       </p>
-      {/* What accepting actually grants, before they accept it. */}
+      {/*
+        What accepting actually grants, before they accept it.
+
+        The shared-session part is worth stating here rather than only after pairing: it is the
+        reason to say yes, and it is also a real compromise (§10.0 — a matched session is not the
+        one you would get alone). Someone agreeing to that should know they are agreeing to it.
+      */}
       <p className="tiny muted prose" style={{ margin: 0 }}>
-        They would see whether you trained each day, and you would see the same about them.
-        Your weight, measurements and photos stay private either way. You can stop at any
-        time.
+        On the days you are both free you would get the same kind of session, so you can train
+        side by side, with your own weights. They would see whether you trained each day, and you
+        would see the same about them. Your weight, measurements and photos stay private either
+        way. You can stop at any time.
       </p>
       <div className="row" style={{ gap: 6 }}>
         <button
