@@ -203,14 +203,29 @@ t('the leader has nothing to follow', function () use ($a, $week) {
         ?: 'the leader was given a skeleton before anybody generated';
 });
 
-if (!$live) {
-    echo "\nnote: run with --live to generate two real weeks (costs money, takes minutes).\n";
+/**
+ * Finish: clean up unless asked not to, report, and exit.
+ *
+ * Every exit goes through here, including the generation-failure paths below. An early exit(1)
+ * left the fixtures behind, which matters more than it sounds: a paired fixture that outlives
+ * its run is a live pair the Sunday cron will happily generate weeks for, on a schedule, using
+ * real money.
+ */
+function finish(bool $keep, int $pass, int $fail): never
+{
     if (!$keep) {
         DB::run("DELETE FROM users WHERE username LIKE 'skel_%'");
-        echo "fixtures removed\n";
+        echo "\nfixtures removed\n";
+    } else {
+        echo "\nfixtures kept\n";
     }
     printf("\n%d passed, %d failed\n", $pass, $fail);
     exit($fail === 0 ? 0 : 1);
+}
+
+if (!$live) {
+    echo "\nnote: run with --live to generate two real weeks (costs money, takes minutes).\n";
+    finish($keep, $pass, $fail);
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +240,9 @@ if (!$rA['ok']) {
     foreach ($rA['violations'] ?? [] as $v) {
         printf("    violation: %s\n", (string) $v);
     }
-    exit(1);
+    $fail++;
+    echo "\n  the leader could not generate, so there is nothing to converge ON.\n";
+    finish($keep, $pass, $fail);
 }
 
 t('the leader shared days are stamped', function () use ($rA) {
@@ -258,7 +275,28 @@ if (!$rB['ok']) {
     foreach ($rB['violations'] ?? [] as $v) {
         printf("    violation: %s\n", (string) $v);
     }
-    exit(1);
+    $fail++;
+
+    /*
+     * A follower that returns a fragment is the KNOWN flake, not a skeleton regression.
+     *
+     * Measured on 2026-07-26: two runs of this script with the same fixture, one where the
+     * follower produced a full 28k-token week and converged on every assertion, and one where it
+     * returned 15k on the first attempt and then 8k and 5k on the retries. Nothing truncated —
+     * there was 51% headroom under the 64k ceiling — so the model returned less by choice, and
+     * mergePlans cannot rescue it because attempt 0 was already incomplete.
+     *
+     * The flake predates §10.6 (first seen 2026-07-25 on the pre-skeleton code), and the
+     * skeleton block is only ~750 input tokens, so it is not the cause. Said here because the
+     * failure lands on the follower every time, which is exactly where a reader would suspect
+     * the new code first.
+     */
+    echo "\n  NOTE: the follower returned a fragment. Check bin/aicalls.php — if the output\n"
+       . "  column DESCENDS across the three attempts (~15k, 8k, 5k) with headroom left under\n"
+       . "  the ceiling, this is the known buddy-generation flake and not a convergence bug.\n"
+       . "  The leader generated a full week above, and the skeleton was read and stamped.\n"
+       . "  Re-run before concluding anything about §10.6.\n";
+    finish($keep, $pass, $fail);
 }
 
 /** Both users' committed sessions on the shared days, keyed by date. */
@@ -550,12 +588,7 @@ t('neither plan mentions the other person', function () use ($rA, $rB) {
 
 // ---------------------------------------------------------------------------
 
-if (!$keep) {
-    DB::run("DELETE FROM users WHERE username LIKE 'skel_%'");
-    echo "\nfixtures removed\n";
-} else {
+if ($keep) {
     printf("\nfixtures kept: leader=%d follower=%d\n", $a, $b);
 }
-
-printf("\n%d passed, %d failed\n", $pass, $fail);
-exit($fail === 0 ? 0 : 1);
+finish($keep, $pass, $fail);
