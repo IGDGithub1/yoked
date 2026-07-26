@@ -345,6 +345,8 @@ final class Settings
                 'kind'     => $kind,
                 'tier'     => (string) $r['tier'],
                 'subject'  => $subject,
+                // Their own. Inherited rows are appended below with this false.
+                'inherited' => false,
                 'label'    => ConstraintLabel::of($kind, $subject),
                 // avoid | manage | eating | floor. What KIND of thing this is, which the
                 // client groups by: a condition is not something being avoided.
@@ -365,6 +367,56 @@ final class Settings
                 'meaning'  => ConstraintLabel::meaning($facet, (string) $r['tier']),
             ];
         }
+
+        /*
+         * Then anything inherited from a training buddy (SPEC-coaching §10.2b).
+         *
+         * Shown because it is real: it steers this user's plan, so a preference they cannot
+         * find in their profile would look like the coach inventing things. Safety::forUser is
+         * the source, so the list and the prompt cannot disagree.
+         *
+         * NOT switchable, and no id. It is a property of the pair rather than of the user, so
+         * there is no row of theirs to turn off — unpairing is what removes it. Offering a
+         * switch would imply otherwise.
+         */
+        $pair = BuddySchedule::activePair($userId);
+        if ($pair !== null) {
+            $buddyId = (int) $pair['user_lo'] === $userId
+                ? (int) $pair['user_hi']
+                : (int) $pair['user_lo'];
+            $buddy = DB::one('SELECT display_name FROM users WHERE id = ?', [$buddyId]);
+            $name  = (string) ($buddy['display_name'] ?? 'Your buddy');
+
+            foreach (Safety::forUser($userId)['soft'] as $c) {
+                if (($c['inherited'] ?? false) !== true) {
+                    continue;
+                }
+                $kind    = (string) $c['kind'];
+                $subject = (string) $c['subject'];
+                $out[] = [
+                    // No id: there is nothing here for the user to edit.
+                    'id'        => null,
+                    'kind'      => $kind,
+                    'tier'      => 'soft',
+                    'subject'   => $subject,
+                    'inherited' => true,
+                    'label'     => ConstraintLabel::of($kind, $subject),
+                    'facet'     => ConstraintLabel::facet($kind, $subject),
+                    // Names the person, which the prompt's generic wording deliberately does
+                    // not need to. On screen it is the difference between "why is this here"
+                    // and "ah, that is Sam's knee".
+                    'reason'    => "{$name} avoids this",
+                    'guidance'  => null,
+                    'floor'     => null,
+                    'source'    => 'buddy',
+                    'active'    => true,
+                    'switchable' => false,
+                    'meaning'   => 'Your coach steers around this while you are training '
+                                 . 'together. It goes away if you stop.',
+                ];
+            }
+        }
+
         return $out;
     }
 

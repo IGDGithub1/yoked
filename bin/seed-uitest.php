@@ -599,6 +599,20 @@ DB::run(
     [min($seed['user_id'], $blUser), max($seed['user_id'], $blUser), $blUser]
 );
 
+/*
+ * A movement avoid on the BUDDY, so §10.2b has something to inherit.
+ *
+ * Deliberately HARD on their side: the assertion worth making is that it arrives SOFT for the
+ * other user, and a soft-to-soft transfer would pass a test that a broken tier rule also
+ * passes. Their reason is medical for the same purpose — it must not appear on the partner's
+ * profile.
+ */
+DB::run(
+    'INSERT INTO user_constraints (user_id, kind, tier, subject, reason, source)
+     VALUES (?, "movement", "hard", "box jumps", "Achilles tendonitis, 2025", "onboarding")',
+    [$blUser]
+);
+
 printf(
     "seeded a buddy invite from %s (they share Wednesday and Friday)\n",
     UI_BASE_USER

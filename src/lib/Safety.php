@@ -22,6 +22,13 @@ final class Safety
     /**
      * Load a user's active constraints, split by tier.
      *
+     * Includes anything INHERITED from a training buddy (SPEC-coaching §10.2b), which arrives
+     * soft regardless of how the buddy holds it. See inherited().
+     *
+     * One loader for both validatePlan and promptBlock, deliberately: a constraint that
+     * steers generation but is not enforced, or the reverse, is the kind of gap nobody
+     * notices until a plan is wrong.
+     *
      * @return array{hard: list<array>, soft: list<array>}
      */
     public static function forUser(int $userId): array
@@ -35,8 +42,104 @@ final class Safety
         );
 
         $out = ['hard' => [], 'soft' => []];
+        $own = ['hard' => [], 'soft' => []];
         foreach ($rows as $r) {
             $out[$r['tier']][] = $r;
+            // Remembered per tier so an inherited row cannot duplicate or weaken one of the
+            // user's own. Keyed by kind+subject, lowercased, since that is what the ban maps
+            // and foodTerms() match on.
+            $own[$r['tier']][strtolower((string) $r['kind'] . '|' . $r['subject'])] = true;
+        }
+
+        foreach (self::inherited($userId) as $r) {
+            $key = strtolower((string) $r['kind'] . '|' . $r['subject']);
+
+            /*
+             * Skip anything the user already holds, at EITHER tier.
+             *
+             * Already hard: adding a soft copy of the same subject would be noise in the
+             * prompt and, worse, would read as a softening of a limit they set themselves.
+             * Already soft: it is a duplicate.
+             *
+             * This is why the check is not just on the soft bucket. An inherited row must
+             * never be able to make an existing constraint look weaker than it is.
+             */
+            if (isset($own['hard'][$key]) || isset($own['soft'][$key])) {
+                continue;
+            }
+
+            $out['soft'][] = $r;
+            $own['soft'][$key] = true;   // two buddies cannot happen, but be idempotent anyway
+        }
+
+        return $out;
+    }
+
+    /**
+     * A training buddy's avoids, converted to soft rows for this user (§10.2b).
+     *
+     * "While paired, each user takes on their buddy's training avoids. If one cannot ski,
+     * skiing is not suggested to either of them for as long as the pair lasts."
+     *
+     * THE TIER DOES NOT TRANSFER, and that is SPEC-safety §6 holding the line. A hard
+     * constraint is a limit the user set for themselves, deliberately; nothing another person
+     * does should create one. A plan rejected over somebody else's preference is a failure the
+     * user cannot fix and cannot reason about. So an inherited limit arrives soft: the coach
+     * steers away from it, may still propose it with a stated reason, and the user can veto it
+     * like any other suggestion.
+     *
+     * TRAINING ONLY. Food, conditions, dietary patterns and target floors never transfer.
+     * Nutrition is out of scope for v1 (§10.0), an allergy is not a preference to compromise
+     * over, and a condition is a modifier carrying medical guidance that belongs to one body.
+     *
+     * Not persisted. These are a property of the pair, not of the user, so they vanish the
+     * moment the pairing ends rather than needing to be cleaned up — and nothing writes to
+     * user_constraints, which keeps SPEC-safety §7's "one automated write path" true.
+     */
+    private static function inherited(int $userId): array
+    {
+        $pair = BuddySchedule::activePair($userId);
+        if ($pair === null) {
+            return [];
+        }
+
+        $buddyId = (int) $pair['user_lo'] === $userId
+            ? (int) $pair['user_hi']
+            : (int) $pair['user_lo'];
+
+        $rows = DB::all(
+            'SELECT kind, subject, reason, tier
+             FROM user_constraints
+             WHERE user_id = ? AND active = 1
+               -- Training only. The kinds are named rather than excluded so a future kind
+               -- has to be considered deliberately instead of inheriting by default.
+               AND kind IN ("movement", "cardio", "equipment")
+             ORDER BY kind, subject',
+            [$buddyId]
+        );
+
+        $out = [];
+        foreach ($rows as $r) {
+            $out[] = [
+                'kind'    => (string) $r['kind'],
+                'tier'    => 'soft',
+                'subject' => (string) $r['subject'],
+                /*
+                 * Says whose limit this is, in the prompt and on the profile.
+                 *
+                 * Without it the model sees "avoid burpees" with no explanation and the user
+                 * sees a preference they never set. The buddy's own reason is deliberately NOT
+                 * carried over: it may be medical, and their diagnosis is not their buddy's
+                 * business (§10.4).
+                 */
+                'reason'  => 'Your training buddy avoids this',
+                'guidance' => null,
+                'floor_value' => null,
+                'progression' => null,
+                // Marks the row as not the user's own, for the profile UI. Nothing in
+                // validatePlan reads it: soft constraints are never enforced there anyway.
+                'inherited' => true,
+            ];
         }
         return $out;
     }

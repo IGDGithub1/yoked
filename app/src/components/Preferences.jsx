@@ -32,6 +32,9 @@ const SOURCE_LABEL = {
   user_edit: 'you changed this',
   veto_promotion: 'you turned it down',
   claude_proposed: 'your coach suggested this',
+  // §10.2b. Not one of theirs: it belongs to the pair and goes when the pairing does. The
+  // reason field already names the buddy, so this stays short.
+  buddy: 'from your training buddy',
 }
 
 /*
@@ -117,7 +120,7 @@ export default function Preferences() {
             <p className="tiny muted prose" style={{ margin: 0 }}>{g.blurb}</p>
             {items.map((c) => (
               <Row
-                key={c.id}
+                key={rowKey(c)}
                 c={c}
                 busy={busy === c.id}
                 onToggle={c.switchable ? () => toggle(c.id, !c.active) : null}
@@ -134,7 +137,7 @@ export default function Preferences() {
             Hard limits. Your coach cannot write a plan that breaks one, and a plan that
             tries is rejected before you ever see it.
           </p>
-          {avoidHard.map((c) => <Row key={c.id} c={c} />)}
+          {avoidHard.map((c) => <Row key={rowKey(c)} c={c} />)}
           {/* Where the door actually is. A refusal with no route forward reads as a bug. */}
           <p className="tiny muted prose" style={{ margin: 0 }}>
             These change by editing the answer they came from, in the sections above. That is
@@ -152,7 +155,7 @@ export default function Preferences() {
           </p>
           {avoidSoft.map((c) => (
             <Row
-              key={c.id}
+              key={rowKey(c)}
               c={c}
               busy={busy === c.id}
               onToggle={c.switchable ? () => toggle(c.id, !c.active) : null}
@@ -164,6 +167,16 @@ export default function Preferences() {
       {error && <p className="error">{error}</p>}
     </div>
   )
+}
+
+/**
+ * A stable React key.
+ *
+ * Inherited rows (§10.2b) carry no id, because there is no row of the user's own to edit —
+ * they belong to the pair. Keying on a null id would collide across every inherited row.
+ */
+function rowKey(c) {
+  return c.id ?? `inherited-${c.kind}-${c.subject}`
 }
 
 function Row({ c, busy, onToggle }) {
@@ -187,6 +200,13 @@ function Row({ c, busy, onToggle }) {
         )}
         {!c.active && (
           <span className="tiny muted">Switched off. Your coach may suggest it again.</span>
+        )}
+        {/*
+          Says it is borrowed, and that it ends with the pairing. Without this it reads as a
+          preference the user set and forgot, and there is no switch to explain its absence.
+        */}
+        {c.inherited && (
+          <span className="tiny muted">{c.meaning}</span>
         )}
       </span>
 

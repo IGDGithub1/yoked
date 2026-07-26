@@ -2769,6 +2769,75 @@ await check('dropping a shared day re-asks the surplus question', async () => {
   return true
 })
 
+await check('a buddy training avoid is inherited, as SOFT', async () => {
+  /*
+   * 10.2b. The buddy holds "box jumps" as HARD; it must arrive SOFT here.
+   *
+   * The tier is the whole point. SPEC-safety 6: a hard constraint is a limit the user set for
+   * themselves, and nothing another person does should create one — a plan rejected over
+   * somebody else's preference is a failure the user cannot fix.
+   */
+  const rows = await fr.evaluate(async () => {
+    const r = await fetch('/api/constraints', { credentials: 'same-origin' })
+    const b = await r.json()
+    return (b.constraints || []).filter((c) => c.inherited === true)
+  })
+  if (rows.length === 0) return 'nothing was inherited from the buddy'
+
+  const box = rows.find((c) => /box jump/i.test(c.subject))
+  if (!box) return `inherited ${rows.map((c) => c.subject).join(', ')}, not box jumps`
+  if (box.tier !== 'soft') return `it arrived as ${box.tier}, not soft`
+  // No row of theirs to edit, so no switch and no id.
+  if (box.switchable !== false) return 'an inherited limit is offered as switchable'
+  return box.id === null ? true : 'an inherited row carries an id'
+})
+
+await check('the buddy medical reason does not leak', async () => {
+  /*
+   * 10.4: pairing is not consent to share medical detail. Their constraint says "Achilles
+   * tendonitis, 2025" and the partner has no business seeing a diagnosis — only that their
+   * buddy avoids it.
+   */
+  const rows = await fr.evaluate(async () => {
+    const r = await fetch('/api/constraints', { credentials: 'same-origin' })
+    return (await r.json()).constraints || []
+  })
+  const leaked = JSON.stringify(rows).toLowerCase()
+  return !/achilles|tendonitis/.test(leaked)
+    ? true
+    : 'the buddy diagnosis appears in the partner payload'
+})
+
+await check('the profile shows it, and says it ends with the pairing', async () => {
+  /*
+   * It steers this user's plan, so a preference they cannot find in their profile reads as the
+   * coach inventing things. But there is no switch, so the row has to explain its own absence
+   * of one.
+   */
+  const prof2 = await ctx.newPage()
+  try {
+    await signInVia(prof2)
+    await prof2.evaluate(() => { window.location.hash = '#/profile' })
+    await prof2.getByRole('heading', { name: /change anything/i }).waitFor({ timeout: 20000 })
+
+    const row = prof2.locator('.prefrow', { hasText: /box jump/i })
+    await row.first().waitFor({ timeout: 20000 })
+    const text = (await row.first().innerText()).toLowerCase()
+
+    if (!/buddy/.test(text)) {
+      return `the row does not say where it came from: ${text}`
+    }
+    if (!/stop|goes away/.test(text)) {
+      return `the row does not say it ends with the pairing: ${text}`
+    }
+    // And no switch, because it is not theirs to turn off.
+    const buttons = await row.first().getByRole('button').count()
+    return buttons === 0 ? true : `the inherited row has ${buttons} control(s)`
+  } finally {
+    await prof2.close()
+  }
+})
+
 await check('unpairing takes effect and revokes the pairing', async () => {
   // 10.5: either side, any time, no reason. Nothing about the user's own plan changes.
   const card = fr.locator('.card', { hasText: /training buddy/i }).first()
@@ -2777,6 +2846,30 @@ await check('unpairing takes effect and revokes the pairing', async () => {
   await fr.waitForFunction(async () => {
     const r = await fetch('/api/buddy', { credentials: 'same-origin' })
     return (await r.json()).buddy.status === 'none'
+  }, null, { timeout: 20000 })
+  return true
+})
+
+await check('inherited limits vanish when the pairing ends', async () => {
+  /*
+   * §10.2b: "Inherited limits vanish on unpairing. They are a property of the pair, not of the
+   * user." Nothing was persisted, so this is structural rather than a cleanup step — but it is
+   * worth asserting, because a leftover would be a preference the user could never explain or
+   * remove.
+   */
+  /*
+   * WAITED FOR, not read once.
+   *
+   * The test above confirms /api/buddy reports 'none', but the unpair is a PATCH whose response
+   * the panel then re-reads — and the preceding test opened a second page on the shared
+   * context, so which page's request lands first is not ordered. Polling removes the race
+   * without weakening the assertion: if an inherited row genuinely survived, this still times
+   * out and fails.
+   */
+  await fr.waitForFunction(async () => {
+    const r = await fetch('/api/constraints', { credentials: 'same-origin' })
+    const b = await r.json()
+    return (b.constraints || []).filter((c) => c.inherited === true).length === 0
   }, null, { timeout: 20000 })
   return true
 })

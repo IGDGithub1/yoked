@@ -34,6 +34,8 @@ require YK_SRC . '/lib/BuddySchedule.php';
 require YK_SRC . '/lib/Safety.php';
 require YK_SRC . '/lib/Buddies.php';
 require YK_SRC . '/lib/Plans.php';
+require YK_SRC . '/lib/ConstraintLabel.php';
+require YK_SRC . '/lib/Settings.php';
 
 $keep = in_array('--keep', array_slice($argv, 1), true);
 
@@ -620,6 +622,335 @@ t('the prompt does not claim the sessions match', function () {
         }
     }
     return true;
+});
+
+// ---------------------------------------------------------------------------
+echo "\n7. inherited training limits (§10.2b)\n";
+
+/** Give a user a constraint. Returns its id. */
+function constrain(int $userId, string $kind, string $tier, string $subject,
+                   ?string $reason = null): int
+{
+    return (int) DB::insert(
+        'INSERT INTO user_constraints (user_id, kind, tier, subject, reason, source)
+         VALUES (?, ?, ?, ?, ?, "onboarding")',
+        [$userId, $kind, $tier, $subject, $reason]
+    );
+}
+
+/** Is this subject present at this tier, for this user? */
+function hasConstraint(int $userId, string $tier, string $subject): bool
+{
+    foreach (Safety::forUser($userId)[$tier] as $c) {
+        if (strtolower((string) $c['subject']) === strtolower($subject)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+t('a buddy movement avoid is inherited', function () {
+    /*
+     * §10.2b: "While paired, each user takes on their buddy's training avoids. If one cannot
+     * ski, skiing is not suggested to either of them for as long as the pair lasts."
+     */
+    $a = seedUser('inh_a');
+    $b = seedUser('inh_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    constrain($b, 'movement', 'soft', 'burpees', 'hates them');
+    pairUp($a, $b);
+
+    return hasConstraint($a, 'soft', 'burpees')
+        ?: 'the buddy movement avoid was not inherited';
+});
+
+t('THE TIER DOES NOT TRANSFER: a hard avoid arrives soft', function () {
+    /*
+     * The load-bearing assertion of this section, and SPEC-safety §6 holding the line.
+     *
+     * A hard constraint is a limit the user set for themselves, deliberately. Nothing another
+     * person does should create one: a plan rejected over somebody else's preference is a
+     * failure the user cannot fix and cannot reason about.
+     */
+    $a = seedUser('tier_a');
+    $b = seedUser('tier_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    constrain($b, 'movement', 'hard', 'back squat', 'ACL reconstruction');
+    pairUp($a, $b);
+
+    if (hasConstraint($a, 'hard', 'back squat')) {
+        return 'a buddy HARD constraint became hard for the other user';
+    }
+    return hasConstraint($a, 'soft', 'back squat')
+        ?: 'the buddy hard constraint was not inherited at all';
+});
+
+t('an inherited limit cannot reject a plan', function () {
+    /*
+     * The consequence of the tier rule, checked at the validator rather than inferred. Soft
+     * constraints are never enforced in validatePlan, so this asserts the two agree.
+     */
+    $a = seedUser('rej_a');
+    $b = seedUser('rej_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    constrain($b, 'movement', 'hard', 'back squat', 'ACL');
+    pairUp($a, $b);
+
+    $ex = DB::one('SELECT id, slug FROM exercises WHERE slug LIKE "%squat%" LIMIT 1');
+    if ($ex === null) {
+        return null;   // no seeded exercise library to build a plan against
+    }
+
+    /*
+     * Through validatePlan, not checkExercises directly.
+     *
+     * checkExercises takes pre-built ban maps rather than a user id, so calling it with an id
+     * proves nothing about how forUser splits the tiers — which is the thing under test. The
+     * public entry point exercises the real path.
+     *
+     * Filtered to movement violations: an otherwise-empty plan trips a dozen unrelated rules
+     * (no meals, wrong committed count), and this test is about ONE of them.
+     */
+    $monday = date('Y-m-d', strtotime('next monday'));
+    $plan = ['sessions' => [[
+        'date' => $monday, 'session_type' => 'strength', 'is_committed' => true,
+        'target_minutes' => 60, 'location' => 'full_gym',
+        'exercises' => [['slug' => $ex['slug'], 'block' => 'main', 'sets' => 3,
+                         'reps' => '8']],
+    ]]];
+
+    // "which is a hard constraint" is the wording checkExercises emits for a banned movement.
+    $banned = array_filter(
+        Safety::validatePlan($plan, $a),
+        static fn(string $v): bool => str_contains($v, 'Substitute a different movement')
+    );
+    return $banned === []
+        ?: 'an inherited limit rejected a plan: ' . implode(' | ', $banned);
+});
+
+t('the same limit still rejects a plan for the person who OWNS it', function () {
+    // The other side of the same coin: softening it for the buddy must not soften it for them.
+    $b = (int) DB::one('SELECT id FROM users WHERE username = "bsch_rej_b"')['id'];
+    $ex = DB::one('SELECT slug FROM exercises WHERE slug LIKE "%squat%" LIMIT 1');
+    if ($ex === null) {
+        return null;
+    }
+
+    // Name the ban exactly as the owner holds it, so the substring match fires.
+    DB::run('UPDATE user_constraints SET subject = ? WHERE user_id = ? AND tier = "hard"',
+        [str_replace('-', ' ', (string) $ex['slug']), $b]);
+
+    $monday = date('Y-m-d', strtotime('next monday'));
+    $plan = ['sessions' => [[
+        'date' => $monday, 'session_type' => 'strength', 'is_committed' => true,
+        'target_minutes' => 60, 'location' => 'full_gym',
+        'exercises' => [['slug' => $ex['slug'], 'block' => 'main', 'sets' => 3,
+                         'reps' => '8']],
+    ]]];
+
+    $banned = array_filter(
+        Safety::validatePlan($plan, $b),
+        static fn(string $v): bool => str_contains($v, 'Substitute a different movement')
+    );
+    return $banned !== []
+        ?: 'the owner of a hard movement ban had it ignored';
+});
+
+t('FOOD NEVER TRANSFERS', function () {
+    /*
+     * §10.2b: "Training only. Food constraints, allergies, dietary patterns and conditions
+     * never transfer." Nutrition is out of scope for v1, and an allergy is not a preference to
+     * compromise over — inheriting one would put a plan in front of someone that reads as
+     * medically informed and is not.
+     */
+    $a = seedUser('food_a');
+    $b = seedUser('food_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    constrain($b, 'food', 'hard', 'peanuts', 'anaphylaxis');
+    constrain($b, 'food', 'soft', 'mushrooms', 'dislikes them');
+    pairUp($a, $b);
+
+    foreach (['peanuts', 'mushrooms'] as $subject) {
+        if (hasConstraint($a, 'hard', $subject) || hasConstraint($a, 'soft', $subject)) {
+            return "a food constraint transferred: {$subject}";
+        }
+    }
+    return true;
+});
+
+t('a CONDITION never transfers', function () {
+    // A condition is a modifier carrying medical guidance that belongs to one body, and the
+    // buddy's diagnosis is not their partner's business (§10.4).
+    $a = seedUser('cond_a');
+    $b = seedUser('cond_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    constrain($b, 'condition', 'hard', 'diabetes_t2', 'reported at onboarding');
+    pairUp($a, $b);
+
+    return !hasConstraint($a, 'soft', 'diabetes_t2')
+        && !hasConstraint($a, 'hard', 'diabetes_t2')
+        ?: 'a medical condition transferred to the buddy';
+});
+
+t('an inherited limit never weakens one the user already holds', function () {
+    /*
+     * Both hold "back squat", the user as HARD. Adding a soft copy would put the same subject
+     * in both buckets, which reads in the prompt as a limit that is somehow negotiable — and
+     * it is not, because it is theirs.
+     */
+    $a = seedUser('dup_a');
+    $b = seedUser('dup_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    constrain($a, 'movement', 'hard', 'back squat', 'my own ACL');
+    constrain($b, 'movement', 'soft', 'back squat', 'just dislikes it');
+    pairUp($a, $b);
+
+    if (!hasConstraint($a, 'hard', 'back squat')) {
+        return 'the user lost their own hard constraint';
+    }
+    return !hasConstraint($a, 'soft', 'back squat')
+        ?: 'a soft copy was added alongside the hard one';
+});
+
+t('a duplicate soft limit is not listed twice', function () {
+    $a = seedUser('dup2_a');
+    $b = seedUser('dup2_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    constrain($a, 'cardio', 'soft', 'running', 'hates it');
+    constrain($b, 'cardio', 'soft', 'running', 'also hates it');
+    pairUp($a, $b);
+
+    $n = 0;
+    foreach (Safety::forUser($a)['soft'] as $c) {
+        if (strtolower((string) $c['subject']) === 'running') {
+            $n++;
+        }
+    }
+    return $n === 1 ?: "running appears {$n} times";
+});
+
+t('the buddy REASON is not carried over', function () {
+    /*
+     * §10.4: pairing is not consent to share medical detail. "ACL reconstruction 2024" is a
+     * diagnosis, and it is not the partner's business. The inherited row says only that the
+     * buddy avoids it.
+     */
+    $a = seedUser('reason_a');
+    $b = seedUser('reason_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    constrain($b, 'movement', 'hard', 'deadlift', 'herniated disc, L4-L5');
+    pairUp($a, $b);
+
+    foreach (Safety::forUser($a)['soft'] as $c) {
+        if (strtolower((string) $c['subject']) === 'deadlift') {
+            return !str_contains(strtolower((string) $c['reason']), 'herniated')
+                ?: 'the buddy medical reason leaked: ' . (string) $c['reason'];
+        }
+    }
+    return 'the constraint was not inherited at all';
+});
+
+t('inherited limits reach the prompt', function () {
+    // Steering generation is the whole point. promptBlock and validatePlan share forUser, so
+    // this confirms the shared loader carries them.
+    $a = (int) DB::one('SELECT id FROM users WHERE username = "bsch_inh_a"')['id'];
+    return str_contains(Safety::promptBlock($a), 'burpees')
+        ?: 'the inherited limit does not reach the prompt';
+});
+
+t('they vanish on unpairing', function () {
+    /*
+     * "Inherited limits vanish on unpairing. They are a property of the pair, not of the user."
+     * Nothing was persisted, so this is structural rather than a cleanup step — which is the
+     * reason it was built that way.
+     */
+    $a = (int) DB::one('SELECT id FROM users WHERE username = "bsch_inh_a"')['id'];
+    if (!hasConstraint($a, 'soft', 'burpees')) {
+        return 'the fixture was not inheriting to begin with';
+    }
+    Buddies::unpair($a);
+    return !hasConstraint($a, 'soft', 'burpees')
+        ?: 'an inherited limit survived unpairing';
+});
+
+t('nothing is written to user_constraints', function () {
+    /*
+     * SPEC-safety §7: veto promotion is "the one automated write path". Inheritance must not
+     * become a second one — a row written on pairing would need cleaning up on unpairing, and
+     * a missed cleanup is a constraint the user can never explain or remove.
+     */
+    $a = seedUser('nowrite_a');
+    $b = seedUser('nowrite_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    constrain($b, 'movement', 'soft', 'box jumps', 'knees');
+    $before = (int) DB::one(
+        'SELECT COUNT(*) AS n FROM user_constraints WHERE user_id = ?', [$a]
+    )['n'];
+
+    pairUp($a, $b);
+    Safety::forUser($a);          // reading must not write
+    Safety::promptBlock($a);
+
+    $after = (int) DB::one(
+        'SELECT COUNT(*) AS n FROM user_constraints WHERE user_id = ?', [$a]
+    )['n'];
+    return $before === $after
+        ?: "inheritance wrote {$after} rows where there were {$before}";
+});
+
+t('an unpaired user inherits nothing', function () {
+    // The solo path has to be untouched.
+    $solo = seedUser('solo_inh');
+    grid($solo, [1 => [60, 'full_gym']]);
+    constrain($solo, 'movement', 'soft', 'lunges', 'dislikes');
+    $soft = Safety::forUser($solo)['soft'];
+    if (count($soft) !== 1) {
+        return count($soft) . ' soft constraints for an unpaired user, expected 1';
+    }
+    return ($soft[0]['inherited'] ?? false) === false
+        ?: 'an unpaired user has an inherited row';
+});
+
+t('the profile lists an inherited limit, without a switch', function () {
+    /*
+     * It steers this user's plan, so a preference they cannot find in their profile would look
+     * like the coach inventing things. But there is no row of theirs to turn off — unpairing is
+     * what removes it — so offering a switch would imply otherwise.
+     */
+    $a = seedUser('prof_a');
+    $b = seedUser('prof_b');
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    constrain($b, 'cardio', 'soft', 'stair-machine', 'refused');
+    pairUp($a, $b);
+
+    $found = null;
+    foreach (Settings::constraints($a) as $c) {
+        if (($c['inherited'] ?? false) === true) {
+            $found = $c;
+        }
+    }
+    if ($found === null) {
+        return 'no inherited row on the profile';
+    }
+    if ($found['switchable'] !== false) {
+        return 'an inherited limit is offered as switchable';
+    }
+    if ($found['id'] !== null) {
+        return 'an inherited row carries an id it does not have';
+    }
+    // Readable, not the raw slug.
+    return $found['label'] === 'Stair machine'
+        ?: 'the label is ' . var_export($found['label'], true);
 });
 
 // ---------------------------------------------------------------------------
