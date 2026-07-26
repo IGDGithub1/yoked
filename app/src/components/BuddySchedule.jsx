@@ -103,6 +103,21 @@ export default function BuddySchedule({ paired, onChanged }) {
       )}
 
       {/*
+        Where the two of you are actually meeting (§10.3).
+
+        A pair trains in one place, and the app cannot know which one. When the grids disagree —
+        one has a full gym, the other dumbbells at home — it assumes the better-equipped venue
+        and the other person travelling, because that is the usual arrangement and because
+        defaulting downward meant pairing could only ever cost somebody equipment.
+
+        That assumption gets said out loud rather than acted on quietly. The app never asks
+        WHERE: which gym and who drives are for the two of them to sort out.
+      */}
+      {(s.unconfirmed_access?.length ?? 0) > 0 && (
+        <FacilityPrompt s={s} busy={busy} run={run} />
+      )}
+
+      {/*
         What a shared day actually means, stated once and plainly.
 
         This used to say only that you both have a session. That was all the app could honestly
@@ -321,6 +336,72 @@ function Offers({ s, dayName, busy, run }) {
  * Until they answer, the app keeps their original commitment — never silently less than they
  * asked for.
  */
+/**
+ * Where are you two actually meeting? (§10.3)
+ *
+ * Only shown when the two grids disagree about a shared day. If both said full gym there is
+ * nothing to settle and this never appears.
+ *
+ * The app has already picked the better-equipped option and will train them there unless told
+ * otherwise, so this reads as a confirmation rather than a blocking question. Nothing is
+ * broken if they ignore it; they just get a guess instead of an answer, and the guess is the
+ * arrangement most pairs land on anyway.
+ *
+ * Deliberately does NOT ask where. Which gym, whose garage, and who drives are things two
+ * people sort out between themselves, and an app that collected addresses to prescribe a
+ * dumbbell row would be asking for something it does not need.
+ */
+function FacilityPrompt({ s, busy, run }) {
+  const labels = s.access_labels ?? {}
+
+  return (
+    <div className="veto stack-sm">
+      <p className="tiny" style={{ margin: 0, fontWeight: 600 }}>
+        {s.unconfirmed_access.length === 1
+          ? 'Where are you training together?'
+          : 'Where are you training on these days?'}
+      </p>
+      <p className="tiny muted prose" style={{ margin: 0 }}>
+        You each said something different, so we have assumed the better-equipped option and
+        that whoever has less gear travels. Sort out the details between you — we only need to
+        know what kit will be there.
+      </p>
+
+      <div className="stack-tight">
+        {s.unconfirmed_access.map((d) => (
+          <div className="stack-tight" key={d.weekday}>
+            <span className="small" style={{ fontWeight: 600 }}>
+              {d.day}: {d.label}
+            </span>
+            <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+              {/*
+                Both users' own answers, and nothing else. Offering all four tiers would invite
+                a pair to agree on a full gym neither of them has.
+              */}
+              {[...new Set([d.yours, d.theirs].filter(Boolean))].map((access) => (
+                <button
+                  key={access}
+                  type="button"
+                  className={
+                    access === d.assumed
+                      ? 'btn btn--primary btn--small'
+                      : 'btn btn--quiet btn--small'
+                  }
+                  aria-pressed={access === d.assumed}
+                  disabled={busy}
+                  onClick={() => run(() => api.buddy.setDayAccess(d.weekday, access))}
+                >
+                  {labels[access] ?? access}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function Surplus({ s, busy, run }) {
   const shared = s.agreed.length
   const surplus = s.surplus.surplus

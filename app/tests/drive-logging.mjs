@@ -2628,6 +2628,110 @@ await check('a natural overlap says so, rather than claiming someone conceded', 
   return /both free/.test(text) ? true : `the origin is not shown: ${text}`
 })
 
+await check('the app asks where they are training, and says what it assumed', async () => {
+  /*
+   * A pair trains in one place. The fixture grids disagree — one has a full gym, the other a
+   * home gym — so the app assumes the better-equipped venue with the other person travelling,
+   * and has to SAY that rather than acting on it quietly.
+   *
+   * The old rule took the more restrictive of the two, which produced a session neither of them
+   * could necessarily attend together: a capability tier they happen to share, in two separate
+   * houses.
+   */
+  const card = fr.locator('.card', { hasText: /days you train together/i }).first()
+  const text = (await card.innerText()).toLowerCase()
+
+  if (!/where are you training/.test(text)) {
+    return `the app does not ask where they are meeting: ${text}`
+  }
+  if (!/assumed/.test(text)) {
+    return 'the app does not admit it guessed'
+  }
+  // The assumption itself: the gym, not the home gym.
+  return /full gym/.test(text)
+    ? true
+    : `the assumed facility is not the better-equipped one: ${text}`
+})
+
+await check('it never asks WHERE, only what kind of place', async () => {
+  /*
+   * Which gym, whose garage and who drives are for the two of them to arrange. An app that
+   * collected an address in order to prescribe a dumbbell row would be asking for something it
+   * has no use for.
+   */
+  const card = fr.locator('.card', { hasText: /days you train together/i }).first()
+  const text = (await card.innerText()).toLowerCase()
+  for (const nosy of ['address', 'postcode', 'zip', 'location name', 'which gym']) {
+    if (text.includes(nosy)) return `the app asks for a place: "${nosy}"`
+  }
+  // And there is no free-text box lurking in the facility prompt.
+  const inputs = await card.locator('input[type="text"]').count()
+  return inputs === 0 ? true : `${inputs} text inputs in the schedule card`
+})
+
+await check('settling the facility sticks, and the question goes away', async () => {
+  /*
+   * Settled PER DAY, so both shared days have to be answered before the prompt clears. The
+   * fixture pair shares Wednesday and Friday, and an earlier version of this clicked once and
+   * then reported the surviving Friday question as a bug.
+   *
+   * Per-day is right rather than per-pair: a pair can perfectly well meet at the gym on
+   * Wednesday and at somebody's house on Friday, and forcing one answer for the week would
+   * make them pick the wrong one for one of the days.
+   */
+  const card = fr.locator('.card', { hasText: /days you train together/i }).first()
+
+  // The less-equipped option, which is the case the most-capable guess gets wrong and the
+  // reason this is settleable at all.
+  for (let i = 0; i < 4; i++) {
+    const remaining = await fr.evaluate(async () => {
+      const r = await fetch('/api/buddy/schedule', { credentials: 'same-origin' })
+      return ((await r.json()).schedule?.unconfirmed_access ?? []).length
+    })
+    if (remaining === 0) break
+
+    const btn = card.getByRole('button', { name: /home gym/i })
+    if ((await btn.count()) === 0) break
+    await btn.first().click()
+
+    /*
+     * Wait for the SERVER count to drop, not for a timeout.
+     *
+     * The panel re-reads after each write, so a fixed sleep either races the re-render or
+     * clicks a button belonging to a row that is about to disappear. Polling the count is the
+     * only thing that actually says the previous click landed.
+     */
+    await fr.waitForFunction(
+      async (before) => {
+        const r = await fetch('/api/buddy/schedule', { credentials: 'same-origin' })
+        return ((await r.json()).schedule?.unconfirmed_access ?? []).length < before
+      },
+      remaining,
+      { timeout: 20000 }
+    )
+  }
+
+  await fr.waitForFunction(async () => {
+    const r = await fetch('/api/buddy/schedule', { credentials: 'same-origin' })
+    const s = (await r.json()).schedule
+    return (s?.unconfirmed_access?.length ?? 0) === 0
+  }, null, { timeout: 20000 })
+
+  const text = (await card.innerText()).toLowerCase()
+  if (/where are you training/.test(text)) {
+    return 'the app still asks after the pair settled every shared day'
+  }
+
+  // And the choice was actually recorded, rather than the question merely being dismissed.
+  const shared = await fr.evaluate(async () => {
+    const r = await fetch('/api/buddy', { credentials: 'same-origin' })
+    return (await r.json()).buddy?.shared_days ?? []
+  })
+  return shared.length > 0
+    ? true
+    : 'the shared days vanished along with the question'
+})
+
 await check('the schedule card says what is matched and what stays yours', async () => {
   /*
    * The same moved goalpost as above, on the schedule card. 10.6 delivers the shape — type,

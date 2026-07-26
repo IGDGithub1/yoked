@@ -191,10 +191,16 @@ t('the shared session is capped at the shorter window', function () use ($a, $pa
         ?: 'the shared Monday is ' . var_export($eff[1]['minutes'], true) . ' minutes';
 });
 
-t('the shared session is capped at the more restrictive access', function () use ($a, $pairId) {
-    // home_gym, not full_gym: B cannot train at A's gym, so the pair trains where both can.
+t('the shared session assumes the better facility', function () use ($a, $pairId) {
+    /*
+     * full_gym, not home_gym. A pair trains in one place, so the guess is that the leader
+     * brings the follower to the gym rather than that both of them work out at home in
+     * separate houses — which is what "the more restrictive of the two" used to produce.
+     *
+     * It is a guess until the pair settles it; see bin/test-buddy-schedule.php section 1.
+     */
     $eff = BuddySchedule::effective($a, $pairId);
-    return $eff[1]['access'] === 'home_gym'
+    return $eff[1]['access'] === 'full_gym'
         ?: 'the shared Monday access is ' . var_export($eff[1]['access'], true);
 });
 
@@ -622,13 +628,49 @@ t('the follower is not given the leader loads', function () use ($sesA, $sesB, $
         ?: "all {$compared} loaded movements were prescribed at the same weight";
 });
 
-t('the follower plan respects their own access', function () use ($sesB, $sharedDates) {
-    // home_gym, not the leader's full gym. If the skeleton could override this, matching would
-    // have become a way to prescribe equipment somebody does not own.
-    foreach ($sharedDates as $d) {
-        $loc = (string) $sesB[$d]['location'];
-        if ($loc === 'full_gym') {
-            return "{$d}: the follower was sent to a full gym they do not have";
+t('both are at the AGREED facility, not their separate ones',
+    function () use ($sesA, $sesB, $sharedDates) {
+        /*
+         * This assertion was the other way round, and the other way round was the bug.
+         *
+         * It used to demand the follower stay at home_gym on the grounds that the skeleton must
+         * never prescribe equipment they do not own. But a pair trains in ONE PLACE: sending the
+         * leader to a gym and the follower to their kitchen is two solo sessions that happen to
+         * rhyme, which is precisely what §10 exists not to be.
+         *
+         * The shared day is full_gym here because that is the pair's resolved facility — the
+         * assumption being the follower travels. What matters is that BOTH plans name the same
+         * place; the individual grids still govern the solo days, asserted separately.
+         */
+        foreach ($sharedDates as $d) {
+            $x = (string) $sesA[$d]['location'];
+            $y = (string) $sesB[$d]['location'];
+            if ($x !== $y) {
+                return "{$d}: the leader is at {$x} and the follower at {$y}";
+            }
+        }
+        return true;
+    }
+);
+
+t('the follower solo days keep their OWN facility', function () use ($rB, $sharedDates) {
+    /*
+     * §10.1a. Training at the leader's gym on a shared Wednesday does not hand the follower a
+     * gym on Tuesday. This fixture gives the follower no surplus days, so this is a check that
+     * nothing outside the shared days was upgraded rather than a check on a specific session.
+     */
+    $rows = DB::all(
+        'SELECT session_date, location FROM prescribed_sessions
+         WHERE plan_version_id = ?',
+        [(int) $rB['plan_version_id']]
+    );
+    foreach ($rows as $r) {
+        $d = (string) $r['session_date'];
+        if (in_array($d, $sharedDates, true)) {
+            continue;   // shared: the agreed facility applies
+        }
+        if ((string) $r['location'] === 'full_gym') {
+            return "{$d} is a solo day and it was given a full gym";
         }
     }
     return true;

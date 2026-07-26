@@ -602,19 +602,27 @@ printf(
  *
  * Friday minutes differ (90 against 45), so the "shorter of the two" rule has a case where
  * the two figures actually disagree.
+ *
+ * THE FACILITIES DIFFER TOO, and for the same reason: uitest_logging has a full gym and
+ * uitest_baseline trains at home. A pair trains in one place, so the app has to guess which —
+ * it assumes the better-equipped venue with the other person travelling — and then say that it
+ * guessed. Seeding both users with a full gym would leave nothing to settle and the
+ * "where are you training?" prompt would never render.
  */
 $grids = [
-    $seed['user_id'] => [1 => 60, 3 => 60, 5 => 90, 6 => 120],
-    $blUser          => [3 => 45, 5 => 45, 7 => 60],
+    $seed['user_id'] => ['access' => 'full_gym', 'days' => [1 => 60, 3 => 60, 5 => 90, 6 => 120]],
+    $blUser          => ['access' => 'home_gym', 'days' => [3 => 45, 5 => 45, 7 => 60]],
 ];
-foreach ($grids as $gridUser => $days) {
+foreach ($grids as $gridUser => $spec) {
+    $days = $spec['days'];
     for ($d = 1; $d <= 7; $d++) {
         DB::run(
             'INSERT INTO availability (user_id, weekday, can_train, minutes, access,
                                        preferred_time)
-             VALUES (?, ?, ?, ?, "full_gym", "early_morning")
-             ON DUPLICATE KEY UPDATE can_train = VALUES(can_train), minutes = VALUES(minutes)',
-            [$gridUser, $d, isset($days[$d]) ? 'yes' : 'no', $days[$d] ?? null]
+             VALUES (?, ?, ?, ?, ?, "early_morning")
+             ON DUPLICATE KEY UPDATE can_train = VALUES(can_train),
+                 minutes = VALUES(minutes), access = VALUES(access)',
+            [$gridUser, $d, isset($days[$d]) ? 'yes' : 'no', $days[$d] ?? null, $spec['access']]
         );
     }
 }

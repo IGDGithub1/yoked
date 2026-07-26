@@ -138,10 +138,18 @@ t('the shared duration is the shorter of the two', function () {
         ?: 'shared minutes are ' . var_export($eff[3]['minutes'], true);
 });
 
-t('the shared access is the more restrictive of the two', function () {
+t('the shared facility is the MORE capable of the two, not the least', function () {
     /*
-     * Both users have to be able to train there. Somebody with only bodyweight at home cannot
-     * join a full-gym session, so the pair trains bodyweight — not the other way round.
+     * This assertion used to be the exact opposite, and the opposite was wrong.
+     *
+     * A pair trains in the same place, physically. Resolving full_gym against bodyweight down
+     * to bodyweight does not name a place both can attend — it names a capability tier they
+     * happen to share, in two different locations, and the only question that mattered (whose
+     * gym?) was never asked. It also compromised in one direction only, so pairing could cost
+     * you equipment and never gain you any.
+     *
+     * The guess is now that the better-equipped venue wins and the other person travels, which
+     * is what most pairs actually do. It stays a GUESS — see the unconfirmed-days test below.
      */
     $a = seedUser('acc_a');
     $b = seedUser('acc_b');
@@ -150,8 +158,124 @@ t('the shared access is the more restrictive of the two', function () {
     $pairId = pairUp($a, $b);
 
     $eff = BuddySchedule::effective($a, $pairId);
-    return $eff[2]['access'] === 'bodyweight'
-        ?: 'shared access is ' . var_export($eff[2]['access'], true);
+    if ($eff[2]['access'] !== 'full_gym') {
+        return 'shared access is ' . var_export($eff[2]['access'], true);
+    }
+    // And the less-equipped user sees the same shared day, since it is one session.
+    $theirs = BuddySchedule::effective($b, $pairId);
+    return $theirs[2]['access'] === 'full_gym'
+        ?: 'the two halves of the pair disagree about where they are training';
+});
+
+t('the guess is marked unconfirmed, and says what each of them said', function () {
+    /*
+     * The app cannot know whose car works, who has a guest pass, or who would rather not have
+     * company at home. So it guesses, and then says it guessed rather than acting quietly.
+     */
+    $a = seedUser('accq_a');
+    $b = seedUser('accq_b');
+    grid($a, [2 => [60, 'full_gym']]);
+    grid($b, [2 => [60, 'home_gym']]);
+    pairUp($a, $b);
+
+    $rows = BuddySchedule::unconfirmedDays($a);
+    if (count($rows) !== 1) {
+        return count($rows) . ' unconfirmed days, expected 1';
+    }
+    $r = $rows[0];
+    if ($r['assumed'] !== 'full_gym') {
+        return "assumed {$r['assumed']}, expected full_gym";
+    }
+    // Both sides are reported so the UI can offer only what one of them actually has.
+    return ($r['yours'] === 'full_gym' && $r['theirs'] === 'home_gym')
+        ?: "the two answers came back as {$r['yours']}/{$r['theirs']}";
+});
+
+t('agreeing facilities is not asked when they already match', function () {
+    // Nothing to settle, so nothing to nag about.
+    $a = seedUser('accm_a');
+    $b = seedUser('accm_b');
+    grid($a, [2 => [60, 'full_gym']]);
+    grid($b, [2 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    return BuddySchedule::unconfirmedDays($a) === []
+        ?: 'the app asked where to train when both said the same thing';
+});
+
+t('either user can settle it, and it stops being a guess', function () {
+    $a = seedUser('accs_a');
+    $b = seedUser('accs_b');
+    grid($a, [2 => [60, 'full_gym']]);
+    grid($b, [2 => [60, 'home_gym']]);
+    $pairId = pairUp($a, $b);
+
+    // The LESS equipped user decides they would rather host, which is the case the
+    // most-capable guess gets wrong and the reason this is settleable at all.
+    $r = BuddySchedule::setDayAccess($b, 2, 'home_gym');
+    if (!$r['ok']) {
+        return 'setting it failed: ' . (string) $r['error'];
+    }
+
+    $eff = BuddySchedule::effective($a, $pairId);
+    if ($eff[2]['access'] !== 'home_gym') {
+        return 'the other user still sees ' . var_export($eff[2]['access'], true);
+    }
+    return BuddySchedule::unconfirmedDays($a) === []
+        ?: 'the day is still listed as a guess after being settled';
+});
+
+t('a settled facility survives a grid edit', function () {
+    /*
+     * Re-seeding happens whenever either grid changes, and it must not throw away an agreement
+     * between two people because somebody edited an unrelated Tuesday. Minutes still refresh —
+     * those come straight from the grid — but the facility is a negotiated thing.
+     */
+    $a = seedUser('accp_a');
+    $b = seedUser('accp_b');
+    grid($a, [2 => [60, 'full_gym'], 4 => [60, 'full_gym']]);
+    grid($b, [2 => [60, 'home_gym'], 4 => [60, 'home_gym']]);
+    $pairId = pairUp($a, $b);
+
+    BuddySchedule::setDayAccess($b, 2, 'home_gym');
+
+    // A grid edit, which re-seeds the intersection.
+    grid($a, [2 => [45, 'full_gym'], 4 => [60, 'full_gym']]);
+    BuddySchedule::seedFromIntersection($pairId, $a, $b);
+
+    $eff = BuddySchedule::effective($a, $pairId);
+    if ($eff[2]['access'] !== 'home_gym') {
+        return 'the agreement was overwritten by re-seeding';
+    }
+    // The duration DID refresh, because that is what the grid is for.
+    return $eff[2]['minutes'] === 45
+        ?: 'the shorter window did not take effect: ' . var_export($eff[2]['minutes'], true);
+});
+
+t('a shared full gym does NOT leak into the individual days', function () {
+    /*
+     * The boundary that makes this safe. Visiting a full gym with your buddy on Wednesday does
+     * not mean you have one on Tuesday — §10.1a: the individual grid is never rewritten.
+     */
+    $a = seedUser('accl_a', 3);
+    $b = seedUser('accl_b', 3);
+    grid($a, [2 => [60, 'full_gym'], 4 => [60, 'full_gym']]);
+    // B shares Tuesday with A and trains alone on Thursday.
+    grid($b, [2 => [60, 'home_gym'], 4 => [60, 'home_gym']]);
+    $pairId = pairUp($a, $b);
+    BuddySchedule::dropDay($b, 4);
+
+    $eff = BuddySchedule::effective($b, $pairId);
+    if ($eff[2]['access'] !== 'full_gym') {
+        return 'the shared day is not the better facility';
+    }
+    if ($eff[4]['access'] !== 'home_gym') {
+        return "the solo Thursday became {$eff[4]['access']}";
+    }
+    // And their own grid row is untouched, which is what the solo fallback reads.
+    $own = BuddySchedule::effective($b, null);
+    return $own[2]['access'] === 'home_gym'
+        ?: 'the individual grid was rewritten to ' . var_export($own[2]['access'], true);
 });
 
 t('"sometimes" counts as free', function () {
@@ -1542,12 +1666,17 @@ t('the skeleton reports the SHARED window, not the leader own', function () {
     /*
      * The bug this exists to prevent, found by a live run rather than by reasoning.
      *
-     * The leader's session row says 60 minutes at a full gym, because that is what THEY were
-     * prescribed. The shared day resolves to the shorter window and the access both of them
-     * have (§10.3). Handing the follower the leader's figures under a "copy exactly"
-     * instruction tells them to fit 60 minutes of full-gym work into a 45-minute home window —
-     * and the model's answer was to schedule the overflow on three days the follower had marked
-     * unavailable, which failed validation three times and cost a full generation.
+     * The leader's session row says 75 minutes, because that is what THEY were prescribed. The
+     * shared day resolves to the SHORTER window (§10.3) — a shared session cannot outlast
+     * whichever of them has to leave. Handing the follower the leader's figure under a "copy
+     * exactly" instruction told them to fit 75 minutes into a 45-minute window, and the model
+     * answered by scheduling the overflow on three days the follower had marked unavailable.
+     * Three validation failures and a wasted generation.
+     *
+     * The FACILITY is settled the other way and deliberately so: the pair meets in one place,
+     * and the guess is the better-equipped one with the other person travelling. The two
+     * resolve in opposite directions because they answer different questions — how long can
+     * both of them stay, versus where can they both train.
      */
     $a = seedUser('skel_win_a', 3);
     $b = seedUser('skel_win_b', 3);
@@ -1575,8 +1704,9 @@ t('the skeleton reports the SHARED window, not the leader own', function () {
     if ($day['target_minutes'] !== 45) {
         return "the skeleton offers {$day['target_minutes']} minutes against a 45 minute window";
     }
-    if ($day['location'] !== 'home_gym') {
-        return "the skeleton sends them to {$day['location']}, which they do not have";
+    // The agreed facility, which here is the gym the pair is assumed to be meeting at.
+    if ($day['location'] !== 'full_gym') {
+        return "the skeleton says {$day['location']}, not the facility the pair resolved to";
     }
     // And the warm-up is scaled to the shorter session rather than copied whole.
     if ($day['warmup_minutes'] !== null && $day['warmup_minutes'] > 10) {

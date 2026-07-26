@@ -251,6 +251,13 @@ export const api = {
     dropDay: (weekday) => del(`buddy/schedule/days/${weekday}`),
     /* keep_commitment | extras_optional | match_buddy */
     setSurplus: (mode) => put('buddy/schedule/surplus', { mode }),
+    /*
+     * What kind of place a shared day happens in (§10.3): full_gym | home_gym | bodyweight |
+     * outdoors. A TYPE, never an address — which gym and who drives are for the pair to
+     * arrange, and the coach only needs to know what equipment will be there.
+     */
+    setDayAccess: (weekday, access) =>
+      put(`buddy/schedule/days/${weekday}/access`, { access }),
 
     /*
      * Absence (§10.5). Declared before Sunday's generation, next week is built solo; declared

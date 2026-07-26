@@ -269,8 +269,47 @@ $router->add('GET', 'buddy/schedule', function (): void {
             'offers'    => BuddySchedule::offers($userId),
             // §10.3b. `needs_choice` is what the UI prompts on.
             'surplus'   => BuddySchedule::committedTarget($userId, $pairId),
+            /*
+             * Shared days where the app GUESSED the facility because the two grids disagreed.
+             *
+             * A pair trains in one place, and the app cannot know which. It assumes the
+             * better-equipped venue and the other person travelling, then says so here rather
+             * than acting on the assumption quietly.
+             */
+            'unconfirmed_access' => BuddySchedule::unconfirmedDays($userId),
+            'access_labels'      => BuddySchedule::ACCESS_LABELS,
         ],
     ]);
+});
+
+/**
+ * PUT /api/buddy/schedule/days/{weekday}/access — settle what kind of place a shared day is.
+ *
+ * Body: {access}
+ *
+ * Either user may set it and the other is notified. A both-must-confirm handshake would leave
+ * days unsettled whenever one person is slow, and an unsettled day is the thing this fixes.
+ *
+ * The app stores a facility TYPE, never a place: which gym and who drives are for the two of
+ * them to arrange, and all the coach needs is what equipment will be there.
+ */
+$router->add('PUT', 'buddy/schedule/days/{weekday}/access', function (array $p): void {
+    $user = Auth::require();
+    Csrf::require();
+
+    $body    = Response::body();
+    $weekday = (int) $p['weekday'];
+    $access  = trim((string) ($body['access'] ?? ''));
+
+    if ($weekday < 1 || $weekday > 7) {
+        Response::error('That is not a day of the week.', 422);
+    }
+
+    $r = BuddySchedule::setDayAccess((int) $user['id'], $weekday, $access);
+    if (!$r['ok']) {
+        Response::error((string) $r['error'], 422);
+    }
+    Response::json(['ok' => true, 'access' => $r['status']]);
 });
 
 /**

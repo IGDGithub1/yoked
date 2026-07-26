@@ -123,8 +123,9 @@ final class BuddySkeleton
          *
          * This distinction is load-bearing and getting it wrong produced a real failure. The
          * leader's row says what THEY were prescribed — 60 minutes at a full gym — while the
-         * shared day resolves to the shorter window and the more restrictive access, because
-         * both of them have to be able to train there (§10.3). Handing the follower the leader's
+         * shared day resolves to the shorter window and the facility the pair agreed on, which
+         * may be better OR worse than either user's own grid says (§10.3). Handing the follower
+         * the leader's
          * numbers under a "COPY EXACTLY" instruction tells them to fit a 60-minute full-gym
          * session into their own 45-minute home window, and a measured run responded by pushing
          * the overflow onto days the follower had marked unavailable.

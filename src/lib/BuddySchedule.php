@@ -237,11 +237,23 @@ final class BuddySchedule
                 continue;
             }
 
+            /*
+             * The access is a GUESS until the pair confirms it, and re-seeding must not
+             * overwrite one they already settled.
+             *
+             * Minutes always refresh, because they come straight from the grids and a grid edit
+             * is the user saying their window changed. The facility is different: it is an
+             * agreement between two people about where to meet, and a Tuesday grid edit is no
+             * reason to throw it away and re-guess. Hence the IF on access_agreed rather than a
+             * plain VALUES().
+             */
             DB::run(
                 'INSERT INTO buddy_schedule_days
-                    (buddy_pair_id, weekday, minutes, access, origin)
-                 VALUES (?, ?, ?, ?, "intersection")
-                 ON DUPLICATE KEY UPDATE minutes = VALUES(minutes), access = VALUES(access)',
+                    (buddy_pair_id, weekday, minutes, access, access_agreed, origin)
+                 VALUES (?, ?, ?, ?, 0, "intersection")
+                 ON DUPLICATE KEY UPDATE
+                    minutes = VALUES(minutes),
+                    access  = IF(access_agreed = 1, access, VALUES(access))',
                 [$pairId, $wd, self::sharedMinutes($aDay, $bDay),
                  self::sharedAccess($aDay, $bDay)]
             );
@@ -267,30 +279,58 @@ final class BuddySchedule
     }
 
     /**
-     * Where a shared session can happen.
+     * What KIND of facility a shared session happens in.
      *
-     * Both users have to be able to train there, so the answer is the more restrictive of
-     * the two — ordered by what a place can support rather than alphabetically. Somebody with
-     * only bodyweight at home cannot join a full-gym session, so the pair trains bodyweight.
+     * A buddy pair trains in the same place, physically. That is the whole feature — not two
+     * people doing similar work in two buildings.
      *
-     * A null on either side means unstated, and the other's value is used: guessing
-     * 'bodyweight' from silence would strip a pair of equipment they both have.
+     * THIS USED TO TAKE THE MORE RESTRICTIVE OF THE TWO, and that was wrong twice over.
+     * Resolving full_gym against home_gym to home_gym does not name a place both can attend; it
+     * names a capability tier they happen to share, in separate houses. And it compromised in
+     * one direction only, so pairing could cost you equipment and never gain you any — when the
+     * usual real answer is that whoever has the gym membership brings the other one along.
+     *
+     * So this returns the MORE CAPABLE tier, as an assumption that the less-equipped user
+     * travels. It is only ever a guess: the app cannot know whose car works, who has a guest
+     * pass, or who would rather not have company at home. So the guess is recorded as
+     * unconfirmed (access_agreed = 0) and put in front of the pair to settle.
+     *
+     * THE APP NEVER STORES A PLACE. Users arrange where to meet between themselves; all this
+     * needs to know is what equipment to prescribe against.
+     *
+     * A null on either side means unstated, and the other's value is used.
      */
     private static function sharedAccess(array $a, array $b): ?string
     {
-        // Most restrictive first. The first one either user is limited to is the answer.
-        $rank = ['bodyweight' => 0, 'outdoors' => 1, 'home_gym' => 2, 'full_gym' => 3];
-
         $vals = array_values(array_filter(
             [$a['access'], $b['access']],
-            static fn($v): bool => $v !== null && isset($rank[$v])
+            static fn($v): bool => $v !== null && isset(self::ACCESS_RANK[$v])
         ));
         if ($vals === []) {
             return null;
         }
-        usort($vals, static fn(string $x, string $y): int => $rank[$x] <=> $rank[$y]);
-        return $vals[0];
+        // Most capable last, so the last one is the answer.
+        usort(
+            $vals,
+            static fn(string $x, string $y): int
+                => self::ACCESS_RANK[$x] <=> self::ACCESS_RANK[$y]
+        );
+        return $vals[count($vals) - 1];
     }
+
+    /**
+     * What each facility tier can support, least to most.
+     *
+     * Shared rather than inlined because the ordering is now read in two directions — the
+     * seeded guess wants the most capable, and anything asking "is this a step up for them"
+     * wants to compare — and two copies of an ordering drift.
+     */
+    public const ACCESS_RANK = [
+        'bodyweight' => 0,
+        'outdoors'   => 1,
+        'home_gym'   => 2,
+        'full_gym'   => 3,
+    ];
 
     // ---- offers -------------------------------------------------------------
 
@@ -419,13 +459,20 @@ final class BuddySchedule
                  WHERE id = ?',
                 [$offerId]
             );
+            /*
+             * An accepted offer settles the facility, so this day is agreed rather than guessed.
+             *
+             * One person named a day AND what they can train with; the other said yes to both.
+             * That is the confirmation the seeded intersection days are missing, and it is the
+             * reason this path does not need to nag anybody afterwards.
+             */
             DB::run(
                 'INSERT INTO buddy_schedule_days
-                    (buddy_pair_id, weekday, minutes, access, origin)
-                 VALUES (?, ?, ?, ?, "negotiated")
+                    (buddy_pair_id, weekday, minutes, access, access_agreed, origin)
+                 VALUES (?, ?, ?, ?, 1, "negotiated")
                  ON DUPLICATE KEY UPDATE
                      minutes = VALUES(minutes), access = VALUES(access),
-                     origin = "negotiated"',
+                     access_agreed = 1, origin = "negotiated"',
                 [(int) $pair['id'], $wd,
                  self::sharedMinutes($mine, $theirs), self::sharedAccess($mine, $theirs)]
             );
@@ -499,6 +546,149 @@ final class BuddySchedule
         });
 
         return ['ok' => true, 'error' => null, 'status' => 'dropped'];
+    }
+
+    /**
+     * Settle what kind of facility a shared day happens in (§10.3, §10.1).
+     *
+     * WHY THIS EXISTS. A pair trains in the same place, and the app cannot work out which
+     * place. When their grids disagree — one has a full gym, one has dumbbells at home — the
+     * seeded day assumes the better-equipped venue and the less-equipped user travelling,
+     * because that is the usual arrangement and because compromising downward by default meant
+     * pairing could only ever cost somebody equipment. It is still a guess, so it is marked
+     * unconfirmed until somebody says otherwise here.
+     *
+     * NO ADDRESS IS STORED. Which gym, whose garage, and who drives are for the two of them to
+     * arrange. All the app needs is the kind of facility, so it can prescribe equipment that
+     * will actually be there.
+     *
+     * EITHER USER MAY SET IT, and the other is told.
+     *
+     * A confirm-both handshake was the obvious design and is the wrong one: it leaves days
+     * unconfirmed whenever one person is slow to answer, and an unconfirmed day is exactly what
+     * this is for. Somebody changing it to a tier their buddy cannot manage will hear about it
+     * at the gym, which is the same feedback loop the rest of the pairing runs on. What matters
+     * is that the app stops guessing silently.
+     *
+     * Only affects the SHARED day. The user's own grid is never rewritten (§10.1a), so training
+     * at a full gym on Wednesday does not give anybody a full gym on Tuesday.
+     */
+    public static function setDayAccess(int $userId, int $weekday, string $access): array
+    {
+        $pair = self::activePair($userId);
+        if ($pair === null) {
+            return self::fail('You do not have a training buddy.');
+        }
+        if (!isset(self::ACCESS_RANK[$access])) {
+            return self::fail('Pick a kind of place you can both train.');
+        }
+
+        $n = DB::run(
+            'UPDATE buddy_schedule_days SET access = ?, access_agreed = 1
+             WHERE buddy_pair_id = ? AND weekday = ?',
+            [$access, (int) $pair['id'], $weekday]
+        )->rowCount();
+
+        if ($n === 0) {
+            // Either no such shared day, or it already said this. Distinguished so the second
+            // case is not reported as an error to somebody confirming the existing guess.
+            $row = DB::one(
+                'SELECT access FROM buddy_schedule_days
+                 WHERE buddy_pair_id = ? AND weekday = ?',
+                [(int) $pair['id'], $weekday]
+            );
+            if ($row === null) {
+                return self::fail('You do not train together on that day.');
+            }
+            DB::run(
+                'UPDATE buddy_schedule_days SET access_agreed = 1
+                 WHERE buddy_pair_id = ? AND weekday = ?',
+                [(int) $pair['id'], $weekday]
+            );
+        }
+
+        $me    = DB::one('SELECT display_name FROM users WHERE id = ?', [$userId]);
+        $other = self::otherId($pair, $userId);
+        Notify::create(
+            $other,
+            'buddy_day_agreed',
+            sprintf(
+                '%s set your %s session to %s.',
+                (string) ($me['display_name'] ?? 'Your buddy'),
+                self::DAY_NAMES[$weekday] ?? "day {$weekday}",
+                self::ACCESS_LABELS[$access] ?? $access
+            )
+        );
+
+        return ['ok' => true, 'error' => null, 'status' => $access];
+    }
+
+    /** Plain-English facility names, for notifications and the API. */
+    public const ACCESS_LABELS = [
+        'bodyweight' => 'bodyweight only',
+        'outdoors'   => 'outdoors',
+        'home_gym'   => 'a home gym',
+        'full_gym'   => 'a full gym',
+    ];
+
+    /**
+     * Shared days whose facility is still a guess.
+     *
+     * Surfaced so the app can say so rather than quietly acting on an assumption about where
+     * two people are going to meet. Only interesting when the two grids DISAGREED — if both
+     * users said full_gym there is nothing to settle and nothing to nag about.
+     */
+    public static function unconfirmedDays(int $userId): array
+    {
+        $pair = self::activePair($userId);
+        if ($pair === null) {
+            return [];
+        }
+        $pairId = (int) $pair['id'];
+        $other  = self::otherId($pair, $userId);
+
+        /*
+         * Compared against the INDIVIDUAL grids, not the effective schedule.
+         *
+         * The shared row already holds the resolved guess, and effective() overlays it, so
+         * comparing the two users' effective values would find them identical every time and
+         * report nothing. What matters is whether their OWN stated facilities disagree.
+         */
+        $out = [];
+        foreach (DB::all(
+            'SELECT weekday, access FROM buddy_schedule_days
+             WHERE buddy_pair_id = ? AND access_agreed = 0
+             ORDER BY weekday',
+            [$pairId]
+        ) as $r) {
+            $wd = (int) $r['weekday'];
+
+            $aOwn = DB::one(
+                'SELECT access FROM availability WHERE user_id = ? AND weekday = ?',
+                [$userId, $wd]
+            );
+            $bOwn = DB::one(
+                'SELECT access FROM availability WHERE user_id = ? AND weekday = ?',
+                [$other, $wd]
+            );
+            $x = $aOwn['access'] ?? null;
+            $y = $bOwn['access'] ?? null;
+
+            // Nothing to settle when they already match, or when neither stated anything.
+            if ($x === $y || ($x === null && $y === null)) {
+                continue;
+            }
+
+            $out[] = [
+                'weekday'  => $wd,
+                'day'      => self::DAY_NAMES[$wd] ?? "day {$wd}",
+                'assumed'  => $r['access'],
+                'label'    => self::ACCESS_LABELS[$r['access']] ?? $r['access'],
+                'yours'    => $x,
+                'theirs'   => $y,
+            ];
+        }
+        return $out;
     }
 
     /** Pending offers on this pair, both directions. */
