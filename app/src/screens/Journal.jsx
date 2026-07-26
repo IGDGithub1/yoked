@@ -27,6 +27,12 @@ export default function Journal({ baseline }) {
   const [date, setDate] = useState(todayDate)
   const [nutrition, setNutrition] = useState(null)
   const [training, setTraining] = useState(null)
+  /*
+   * Vetoes are fetched for the WEEK, not the day, and held here rather than in Food or
+   * Training. One request feeds both sections, and a veto raised against a meal has to be
+   * visible next to that meal on whichever day it lands on.
+   */
+  const [vetoes, setVetoes] = useState([])
   const [status, setStatus] = useState('loading')
   const [error, setError] = useState(null)
 
@@ -36,9 +42,16 @@ export default function Journal({ baseline }) {
     try {
       // In parallel: two sequential round trips on a phone is a visible wait for
       // no reason — neither response depends on the other.
-      const [n, t] = await Promise.all([api.nutrition.day(d), api.training.day(d)])
+      const [n, t, v] = await Promise.all([
+        api.nutrition.day(d),
+        api.training.day(d),
+        // allSettled semantics by hand: a veto list that fails must not stop the day
+        // rendering. It is annotation, not content.
+        api.vetoes.load().catch(() => ({ vetoes: [] })),
+      ])
       setNutrition(n)
       setTraining(t)
+      setVetoes(v?.vetoes ?? [])
       setStatus('ready')
     } catch (e) {
       setError(e.message || 'Could not load that day.')
@@ -59,6 +72,10 @@ export default function Journal({ baseline }) {
    * see until they stepped away and back.
    */
   const onNutritionDay = (day) => setNutrition(day)
+
+  /* After raising a veto: re-read the list so the pending state appears immediately. */
+  const refreshVetoes = () =>
+    api.vetoes.load().then((v) => setVetoes(v?.vetoes ?? [])).catch(() => {})
   const onTrainingDay = (day) => {
     setTraining(day)
     api.nutrition.day(date).then(setNutrition).catch(() => {})
@@ -136,7 +153,14 @@ export default function Journal({ baseline }) {
           <CheckIn key={date} checkin={nutrition.checkin} onSave={saveCheckIn} />
 
           <Section name="food" title="Food" summary={<FoodSummary day={nutrition} />}>
-            <Food day={nutrition} date={date} isToday={isToday} onDay={onNutritionDay} />
+            <Food
+              day={nutrition}
+              date={date}
+              isToday={isToday}
+              onDay={onNutritionDay}
+              vetoes={vetoes}
+              onVeto={refreshVetoes}
+            />
           </Section>
 
           <Section
@@ -144,7 +168,13 @@ export default function Journal({ baseline }) {
             title="Training"
             summary={<TrainingSummary day={training} />}
           >
-            <Training day={training} date={date} onDay={onTrainingDay} />
+            <Training
+              day={training}
+              date={date}
+              onDay={onTrainingDay}
+              vetoes={vetoes}
+              onVeto={refreshVetoes}
+            />
           </Section>
 
           {/* Baseline week 1 is pure observation and has no prescription, so the

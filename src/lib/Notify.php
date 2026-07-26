@@ -34,6 +34,10 @@ final class Notify
      */
     public const TYPES = [
         'absence', 'checkin_open', 'checkin_review', 'plan_ready', 'drift_question',
+        // A veto that was decided without changing the plan (SPEC-coaching §5.4). Distinct
+        // from plan_ready on purpose: the user asked for something and did not get it, and
+        // routing that through a "your plan is ready" message would be actively misleading.
+        'veto_decided',
     ];
 
     /**

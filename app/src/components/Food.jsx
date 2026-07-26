@@ -3,6 +3,7 @@ import { api } from '../api'
 import { foodPlaceholder } from '../foodExamples'
 import Scanner from './Scanner'
 import Help from './Help'
+import Veto, { VetoOutcome } from './Veto'
 
 /**
  * Food logging for one day.
@@ -69,7 +70,7 @@ const ADHERENCE_LABELS = {
   unplanned: 'off-plan',
 }
 
-export default function Food({ day, date, isToday, onDay }) {
+export default function Food({ day, date, isToday, onDay, vetoes = [], onVeto }) {
   /*
    * Favorites are fetched ONCE for the whole section, not per meal card.
    *
@@ -130,6 +131,8 @@ export default function Food({ day, date, isToday, onDay }) {
           favorites={favorites}
           onFavorites={setFavorites}
           onDay={onDay}
+          vetoes={vetoes}
+          onVeto={onVeto}
         />
       ))}
 
@@ -337,12 +340,25 @@ function Snacks({ snacks, date, prescribedFor, favorites, onFavorites, onDay }) 
 
 /* ---- one meal slot ------------------------------------------------------- */
 
-function Meal({ meal, date, prescribed, primary, favorites, onFavorites, onDay }) {
+function Meal({ meal, date, prescribed, primary, favorites, onFavorites, onDay,
+               vetoes = [], onVeto }) {
   const [adding, setAdding] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
   const logged = meal.entries.length > 0
+
+  /*
+   * Has this exact prescription already been turned down?
+   *
+   * Matched on the prescribed meal's id rather than the slot, because a slot repeats every
+   * day and a prescription does not. Newest first from the API, so the first match is the
+   * current state — an old declined veto must not mask a fresh pending one.
+   */
+  const mealVeto = prescribed
+    ? vetoes.find((v) => v.subject_type === 'meal' && v.subject_id === prescribed.id)
+    : null
+
   const run = async (fn) => {
     setError(null)
     setBusy(true)
@@ -447,6 +463,30 @@ function Meal({ meal, date, prescribed, primary, favorites, onFavorites, onDay }
       </div>
 
       {error && <p className="error">{error}</p>}
+
+      {/*
+        Turning it down, which is NOT the same as skipping it (§5).
+        "Skipped it" is a fact about a meal that has already not happened. This is a
+        request about one that has not happened yet, and the coach can decline it. Keeping
+        them apart matters: collapsing the two would either turn every skip into a
+        conversation or make a genuine "I cannot cook tonight" indistinguishable from
+        having forgotten to eat.
+
+        Only while there is still something to turn down: once it is logged or skipped, the
+        question has answered itself.
+      */}
+      {prescribed && !logged && meal.adherence !== 'skipped' && (
+        mealVeto
+          ? <VetoOutcome veto={mealVeto} />
+          : (
+            <Veto
+              subjectType="meal"
+              subjectId={prescribed.id}
+              label={(SLOT_LABELS[meal.slot] || meal.slot).toLowerCase()}
+              onDone={onVeto}
+            />
+          )
+      )}
 
       {adding && (
         <AddFood

@@ -13,7 +13,8 @@ declare(strict_types=1);
  *   4. weekly_plan         — generate next week, using the check-in if answered
  *   5. drift_sweep         — classify recent days; ask questions only on real drift
  *   6. chat_replies        — answer what users have said (§6)
- *   7. checkin_nudge       — chase an unanswered check-in
+ *   7. vetoes              — decide what users have turned down (§5)
+ *   8. checkin_nudge       — chase an unanswered check-in
  *
  * The order is load-bearing and commented at the $jobs array.
  *
@@ -59,6 +60,15 @@ require YK_SRC . '/lib/Notify.php';
 require YK_SRC . '/lib/Drift.php';
 require YK_SRC . '/lib/Nudge.php';
 require YK_SRC . '/lib/Chat.php';
+/*
+ * Vetoes, for jobVetoes.
+ *
+ * Named explicitly because bootstrap_cli.php loads only the low-level libs — the
+ * request-path bootstrap.php is what pulls in the rest, and cron does not use it. Without
+ * this line the dry run still passes (it finds no pending rows and never names the class)
+ * and the first real veto dies on an undefined class inside the sweep.
+ */
+require YK_SRC . '/lib/Vetoes.php';
 
 $args   = array_slice($argv, 1);
 $dryRun = in_array('--dry-run', $args, true);
@@ -938,8 +948,119 @@ function jobChatReplies(?int $onlyUser, bool $dryRun): array
     return $results;
 }
 
+
 // ---------------------------------------------------------------------------
-// Job 7 — nudge unanswered check-ins
+// Job 7 — decide pending vetoes
+// ---------------------------------------------------------------------------
+
+/**
+ * Work through vetoes waiting on a decision (SPEC-coaching §5).
+ *
+ * The route records a refusal and returns; this decides it. An accepted veto regenerates
+ * the week, which is minutes, so it cannot happen in the request — same reason chat replies
+ * are swept rather than answered inline.
+ *
+ * LIMIT 5 rather than chat's 10, because the expensive branch here is more likely: an
+ * accepted veto always regenerates, whereas most chat turns end in an acknowledgement. Five
+ * regenerations is already a long run for one sweep, and the rest keep until the next.
+ *
+ * No cron_runs claim, for the same reason jobChatReplies has none: `outcome` moving off
+ * 'pending' inside Vetoes::evaluate's transaction is itself the claim, and a row per veto
+ * would bury the weekly jobs in a table that logs scheduled work.
+ */
+function jobVetoes(?int $onlyUser, bool $dryRun): array
+{
+    $results = ['decided' => 0, 'accepted' => 0, 'declined' => 0, 'failed' => 0];
+
+    $sql = 'SELECT v.id, v.user_id, v.subject_type, v.reason_code, v.scope,
+                   u.display_name
+            FROM vetoes v
+            JOIN users u    ON u.id = v.user_id
+            JOIN profiles p ON p.user_id = v.user_id
+            WHERE v.outcome = "pending"
+              AND u.status = "active"
+              AND p.coaching_paused = 0';
+    $params = [];
+    if ($onlyUser !== null) {
+        $sql .= ' AND v.user_id = ?';
+        $params[] = $onlyUser;
+    }
+    $sql .= ' ORDER BY v.id LIMIT 5';
+
+    foreach (DB::all($sql, $params) as $row) {
+        $vetoId = (int) $row['id'];
+        $userId = (int) $row['user_id'];
+        $name   = $row['display_name'];
+        $what   = "{$row['subject_type']} [{$row['reason_code']}, {$row['scope']}]";
+
+        if ($dryRun) {
+            say("  {$name}: WOULD decide veto #{$vetoId} — {$what}");
+            $results['decided']++;
+            continue;
+        }
+
+        try {
+            $r = Vetoes::evaluate($userId, $vetoId);
+            if (!$r['ok']) {
+                say("  {$name}: veto #{$vetoId} FAILED — {$r['error']}");
+                $results['failed']++;
+                continue;
+            }
+
+            $note = (string) $r['outcome'];
+            if ($r['constraint_id'] !== null) {
+                // §5.2. Worth logging separately: this is the one automated path that
+                // writes a constraint, so it should never be invisible in the cron output.
+                $note .= ", promoted to soft constraint {$r['constraint_id']}";
+            }
+            if ($r['plan_version_id'] !== null) {
+                $note .= ", plan_version {$r['plan_version_id']}";
+                /*
+                 * Tell them. A plan that changed under a user without a word is the kind of
+                 * surprise that costs trust, and unlike chat there is no transcript here for
+                 * them to find the answer in.
+                 */
+                Notify::create(
+                    $userId,
+                    'plan_ready',
+                    'Your coach swapped out what you turned down.',
+                    'plan_version',
+                    (int) $r['plan_version_id'],
+                    2
+                );
+            } elseif ($r['outcome'] === 'declined') {
+                /*
+                 * A decline needs telling too, and more than an acceptance does: the user
+                 * asked for something and did not get it, and silence would read as the
+                 * request being lost rather than answered. §5.4 holds the line; it does not
+                 * hide behind not-answering.
+                 */
+                Notify::create(
+                    $userId,
+                    'veto_decided',
+                    'Your coach had a think about what you turned down.',
+                    'veto',
+                    $vetoId,
+                    3
+                );
+            }
+
+            say("  {$name}: veto #{$vetoId} {$note}");
+            $results['decided']++;
+            $results[$r['outcome'] === 'accepted' ? 'accepted' : 'declined']++;
+        } catch (Throwable $e) {
+            say("  {$name}: ERROR — " . $e->getMessage());
+            error_log('[yoked cron] veto decision failed for veto ' . $vetoId . ': '
+                . $e->getMessage());
+            $results['failed']++;
+        }
+    }
+
+    return $results;
+}
+
+// ---------------------------------------------------------------------------
+// Job 8 — nudge unanswered check-ins
 // ---------------------------------------------------------------------------
 
 /**
@@ -1083,6 +1204,10 @@ $jobs = [
     'weekly_plan'         => fn() => jobWeeklyPlan($onlyUser, $dryRun),
     'drift_sweep'         => fn() => jobDriftSweep($onlyUser, $dryRun),
     'chat_replies'        => fn() => jobChatReplies($onlyUser, $dryRun),
+    // After chat_replies: an interjection and a veto can both regenerate the same week, and
+    // running them in a stable order makes a doubled-up sweep reproducible rather than a
+    // coin toss over which revision lands last.
+    'vetoes'              => fn() => jobVetoes($onlyUser, $dryRun),
     'checkin_nudge'       => fn() => jobCheckinNudge($onlyUser, $dryRun),
 ];
 

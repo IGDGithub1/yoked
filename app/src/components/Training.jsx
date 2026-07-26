@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import Help from './Help'
+import Veto, { VetoOutcome } from './Veto'
 
 /**
  * Training logs for one day.
@@ -38,7 +39,7 @@ const TYPE_OPTIONS = [
   { value: 'active_recovery', label: 'Easy / recovery' },
 ]
 
-export default function Training({ day, date, onDay }) {
+export default function Training({ day, date, onDay, vetoes = [], onVeto }) {
   const sessions = day.sessions || []
   const [freeLogging, setFreeLogging] = useState(false)
 
@@ -68,6 +69,8 @@ export default function Training({ day, date, onDay }) {
           session={s}
           date={date}
           onDay={onDay}
+          vetoes={vetoes}
+          onVeto={onVeto}
         />
       ))}
 
@@ -113,7 +116,7 @@ export function TrainingSummary({ day }) {
   return <span className="tiny muted num">{done} of {committed.length} done</span>
 }
 
-function Session({ session, date, onDay }) {
+function Session({ session, date, onDay, vetoes = [], onVeto }) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -121,6 +124,12 @@ function Session({ session, date, onDay }) {
   const logged = session.logged
   const isRest = session.session_type === 'rest'
   const isPrescribed = session.prescribed_session_id != null
+
+  // Matched on the prescription id, not the date: a session id is unique and a date is not.
+  const sessionVeto = isPrescribed
+    ? vetoes.find((v) => v.subject_type === 'session'
+        && v.subject_id === session.prescribed_session_id)
+    : null
 
   async function remove() {
     setError(null)
@@ -201,6 +210,28 @@ function Session({ session, date, onDay }) {
       )}
 
       {error && <p className="error">{error}</p>}
+
+      {/*
+        Turning the session down (§5), distinct from logging it as skipped.
+        Only a PRESCRIBED session can be refused: there is nothing to refuse about a workout
+        the user chose to do themselves, and a rest day is not an imposition.
+
+        Not shown once it is logged. At that point the question is settled by what actually
+        happened, and asking the coach to swap out a session that is already done would be
+        asking to rewrite the record.
+      */}
+      {isPrescribed && !logged && !isRest && !open && (
+        sessionVeto
+          ? <VetoOutcome veto={sessionVeto} />
+          : (
+            <Veto
+              subjectType="session"
+              subjectId={session.prescribed_session_id}
+              label="this session"
+              onDone={onVeto}
+            />
+          )
+      )}
     </div>
   )
 }

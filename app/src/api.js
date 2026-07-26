@@ -179,6 +179,18 @@ export const api = {
   },
 
   /*
+   * Vetoes (§5). Turning down one prescribed thing, with a reason.
+   *
+   * Same shape as chat and for the same reason: raising a veto records it and returns 202,
+   * because an accepted one regenerates the week and that takes minutes. Nothing here
+   * changes a plan — only the coach's decision does (§5.4 means it may decline).
+   */
+  vetoes: {
+    load: () => get('vetoes'),
+    raise: (fields) => post('vetoes', fields),
+  },
+
+  /*
    * The Next Day Review (§4.1a). Whether it should appear at all is the SERVER's
    * decision: the evening hour is per-user in their own timezone, and a client computing
    * it would be a second implementation differing exactly at the boundary that matters.

@@ -116,8 +116,17 @@ final class Plans
                     'error' => $context['error'], 'violations' => []];
         }
 
+        /*
+         * The cost line this generation shows up on.
+         *
+         * Deliberately coarser than `reason`: 'veto' gets its own bucket because §5.4 asks
+         * how OFTEN vetoes happen, and a replacement that costs a full week's generation is
+         * the expensive answer to that question. The rest collapse into plan_generation,
+         * since separating a drift adaptation from a check-in rebuild tells nobody anything.
+         */
         $purpose = match ($reason) {
             'provisional'      => 'provisional_plan',
+            'veto'             => 'veto_replacement',
             'drift_adaptation' => 'plan_generation',
             'check_in'         => 'plan_generation',
             default            => 'plan_generation',
@@ -854,6 +863,55 @@ final class Plans
             $out[] = 'ADAPTATION IS NOT PUNISHMENT. Do not add make-up work, do not '
                    . 'prescribe a corrective deficit, and do not frame anything as owed.';
             unset($extra['interjection']);
+        }
+
+        /*
+         * A veto replacement (§5.3).
+         *
+         * Shares the mid-week problem above — days already lived must come back unchanged —
+         * but the instruction is narrower and worth stating separately. An interjection
+         * says "something about my week changed"; a veto names ONE prescription and refuses
+         * it. Replacing the whole week's approach because a user turned down Thursday's
+         * salmon is an overreaction, and the failure mode is real: the model is being asked
+         * to regenerate seven days and only one thing is supposed to move.
+         */
+        if (isset($extra['veto']) && is_array($extra['veto'])) {
+            $v = $extra['veto'];
+            $out[] = '';
+            $out[] = '=== A REJECTED PRESCRIPTION, TO BE REPLACED (§5.3) ===';
+            $out[] = 'This week is already underway. You are swapping out one thing, not '
+                   . 'rebuilding the week.';
+            if (($v['from_day'] ?? null) !== null) {
+                $out[] = "Today is {$v['from_day']}. Days BEFORE today already happened: "
+                       . 'reproduce them exactly as they were prescribed.';
+            }
+            $out[] = '';
+            $out[] = sprintf(
+                'They turned down the %s "%s" on %s. Reason [%s]: %s',
+                (string) ($v['subject'] ?? 'item'),
+                (string) ($v['subject_label'] ?? ''),
+                (string) ($v['on_day'] ?? 'an unknown day'),
+                (string) ($v['reason_code'] ?? 'other'),
+                (string) ($v['said'] ?? '(no detail)')
+            );
+            if (($v['replacement'] ?? '') !== '') {
+                $out[] = '';
+                $out[] = 'Your own decision about the replacement: '
+                       . (string) $v['replacement'];
+                $out[] = 'Carry that out. Do not re-litigate it.';
+            }
+            $out[] = '';
+            $out[] = 'REPLACE IT, DO NOT DELETE IT. The replacement still has to serve the '
+                   . 'goal: similar macros from a faster meal, the same movement pattern '
+                   . 'from a different exercise. A dropped meal or a missing session is not '
+                   . 'a replacement.';
+            $out[] = 'Change ONLY that one thing and whatever genuinely has to move with it. '
+                   . 'Everything else in the week stays as it was.';
+            if ((string) ($v['scope'] ?? '') === 'standing') {
+                $out[] = 'They asked never to see this again, so do not reintroduce it later '
+                       . 'in the week under another name.';
+            }
+            unset($extra['veto']);
         }
 
         foreach ($extra as $label => $value) {

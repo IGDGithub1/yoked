@@ -38,8 +38,9 @@ const UI_BASE_USER = 'uitest_baseline';
  * not pass or fail depending on the clock, and the baseline one deliberately has no plan
  * at all, so a review would find nothing to show.
  *
- * This one carries review_hour 1 — past for 23 hours out of 24 — plus a plan covering
- * tomorrow and a genuinely prep-heavy dinner.
+ * This one carries a real evening review_hour, in a timezone CHOSEN at seed time to be
+ * inside the window, plus a plan covering tomorrow and a genuinely prep-heavy dinner. See
+ * the fixture below for why the zone is picked rather than fixed.
  */
 const UI_REVIEW_USER = 'uitest_review';
 
@@ -108,10 +109,21 @@ $seed = DB::tx(function () use ($prescribe, $monday): array {
      *
      * The Next Day Review only appears after the user's evening hour, and the browser
      * suite runs at whatever time of day it runs. Leaving it on would make a dozen
-     * unrelated assertions pass or fail depending on the clock. UI_REVIEW_USER carries
-     * hour 1 instead, so there is exactly one fixture the review reliably shows for.
+     * unrelated assertions pass or fail depending on the clock. UI_REVIEW_USER carries a
+     * real evening hour instead, in a zone chosen to be inside the window.
+     *
+     * coaching_paused = 1 on every UI fixture, and not because these users should be
+     * ignored. The browser suite RAISES things cron would otherwise act on for real: a veto
+     * left behind by a test run gets swept up and spends a full plan generation, which is
+     * minutes of model time and real money for an assertion that already passed. Every cron
+     * job checks this flag, so pausing makes the fixtures inert to the scheduler while
+     * leaving every request path untouched. The suites that DO exercise cron seed their own
+     * users (test-vetoes.php, test-chat.php) and delete them afterwards.
      */
-    DB::run('INSERT INTO profiles (user_id, review_hour) VALUES (?, 0)', [$userId]);
+    DB::run(
+        'INSERT INTO profiles (user_id, review_hour, coaching_paused) VALUES (?, 0, 1)',
+        [$userId]
+    );
 
     $preset = DB::one("SELECT id FROM goal_presets WHERE slug = 'recomp'");
     DB::run(
@@ -230,7 +242,8 @@ $blUser = DB::tx(function () use ($blStart, $blEnd): int {
     );
     // A timezone, so the schedule reads local rather than falling back to UTC.
     DB::run(
-        'INSERT INTO profiles (user_id, timezone) VALUES (?, "America/New_York")',
+        'INSERT INTO profiles (user_id, timezone, coaching_paused)
+         VALUES (?, "America/New_York", 1)',
         [$userId]
     );
     $preset = DB::one("SELECT id FROM goal_presets WHERE slug = 'recomp'");
@@ -331,12 +344,48 @@ printf("seeded a nudge and a drift question (chat_turn #%d)\n", $turnId);
 /*
  * A user the review reliably shows for.
  *
- * review_hour 1 is past for 23 hours out of 24, which is as close to "always" as the
- * feature allows without lying about what it does. The plan covers tomorrow in the
- * user's own zone, with one quick meal and one that genuinely needs planning, so the
- * prep-flagging has both cases to distinguish.
+ * THE TIMEZONE IS CHOSEN, NOT FIXED, and that is the whole trick.
+ *
+ * The review only appears at or after the user's local review_hour. This used to hardcode
+ * America/New_York with review_hour 1, on the reasoning that hour 1 is "past for 23 hours
+ * out of 24" — which is true and still broke the suite, because the one hour it is NOT past
+ * is local midnight to 1am, and a run at 00:07 New York time hit exactly that. Five
+ * assertions failed against a correctly working feature.
+ *
+ * So instead: keep review_hour at a real evening value and pick a zone where it is
+ * currently evening. At any instant such a zone exists, because the world spans every hour
+ * at once. Same device the suite itself uses to test the evening window without mocking a
+ * clock.
  */
-$revTz  = 'America/New_York';
+const UI_REVIEW_HOUR = 20;
+
+/*
+ * Candidates spanning the whole day, so one of them is always in the window. Ordered west
+ * to east; the first match wins.
+ */
+$revTz = null;
+foreach ([
+    'Pacific/Honolulu', 'America/Anchorage', 'America/Los_Angeles', 'America/Denver',
+    'America/Chicago', 'America/New_York', 'America/Halifax', 'America/Sao_Paulo',
+    'Atlantic/Azores', 'UTC', 'Europe/Berlin', 'Europe/Moscow', 'Asia/Dubai',
+    'Asia/Karachi', 'Asia/Kolkata', 'Asia/Bangkok', 'Asia/Shanghai', 'Asia/Tokyo',
+    'Australia/Brisbane', 'Australia/Sydney', 'Pacific/Auckland',
+] as $candidate) {
+    $h = (int) Schedule::now($candidate)->format('G');
+    // At or after the hour, and not so late that "tomorrow" rolls over mid-run.
+    if ($h >= UI_REVIEW_HOUR && $h <= 22) {
+        $revTz = $candidate;
+        break;
+    }
+}
+if ($revTz === null) {
+    // Should be unreachable: the candidate list covers every UTC offset in use. Loud rather
+    // than silently seeding a fixture the suite will then fail against.
+    fwrite(STDERR, "seed-uitest: no timezone is currently in the review window; "
+        . "the candidate list has a gap.\n");
+    exit(1);
+}
+
 $revTom = Schedule::now($revTz)->modify('+1 day')->format('Y-m-d');
 
 $revUser = DB::tx(function () use ($revTz, $revTom): int {
@@ -347,8 +396,9 @@ $revUser = DB::tx(function () use ($revTz, $revTom): int {
          password_hash(UI_PASS, PASSWORD_DEFAULT)]
     );
     DB::run(
-        'INSERT INTO profiles (user_id, timezone, review_hour) VALUES (?, ?, 1)',
-        [$userId, $revTz]
+        'INSERT INTO profiles (user_id, timezone, review_hour, coaching_paused)
+         VALUES (?, ?, ?, 1)',
+        [$userId, $revTz, UI_REVIEW_HOUR]
     );
     $preset = DB::one("SELECT id FROM goal_presets WHERE slug = 'recomp'");
     DB::run(
@@ -406,7 +456,10 @@ $revUser = DB::tx(function () use ($revTz, $revTom): int {
     return $userId;
 });
 
+// Prints the chosen zone and its local time, so a suite failure here can be told apart
+// from a fixture that was seeded outside the window.
 printf(
-    "seeded %s / %s — user #%d, review_hour 1, tomorrow %s (one prep-heavy meal)\n",
-    UI_REVIEW_USER, UI_PASS, $revUser, $revTom
+    "seeded %s / %s — user #%d, review_hour %d in %s (local %s), tomorrow %s (one prep-heavy meal)\n",
+    UI_REVIEW_USER, UI_PASS, $revUser, UI_REVIEW_HOUR, $revTz,
+    Schedule::now($revTz)->format('H:i'), $revTom
 );

@@ -651,3 +651,29 @@
   border-left-color: var(--hairline);
   background: none;
 }
+
+/* ---- turning something down --------------------------------------------- */
+
+/*
+ * The veto form, inset against the card it belongs to.
+ *
+ * Indented and hairlined rather than boxed: it is a question ABOUT the meal above it, and a
+ * second card would read as a separate thing to deal with. The left rule is the same device
+ * the coach's turns use, at lower contrast — this is the user talking, not the coach.
+ */
+.veto {
+  padding: 10px 0 2px 12px;
+  border-left: 2px solid var(--hairline);
+}
+
+/*
+ * A smaller button, for controls that sit inside a card rather than ending one.
+ *
+ * "Cannot do this" must not compete with "ate as planned" — the primary path is following
+ * the plan, and a same-size secondary next to it reads as an equal choice.
+ */
+.btn--small {
+  padding: 6px 11px;
+  font-size: 13px;
+  border-radius: var(--r-input);
+}

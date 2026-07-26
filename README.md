@@ -26,7 +26,8 @@ baseline, and report their week back to the coach that plans the next one.
 | Weekly check-in | ✅ Sat 18:00 local, shapes Sunday's plan, late answers reviewed |
 | Drift and nudges | ✅ §4.2 escalation, pure SQL on track; §9 absence ladder, tone-matched |
 | Next Day Review | ✅ §4.1a evening card: tomorrow, prep flags, dismissible |
-| Chat, vetoes | ⬜ §6 evaluate-and-revise, §5 vetoes; circumstances record but nothing acts |
+| Chat | ✅ §6 evaluate-and-revise at `#/coach`; the write path cannot touch a plan |
+| Vetoes | ✅ §5 reason required, replace not delete, standing promotes to a SOFT constraint |
 
 `bin/test-plans.php` seeds the two users from the specs, generates their weeks,
 and asserts the output against the spec decisions.

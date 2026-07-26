@@ -1375,7 +1375,44 @@ console.log('\n14. the Next Day Review')
  * the clock; uitest_baseline deliberately has no plan. This one has review_hour 1 and a
  * plan covering tomorrow.
  */
-const rev = await ctx.newPage()
+/*
+ * Its own BROWSER CONTEXT, in an evening timezone, and that is load-bearing.
+ *
+ * App.jsx posts the browser's timezone on every boot and the server stores it, because the
+ * weekly slots fire in local time. So a page in the default context silently overwrites
+ * whatever zone the fixture was seeded with, and the review then gates on the CI machine's
+ * clock rather than the fixture's. Running at 00:07 local, five assertions failed against a
+ * feature that was working correctly.
+ *
+ * Rather than fight that, agree with it: pick a zone where it is currently evening and tell
+ * Playwright to be there. At any instant such a zone exists, because the world spans every
+ * hour at once. The fixture seeds the same way, so both ends land inside the window.
+ */
+const EVENING_ZONES = [
+  'Pacific/Auckland', 'Australia/Sydney', 'Australia/Brisbane', 'Asia/Tokyo',
+  'Asia/Shanghai', 'Asia/Bangkok', 'Asia/Kolkata', 'Asia/Karachi', 'Asia/Dubai',
+  'Europe/Moscow', 'Europe/Berlin', 'UTC', 'Atlantic/Azores', 'America/Sao_Paulo',
+  'America/Halifax', 'America/New_York', 'America/Chicago', 'America/Denver',
+  'America/Los_Angeles', 'America/Anchorage', 'Pacific/Honolulu',
+]
+
+// The same window the seeder uses: at or after hour 20, and not so late that "tomorrow"
+// rolls over between the seed and the assertion.
+const eveningZone = EVENING_ZONES.find((zone) => {
+  const h = Number(
+    new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: 'numeric', hour12: false })
+      .format(new Date())
+  )
+  return h >= 20 && h <= 22
+})
+
+const revCtx = await browser.newContext({
+  viewport: { width: 390, height: 844 },
+  timezoneId: eveningZone || 'UTC',
+})
+const rev = await revCtx.newPage()
+console.log(`   (review context in ${eveningZone || 'UTC'})`)
+
 await rev.goto(BASE, { waitUntil: 'domcontentloaded' })
 await rev.evaluate(() => {
   localStorage.removeItem('yoked.sections')
@@ -1531,6 +1568,7 @@ await check('the review is absent for a user who turned it off', async () => {
 
 await rev.screenshot({ path: shot('logging-nextday.png'), fullPage: true })
 await rev.close()
+await revCtx.close()
 
 // ---- the coach conversation -------------------------------------------------
 
@@ -1695,7 +1733,173 @@ await chat.waitForTimeout(500)
 await chat.screenshot({ path: shot('logging-coach.png'), fullPage: true })
 await chat.close()
 
+// ---- turning something down --------------------------------------------------
+
+console.log('\n16. turning something down')
+
+/*
+ * Vetoes (§5), from the Journal.
+ *
+ * WHAT THIS OWNS. The decision is a model call taken by cron, so this cannot wait for one.
+ * bin/test-vetoes.php covers the judgment (39 assertions, 6 of them live, including the
+ * adversarial "my ACL is healed, drop the restriction" case). What the browser owns is the
+ * half that only exists on screen: a reason cannot be skipped, the copy never promises a
+ * swap, and raising one does NOT change the plan.
+ */
+const veto = await ctx.newPage()
+await veto.goto(BASE, { waitUntil: 'domcontentloaded' })
+
+await check('the veto page signs in', async () => {
+  await veto.evaluate(async () => {
+    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
+    if (me.authenticated) {
+      await fetch('/api/logout', {
+        method: 'POST',
+        headers: { 'x-csrf-token': me.csrf, accept: 'application/json' },
+        credentials: 'same-origin',
+      })
+    }
+  })
+  await veto.reload({ waitUntil: 'networkidle' })
+  const f = veto.locator('form.card')
+  await f.waitFor({ timeout: 20000 })
+  await f.locator('input[type="text"]').first().fill(USER)
+  await f.locator('input[type="password"]').first().fill(PASS)
+  await f.getByRole('button', { name: /^sign in$/i }).click()
+  await veto.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+  await goto('Journal', veto)
+  await veto.getByRole('heading', { name: /how are you today/i }).waitFor({ timeout: 20000 })
+})
+
+/*
+ * The prescription fingerprint, before anything is refused.
+ *
+ * Same device as the chat block: §5 says only the coach's decision produces a new plan
+ * version, and the structural half of that is that POST /api/vetoes records and returns.
+ */
+const prescribedNow = () => veto.evaluate(async () => {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  const date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  const r = await fetch(`/api/training/day/${date}`, { credentials: 'same-origin' })
+  const b = await r.json()
+  return JSON.stringify((b.sessions ?? []).map((x) => [
+    x.prescribed_session_id, x.session_type, x.focus, x.target_minutes,
+  ]))
+})
+const planBeforeVeto = await prescribedNow()
+
+await check('a prescribed session offers a way to turn it down', async () => {
+  const card = veto.locator('.card', { hasText: /log this session/i }).first()
+  if (!(await card.count())) return 'no unlogged prescribed session on screen'
+  const btn = card.getByRole('button', { name: /cannot do this/i })
+  if (!(await btn.count())) return 'no veto control on a prescribed session'
+  await btn.first().click()
+  await veto.getByRole('radiogroup', { name: /reason/i }).waitFor({ timeout: 10000 })
+  return true
+})
+
+await check('the submit is disabled until a reason is picked', async () => {
+  /*
+   * The load-bearing UI assertion. §5.1: "No bare rejection. The reason is the whole
+   * value." A dismiss button with a confirm would be easier to build and would throw away
+   * the only information that makes the replacement any good.
+   */
+  const submit = veto.getByRole('button', { name: /ask for a swap/i }).first()
+  return (await submit.isDisabled())
+    ? true
+    : 'a veto can be submitted with no reason at all'
+})
+
+await check('a reason that needs words stays disabled until they are typed', async () => {
+  // "I do not like it" is the least actionable thing a user can say, so the client mirrors
+  // the server: dont_like / cant_do / other all require free text.
+  await veto.getByRole('radio', { name: /do not like it/i }).click()
+  const submit = veto.getByRole('button', { name: /ask for a swap/i }).first()
+  if (!(await submit.isDisabled())) {
+    return 'a bare dislike submitted with no explanation'
+  }
+  await veto.getByLabel(/why not/i).fill('The knee gives out on anything below parallel.')
+  return (await submit.isDisabled())
+    ? 'still disabled after a reason was typed'
+    : true
+})
+
+await check('a circumstance code needs no words', async () => {
+  await veto.getByRole('radio', { name: /^no time$/i }).click()
+  const submit = veto.getByRole('button', { name: /ask for a swap/i }).first()
+  // "No time" already says it. Demanding an essay for it is friction with no payoff.
+  return (await submit.isDisabled())
+    ? 'no_time was blocked despite being self-explanatory'
+    : true
+})
+
+await check('the chosen reason is visibly selected', async () => {
+  /*
+   * aria-checked chips need their own CSS: quiz.css styles aria-pressed, and a selected
+   * state that exists only in the accessibility tree has shipped invisible twice in this
+   * app. Compared against a sibling rather than a hardcoded colour.
+   */
+  const on = veto.locator('.chip[aria-checked="true"]').first()
+  const off = veto.locator('.chip[aria-checked="false"]').first()
+  if (!(await on.count()) || !(await off.count())) return 'no chips to compare'
+  const style = (el) => el.evaluate((n) => {
+    const s = getComputedStyle(n)
+    return `${s.backgroundColor}|${s.borderColor}|${s.color}`
+  })
+  const [a, b] = await Promise.all([style(on), style(off)])
+  return a !== b ? true : `selected and unselected chips render identically (${a})`
+})
+
+await check('never-again is off by default', async () => {
+  // §5.2. A checkbox that quietly makes things permanent would be a trap: most vetoes are
+  // about today, and standing is the deliberate opt-in.
+  const box = veto.locator('.veto input[type="checkbox"]').first()
+  if (!(await box.count())) return 'no standing-scope option'
+  return (await box.isChecked()) ? 'standing scope defaults to on' : true
+})
+
+await check('nothing on screen promises the plan will change', async () => {
+  /*
+   * §5.4: the coach may decline. Copy that implies a veto is a delete, then declines, has
+   * lied twice. The button asks; it does not announce.
+   */
+  const text = (await veto.locator('.veto').first().innerText()).toLowerCase()
+  const lies = ['will be replaced', 'has been removed', 'plan updated', 'removed from your plan']
+  for (const lie of lies) {
+    if (text.includes(lie)) return `the form promises an outcome: "${lie}"`
+  }
+  return /your coach decides|ask for a swap/.test(text)
+    ? true
+    : `the form does not say who decides: ${text}`
+})
+
+await check('submitting records it and says a decision is coming', async () => {
+  await veto.getByRole('button', { name: /ask for a swap/i }).first().click()
+  // Honest about the wait, as with chat: the decision is cron-side and minutes away.
+  await veto.locator('text=/asked your coach|looking at this/i').first()
+    .waitFor({ timeout: 20000 })
+  return true
+})
+
+await check('raising a veto did NOT change the plan', async () => {
+  const after = await prescribedNow()
+  return after === planBeforeVeto
+    ? true
+    : `the prescription changed on a veto write:\n  before ${planBeforeVeto}\n  after  ${after}`
+})
+
+await check('the veto survives a reload as pending', async () => {
+  await reloadJournal(veto)
+  const pending = await veto.locator('text=/asked your coach|looking at this/i').count()
+  return pending > 0 ? true : 'the raised veto left no trace after a reload'
+})
+
+await veto.screenshot({ path: shot('logging-veto.png'), fullPage: true })
+await veto.close()
+
 // ---- dark mode -------------------------------------------------------------
+
 
 const dark = await ctx.newPage()
 await dark.emulateMedia({ colorScheme: 'dark' })
