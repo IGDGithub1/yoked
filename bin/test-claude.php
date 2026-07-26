@@ -153,7 +153,8 @@ t('plan generation asks for enough output tokens', function () {
     if (!class_exists('Plans')) {
         require YK_SRC . '/lib/Goals.php';
         require YK_SRC . '/lib/PlanSchema.php';
-        require YK_SRC . '/lib/Safety.php';
+        require YK_SRC . '/lib/BuddySchedule.php';   // Safety::checkAvailability reads it
+require YK_SRC . '/lib/Safety.php';
         require YK_SRC . '/lib/Plans.php';
     }
     $n = Plans::MAX_OUTPUT_TOKENS;

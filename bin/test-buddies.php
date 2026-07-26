@@ -24,6 +24,7 @@ require YK_SRC . '/lib/Response.php';
 require YK_SRC . '/lib/RateLimit.php';
 require YK_SRC . '/lib/Notify.php';
 require YK_SRC . '/lib/Friends.php';
+require YK_SRC . '/lib/BuddySchedule.php';
 require YK_SRC . '/lib/Buddies.php';
 require YK_SRC . '/lib/Visibility.php';
 
@@ -456,7 +457,7 @@ t('shared days are the days BOTH are free', function () {
     seedAvailability($a, [1 => ['yes', 60], 3 => ['yes', 60], 5 => ['yes', 60]]);
     seedAvailability($b, [3 => ['yes', 45], 5 => ['yes', 90], 6 => ['yes', 60]]);
 
-    $days = array_column(Buddies::sharedDays($a, $b), 'weekday');
+    $days = BuddySchedule::analyse($a, $b)['overlap'];
     return $days === [3, 5] ?: 'shared days are ' . implode(',', $days);
 });
 
@@ -465,7 +466,8 @@ t('the intersection is the same read from either side', function () {
     $b = seedUser('sym_b');
     seedAvailability($a, [2 => ['yes', 60], 4 => ['yes', 60]]);
     seedAvailability($b, [4 => ['yes', 30], 6 => ['yes', 60]]);
-    return Buddies::sharedDays($a, $b) == Buddies::sharedDays($b, $a)
+    return BuddySchedule::analyse($a, $b)['overlap']
+        == BuddySchedule::analyse($b, $a)['overlap']
         ?: 'the intersection differs by direction';
 });
 
@@ -475,7 +477,15 @@ t('the shared duration is the shorter of the two', function () {
     $b = seedUser('min_b');
     seedAvailability($a, [3 => ['yes', 90]]);
     seedAvailability($b, [3 => ['yes', 45]]);
-    $d = Buddies::sharedDays($a, $b)[0] ?? null;
+    /*
+     * The shorter figure is applied when the SCHEDULE is written, not when the overlap is
+     * computed, so this pairs them for real rather than reading the raw grids.
+     */
+    befriend($a, $b);
+    Buddies::invite($a, $b);
+    Buddies::respond($b, true);
+    $days = Buddies::forUser($a)['shared_days'];
+    $d = $days[0] ?? null;
     return ($d['minutes'] ?? null) === 45
         ?: 'shared minutes are ' . var_export($d['minutes'] ?? null, true);
 });
@@ -490,7 +500,7 @@ t('"sometimes" counts as available', function () {
     $b = seedUser('some_b');
     seedAvailability($a, [2 => ['sometimes', 60]]);
     seedAvailability($b, [2 => ['yes', 60]]);
-    return count(Buddies::sharedDays($a, $b)) === 1
+    return count(BuddySchedule::analyse($a, $b)['overlap']) === 1
         ?: '"sometimes" was treated as unavailable';
 });
 
@@ -499,7 +509,7 @@ t('a day either one cannot train is not shared', function () {
     $b = seedUser('no_b');
     seedAvailability($a, [1 => ['yes', 60], 2 => ['no', null]]);
     seedAvailability($b, [1 => ['no', null], 2 => ['yes', 60]]);
-    return Buddies::sharedDays($a, $b) === []
+    return BuddySchedule::analyse($a, $b)['overlap'] === []
         ?: 'a day one of them cannot train was reported as shared';
 });
 
@@ -510,7 +520,7 @@ t('no overlap is an empty list, not an error', function () {
     $b = seedUser('none_b');
     seedAvailability($a, [1 => ['yes', 60]]);
     seedAvailability($b, [2 => ['yes', 60]]);
-    return Buddies::sharedDays($a, $b) === [] ?: 'expected no shared days';
+    return BuddySchedule::analyse($a, $b)['overlap'] === [] ?: 'expected no shared days';
 });
 
 t('the intersection is withheld until the pair is ACTIVE', function () {

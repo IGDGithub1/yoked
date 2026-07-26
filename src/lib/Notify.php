@@ -46,6 +46,9 @@ final class Notify
         // invitation was withdrawn before they answered needs no notice about a thing that
         // never started, but someone whose buddy's sessions are about to stop appearing does.
         'buddy_request', 'buddy_accepted', 'buddy_ended',
+        // Schedule negotiation (§10.3a): one user offering a day outside their own grid, and
+        // the other agreeing to it.
+        'buddy_day_offer', 'buddy_day_agreed',
     ];
 
     /**

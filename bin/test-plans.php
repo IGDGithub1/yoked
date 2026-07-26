@@ -28,6 +28,7 @@ require YK_SRC . '/lib/RateLimit.php';
 require YK_SRC . '/lib/Goals.php';
 require YK_SRC . '/lib/Claude.php';
 require YK_SRC . '/lib/PlanSchema.php';
+require YK_SRC . '/lib/BuddySchedule.php';   // Safety::checkAvailability reads it
 require YK_SRC . '/lib/Safety.php';
 require YK_SRC . '/lib/Plans.php';
 

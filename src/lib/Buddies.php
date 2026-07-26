@@ -32,12 +32,6 @@ declare(strict_types=1);
  */
 final class Buddies
 {
-    /** ISO weekday names, for the shared-day list the UI shows. */
-    private const DAY_NAMES = [
-        1 => 'Monday', 2 => 'Tuesday', 3 => 'Wednesday', 4 => 'Thursday',
-        5 => 'Friday', 6 => 'Saturday', 7 => 'Sunday',
-    ];
-
     // ---- reading -----------------------------------------------------------
 
     /**
@@ -87,7 +81,19 @@ final class Buddies
              * unanswered would leak one user's availability grid to someone who has not yet
              * agreed to anything.
              */
-            'shared_days' => $status === 'active' ? self::sharedDays($userId, $otherId) : [],
+            /*
+             * The AGREED schedule, not the raw intersection.
+             *
+             * Once BuddySchedule owns this, reading the grids directly here would ignore any
+             * day the pair negotiated (§10.3a) — the screen would show two shared days while
+             * generation used three. One authority, asked by everyone.
+             *
+             * Only for an ACTIVE pair: showing it while an invitation is unanswered would leak
+             * one user's availability to somebody who has not agreed to anything.
+             */
+            'shared_days' => $status === 'active'
+                ? self::sharedDaysFor((int) $row['id'])
+                : [],
             'invitable'   => [],
         ];
     }
@@ -143,40 +149,30 @@ final class Buddies
     }
 
     /**
-     * Days both users can train (§10.3).
+     * The days a pair has agreed to train together, for display.
      *
-     * "Synced days are days BOTH users are free, computed from each user's §7.1 grid."
-     *
-     * `sometimes` counts as available: the grid's own vocabulary treats it as a maybe rather
-     * than a no, and a pair whose only overlap is two "sometimes" days still has somewhere to
-     * start. Excluding it would report no shared days for users with chaotic schedules, which
-     * is exactly the pair that most needs the accountability.
-     *
-     * Returns a list of ['weekday', 'name', 'minutes'] where minutes is the SMALLER of the
-     * two — a shared session cannot outlast whichever of them has to leave.
+     * Reads the buddy schedule rather than intersecting the two grids, because the schedule is
+     * the agreement and the grids are only where it started (§10.1a). A negotiated day is in
+     * one and not the other.
      */
-    public static function sharedDays(int $a, int $b): array
+    private static function sharedDaysFor(int $pairId): array
     {
-        $rows = DB::all(
-            'SELECT x.weekday, LEAST(x.minutes, y.minutes) AS minutes
-             FROM availability x
-             JOIN availability y ON y.weekday = x.weekday AND y.user_id = ?
-             WHERE x.user_id = ?
-               AND x.can_train IN ("yes", "sometimes")
-               AND y.can_train IN ("yes", "sometimes")
-             ORDER BY x.weekday',
-            [$b, $a]
-        );
-
         $out = [];
-        foreach ($rows as $r) {
+        foreach (DB::all(
+            'SELECT weekday, minutes, origin FROM buddy_schedule_days
+             WHERE buddy_pair_id = ? ORDER BY weekday',
+            [$pairId]
+        ) as $r) {
             $wd = (int) $r['weekday'];
             $out[] = [
                 'weekday' => $wd,
-                'name'    => self::DAY_NAMES[$wd] ?? (string) $wd,
-                // Null when either user left it blank. The UI shows the day without a
-                // duration rather than inventing one.
+                'name'    => BuddySchedule::DAY_NAMES[$wd] ?? (string) $wd,
+                // Null when neither user stated one. The UI shows the day without a duration
+                // rather than inventing a figure.
                 'minutes' => $r['minutes'] === null ? null : (int) $r['minutes'],
+                // 'intersection' or 'negotiated'. Worth surfacing: "you both had Wednesday
+                // free" reads differently from "you agreed to add Wednesday".
+                'origin'  => (string) $r['origin'],
             ];
         }
         return $out;
@@ -321,6 +317,15 @@ final class Buddies
             'UPDATE buddy_pairs SET status = "active", ended_at = NULL WHERE id = ?',
             [(int) $row['id']]
         );
+
+        /*
+         * Seed the buddy schedule from the natural intersection (§10.3).
+         *
+         * Every day both users already had free becomes a shared day, so the common case —
+         * two people with compatible weeks — needs no negotiation at all. Where the overlap
+         * is too thin, BuddySchedule::analyse flags it and the pair is prompted (§10.3a).
+         */
+        BuddySchedule::seedFromIntersection((int) $row['id'], $userId, $otherId);
 
         $me = DB::one('SELECT display_name FROM users WHERE id = ?', [$userId]);
         Notify::create(

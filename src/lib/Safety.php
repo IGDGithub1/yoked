@@ -390,15 +390,33 @@ final class Safety
      */
     private static function checkAvailability(array $plan, int $userId): array
     {
-        $grid = [];
-        foreach (DB::all(
-            'SELECT weekday, can_train, minutes, access FROM availability WHERE user_id = ?',
-            [$userId]
-        ) as $row) {
-            $grid[(int) $row['weekday']] = $row;
+        /*
+         * The EFFECTIVE schedule, not the raw grid (SPEC-coaching §10.1a).
+         *
+         * A paired user has two schedules, and the buddy one wins for shared days. That
+         * matters here more than anywhere: a day conceded in a negotiation (§10.3a) is one the
+         * user's own grid says they cannot train, so reading the grid alone would reject every
+         * plan built from an agreement the pair explicitly made. The conceded day also brings
+         * its own minutes and access, since the grid has nothing useful to say about a day the
+         * user never offered.
+         *
+         * Unpaired, this is exactly the grid — BuddySchedule::effective with a null pair id
+         * returns it unchanged — so the solo path is untouched.
+         */
+        $pair   = BuddySchedule::activePair($userId);
+        $grid   = BuddySchedule::effective($userId, $pair === null ? null : (int) $pair['id']);
+
+        // An entirely unanswered grid still means "nothing to check against". effective()
+        // fills every weekday, so the emptiness test is whether ANY day was actually recorded.
+        $answered = false;
+        foreach ($grid as $day) {
+            if (($day['origin'] ?? '') !== 'unanswered') {
+                $answered = true;
+                break;
+            }
         }
-        if ($grid === []) {
-            return [];   // no grid recorded; nothing to check against
+        if (!$answered) {
+            return [];
         }
 
         $violations = [];
