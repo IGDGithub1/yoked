@@ -1592,6 +1592,78 @@ t('the skeleton reports the SHARED window, not the leader own', function () {
         ?: 'the prompt does not say the length and location are already the shared ones';
 });
 
+t('a timed core hold is rendered by its seconds, not by prose', function () {
+    /*
+     * Found by a live run, twice over.
+     *
+     * The leader's target_reps for a plank is free text — "40s hold" — and target_seconds is 40.
+     * Rendering the prose verbatim produced "Plank 3x40s hold" in the prompt, the follower
+     * copied that string into its OWN target_reps, and what came back out of the database was
+     * "3xhold" with the number gone. "3 x hold" is a prescription on somebody's screen.
+     *
+     * So a timed movement is described by its seconds, which are structured, and never by the
+     * rep text, which is prose that may or may not repeat them.
+     */
+    $a = seedUser('skel_rep_a', 2);
+    $b = seedUser('skel_rep_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    $week   = nextWeek();
+    $planId = leaderPlan($a, $week, [1, 3]);
+
+    // Reproduce the real shape: a timed hold carrying prose in target_reps.
+    DB::run(
+        'UPDATE prescribed_exercises pe
+         JOIN prescribed_sessions ps ON ps.id = pe.session_id
+         SET pe.target_reps = "40s hold", pe.target_seconds = 40
+         WHERE ps.plan_version_id = ? AND pe.block = "core"',
+        [$planId]
+    );
+
+    $skel = BuddySkeleton::toFollow($b, $week);
+    if ($skel === null) {
+        return 'no skeleton';
+    }
+    $text = BuddySkeleton::promptBlock($skel);
+
+    // The number has to survive, and the prose must not be handed over to be copied.
+    if (!preg_match('/3 sets of 40 seconds/', $text)) {
+        return 'the timed hold is not described by its seconds';
+    }
+    if (str_contains($text, '3x40s hold') || preg_match('/\dx.*hold/', $text)) {
+        return 'the prompt still renders the rep prose verbatim';
+    }
+    return true;
+});
+
+t('the core block is presented as a list that must not be shortened', function () {
+    /*
+     * §10.2a says identical, and a live follower returned ONE core exercise where the leader had
+     * two — Side Plank without the Overhead Plate Hold, Farmer Carry without the Pallof Press.
+     * An instruction to match a list is not the same as an instruction to reproduce all of it.
+     */
+    $a = seedUser('skel_list_a', 2);
+    $b = seedUser('skel_list_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    $week = nextWeek();
+    leaderPlan($a, $week, [1, 3]);
+
+    $skel = BuddySkeleton::toFollow($b, $week);
+    $text = BuddySkeleton::promptBlock($skel);
+
+    if (!str_contains($text, 'Do not shorten the list')) {
+        return 'nothing forbids dropping a core exercise';
+    }
+    // And the main block must forbid the duplicate substitution a live run produced.
+    return str_contains($text, 'never list the same')
+        ?: 'nothing forbids listing one movement twice after a substitution';
+});
+
 t('a solo day of the leader is NOT in the skeleton', function () {
     /*
      * §10.1: only the shared days are shared. A day the leader trains alone is theirs to shape,

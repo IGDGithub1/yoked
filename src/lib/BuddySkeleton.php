@@ -296,20 +296,68 @@ final class BuddySkeleton
                     $patterns[] = "{$ex['pattern']} (they do {$ex['name']})";
                 }
                 $out[] = '    main, in this order: ' . implode(' then ', $patterns);
+                /*
+                 * Said because a measured run did exactly this.
+                 *
+                 * The leader opened with a vertical_pull the follower had no bar for, so the
+                 * follower substituted a dumbbell row — and then used a dumbbell row again for
+                 * the row that was already in the next slot, listing the same movement twice as
+                 * two exercises. Three sets of one exercise written as two entries is a broken
+                 * plan on screen, and substitution is exactly when the temptation arises.
+                 */
+                $out[] = '      Each of these is a DIFFERENT exercise. If you substitute one, '
+                       . 'pick something not already in this session — never list the same '
+                       . 'movement twice.';
             }
 
             if ($day['core'] !== []) {
+                /*
+                 * The dose, spelled out so it cannot be copied as prose.
+                 *
+                 * A measured run rendered "Plank 3x40s hold" here — because the leader's
+                 * target_reps was the free text "40s hold" and this took it verbatim — and the
+                 * follower copied that string into ITS target_reps, which came back out of the
+                 * database as "3xhold" with the number gone. A prescription that reads "3 x hold"
+                 * is on somebody's screen, so the rendering is now explicit about which field is
+                 * which.
+                 *
+                 * TIMED WORK IS DESCRIBED BY ITS SECONDS, never by the rep text: target_seconds
+                 * is structured and target_reps is prose that may or may not repeat it. Reps are
+                 * only mentioned when there is no seconds value, i.e. when the movement really is
+                 * counted rather than held.
+                 */
                 $core = [];
                 foreach ($day['core'] as $ex) {
+                    $sets = $ex['sets'];
                     $spec = $ex['name'];
-                    if ($ex['sets'] !== null && $ex['reps'] !== null) {
-                        $spec .= " {$ex['sets']}x{$ex['reps']}";
-                    } elseif ($ex['sets'] !== null && $ex['seconds'] !== null) {
-                        $spec .= " {$ex['sets']}x{$ex['seconds']}s";
+
+                    if ($ex['seconds'] !== null) {
+                        $spec .= $sets === null
+                            ? " {$ex['seconds']} seconds"
+                            : " {$sets} sets of {$ex['seconds']} seconds";
+                    } elseif ($ex['reps'] !== null && trim((string) $ex['reps']) !== '') {
+                        // Strip any wording that is not the count; the model reproduces what it
+                        // is shown, so showing it "10 each side" invites "each side" into a
+                        // numeric field.
+                        $reps = trim(preg_replace(
+                            '/\b(each side|per side|each leg|per leg|hold|holds|carry|total)\b/i',
+                            '',
+                            (string) $ex['reps']
+                        ) ?? '');
+                        $reps = trim(preg_replace('/\s+/', ' ', $reps) ?? '');
+                        if ($reps === '') {
+                            $reps = (string) $ex['reps'];
+                        }
+                        $spec .= $sets === null
+                            ? " {$reps} reps"
+                            : " {$sets} sets of {$reps} reps";
                     }
                     $core[] = $spec;
                 }
-                $out[] = '    core, IDENTICAL: ' . implode(', ', $core);
+                $out[] = '    core, IDENTICAL — same exercises, same sets, same dose: '
+                       . implode('; ', $core);
+                $out[] = '      Give every one of these. Do not shorten the list, and do not '
+                       . 'merge two of them into one.';
             }
         }
 
