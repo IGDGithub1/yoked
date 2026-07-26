@@ -20,7 +20,8 @@ baseline, and report their week back to the coach that plans the next one.
 | `Plans.php` | ✅ week generation, validation, versioned persistence |
 | API tier | ✅ `api/index.php`, global CSRF, session auth |
 | Onboarding UI | ✅ the quiz, tier confirmation, answer review |
-| Logging | ✅ food (search, barcode, favorites), training incl. free-logging, check-in |
+| Journal (logging) | ✅ food (search, barcode, favorites), training incl. free-logging, check-in |
+| Dashboard | ✅ landing page: nudges, coach reviews, week-at-a-glance |
 | Baseline lifecycle | ✅ two weeks, Monday-aligned, per-user local time, graduates to active |
 | Weekly check-in | ✅ Sat 18:00 local, shapes Sunday's plan, late answers reviewed |
 | Drift and nudges | ✅ §4.2 escalation, pure SQL on track; §9 absence ladder, tone-matched |
@@ -102,7 +103,7 @@ php bin/seed-uitest.php       # two users, re-runnable:
                               # plus an open weekly check-in and a reviewed one
 ```
 ```powershell
-cd app; npm run drive:logging   # 94 checks: log it, reload, confirm it stuck
+cd app; npm run drive:logging   # 95 checks: log it, reload, confirm it stuck
 ```
 
 Re-seed before each run — the suite mutates the fixture, and it refuses to start
@@ -127,6 +128,10 @@ nothing change.
   is fine. Persistent substitution means the menu is wrong, not the user.
 - **The user supplies facts; Claude decides.** Chat cannot dictate terms, and there is
   no code path from user text to plan mutation.
+- **Two views, one job each.** The Dashboard is data REVIEW and the Journal is data
+  ENTRY. Everything review-shaped had been piling onto the logging screen and needed a
+  `yieldAccent` prop so the meals would go quiet when a check-in was open; splitting
+  them means "one yellow prompt per view" holds by construction instead.
 - **Quiet by default.** On-track days make no Claude call at all, and neither does
   minor drift: one missed session aggregates for the weekly check-in rather than
   becoming a conversation. Only significant drift asks a question.

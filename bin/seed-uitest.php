@@ -45,12 +45,38 @@ if ($drop) {
     exit(0);
 }
 
-$today = date('Y-m-d');
-// The plan week has to CONTAIN today, or Nutrition::dayId stamps the day with a
-// null plan_version_id and nothing is prescribed on screen.
+/*
+ * "Today" is ambiguous across a timezone boundary, and it broke the suite.
+ *
+ * This script runs on the server, where date() is UTC. The browser asks for ITS local
+ * date. At 00:49 UTC on the 26th a browser in New York (UTC-4) is still on the 25th, so
+ * a fixture prescribed for "today" was prescribed for a day the browser would not ask
+ * about until the following evening. Every prescribed-meal assertion failed with
+ * "Breakfast | not logged", which reads exactly like a UI regression and is not one.
+ *
+ * So the fixture prescribes THREE days: yesterday, today, and tomorrow in UTC terms.
+ * That covers every timezone the suite could run from, and costs three rows.
+ */
+$today     = date('Y-m-d');
+$prescribe = [
+    date('Y-m-d', strtotime($today . ' -1 day')),
+    $today,
+    date('Y-m-d', strtotime($today . ' +1 day')),
+];
+
+/*
+ * The plan week has to CONTAIN the prescribed days, or Nutrition::dayId stamps them
+ * with a null plan_version_id and nothing appears on screen.
+ *
+ * Anchored to LAST Monday rather than this one, so the window still covers yesterday
+ * when the script runs on a Monday, and covers tomorrow when it runs on a Sunday.
+ * Nutrition::dayId matches on `? BETWEEN week_start AND week_start + 6 days`, so a
+ * single plan_versions row cannot span more than seven days — but the prescribed_days
+ * rows themselves are what the UI reads, and those are matched by date alone.
+ */
 $monday = date('Y-m-d', strtotime('monday this week'));
 
-$seed = DB::tx(function () use ($today, $monday): array {
+$seed = DB::tx(function () use ($today, $prescribe, $monday): array {
     $userId = DB::insert(
         'INSERT INTO users (username, display_name, email, password_hash, onboarding_state)
          VALUES (?, ?, ?, ?, "active")',
@@ -73,34 +99,40 @@ $seed = DB::tx(function () use ($today, $monday): array {
         [$userId, $monday, 'Seeded for UI testing.']
     );
 
-    // Constraints are frozen onto the prescribed day, so the verdict the UI
-    // shows comes from the plan rather than the user's current goal.
-    $dayId = DB::insert(
-        'INSERT INTO prescribed_days
-            (plan_version_id, day_date, target_calories, target_protein_g,
-             target_fat_g, target_carbs_g, constraints)
-         VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [$planId, $today, 2400, 180.0, 80.0, 220.0, json_encode([
-            'protein'  => ['mode' => 'at_least'],
-            'calories' => ['mode' => 'range_pct', 'lo' => 0.85, 'hi' => 1.05],
-            'fat'      => ['mode' => 'ignore'],
-            'carbs'    => ['mode' => 'ignore'],
-        ])]
-    );
-
-    foreach ([
-        ['breakfast', 'Eggs and oats',      600, 45.0, 22.0, 50.0, 6.0],
-        ['lunch',     'Chicken and rice',   800, 70.0, 22.0, 70.0, 4.0],
-        ['dinner',    'Beef and potatoes', 1000, 65.0, 36.0, 100.0, 8.0],
-    ] as [$s, $n, $cal, $pro, $fat, $carb, $fib]) {
-        DB::run(
-            'INSERT INTO prescribed_meals
-                (prescribed_day_id, slot, kind, name, calories, protein_g, fat_g,
-                 carbs_g, fiber_g, prep_minutes, ingredients)
-             VALUES (?, ?, "specified", ?, ?, ?, ?, ?, ?, ?, ?)',
-            [$dayId, $s, $n, $cal, $pro, $fat, $carb, $fib, 15,
-             json_encode([['item' => 'test food', 'household' => '1 cup']])]
+    /*
+     * Yesterday, today and tomorrow, so the fixture works from any timezone.
+     *
+     * Constraints are frozen onto each prescribed day, so the verdict the UI shows
+     * comes from the plan rather than the user's current goal.
+     */
+    foreach ($prescribe as $date) {
+        $dayId = DB::insert(
+            'INSERT INTO prescribed_days
+                (plan_version_id, day_date, target_calories, target_protein_g,
+                 target_fat_g, target_carbs_g, constraints)
+             VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [$planId, $date, 2400, 180.0, 80.0, 220.0, json_encode([
+                'protein'  => ['mode' => 'at_least'],
+                'calories' => ['mode' => 'range_pct', 'lo' => 0.85, 'hi' => 1.05],
+                'fat'      => ['mode' => 'ignore'],
+                'carbs'    => ['mode' => 'ignore'],
+            ])]
         );
+
+        foreach ([
+            ['breakfast', 'Eggs and oats',      600, 45.0, 22.0, 50.0, 6.0],
+            ['lunch',     'Chicken and rice',   800, 70.0, 22.0, 70.0, 4.0],
+            ['dinner',    'Beef and potatoes', 1000, 65.0, 36.0, 100.0, 8.0],
+        ] as [$s, $n, $cal, $pro, $fat, $carb, $fib]) {
+            DB::run(
+                'INSERT INTO prescribed_meals
+                    (prescribed_day_id, slot, kind, name, calories, protein_g, fat_g,
+                     carbs_g, fiber_g, prep_minutes, ingredients)
+                 VALUES (?, ?, "specified", ?, ?, ?, ?, ?, ?, ?, ?)',
+                [$dayId, $s, $n, $cal, $pro, $fat, $carb, $fib, 15,
+                 json_encode([['item' => 'test food', 'household' => '1 cup']])]
+            );
+        }
     }
 
     // One committed session and one optional, which is the pair that shows the
@@ -110,36 +142,39 @@ $seed = DB::tx(function () use ($today, $monday): array {
     // 'conditioning','none') — an invalid member is silently coerced to '' by
     // MySQL rather than rejected, which reads on screen as a session with no
     // name at all. Use the enum values, not prose.
-    $committed = DB::insert(
-        'INSERT INTO prescribed_sessions
-            (plan_version_id, session_date, session_type, focus, focus_detail,
-             is_committed, target_minutes, location, warmup_minutes,
-             warmup_detail, rationale)
-         VALUES (?, ?, "strength", "full", ?, 1, 55, "full_gym", 10, ?, ?)',
-        [$planId, $today, 'Compound lifts, moderate volume.',
-         'Bike five minutes, then ramp.',
-         'Week one is about establishing load, not chasing it.']
-    );
-    DB::run(
-        'INSERT INTO prescribed_sessions
-            (plan_version_id, session_date, session_type, focus, is_committed,
-             target_minutes, location)
-         VALUES (?, ?, "cardio", "conditioning", 0, 30, "outdoors")',
-        [$planId, $today]
-    );
-
-    foreach ([['leg-press', 'main'], ['plank', 'core']] as [$slug, $block]) {
-        $ex = DB::one('SELECT id FROM exercises WHERE slug = ?', [$slug]);
-        if ($ex === null) {
-            continue;
-        }
-        DB::run(
-            'INSERT INTO prescribed_exercises
-                (session_id, exercise_id, block, sets, target_reps,
-                 target_weight_kg, target_rpe, rest_seconds)
-             VALUES (?, ?, ?, 3, "10", 60, 7, 90)',
-            [$committed, (int) $ex['id'], $block]
+    // Sessions on all three days too, for the same timezone reason as the meals.
+    foreach ($prescribe as $date) {
+        $committed = DB::insert(
+            'INSERT INTO prescribed_sessions
+                (plan_version_id, session_date, session_type, focus, focus_detail,
+                 is_committed, target_minutes, location, warmup_minutes,
+                 warmup_detail, rationale)
+             VALUES (?, ?, "strength", "full", ?, 1, 55, "full_gym", 10, ?, ?)',
+            [$planId, $date, 'Compound lifts, moderate volume.',
+             'Bike five minutes, then ramp.',
+             'Week one is about establishing load, not chasing it.']
         );
+        DB::run(
+            'INSERT INTO prescribed_sessions
+                (plan_version_id, session_date, session_type, focus, is_committed,
+                 target_minutes, location)
+             VALUES (?, ?, "cardio", "conditioning", 0, 30, "outdoors")',
+            [$planId, $date]
+        );
+
+        foreach ([['leg-press', 'main'], ['plank', 'core']] as [$slug, $block]) {
+            $ex = DB::one('SELECT id FROM exercises WHERE slug = ?', [$slug]);
+            if ($ex === null) {
+                continue;
+            }
+            DB::run(
+                'INSERT INTO prescribed_exercises
+                    (session_id, exercise_id, block, sets, target_reps,
+                     target_weight_kg, target_rpe, rest_seconds)
+                 VALUES (?, ?, ?, 3, "10", 60, 7, 90)',
+                [$committed, (int) $ex['id'], $block]
+            );
+        }
     }
 
     return ['user_id' => $userId, 'plan_id' => $planId];

@@ -67,7 +67,42 @@ await form.locator('input[type="text"]').first().fill(USER)
 await form.locator('input[type="password"]').first().fill(PASS)
 await form.getByRole('button', { name: /^sign in$/i }).click()
 
-await check('signing in lands on the logging screen', async () => {
+await check('signing in lands on the Dashboard, not the Journal', async () => {
+  /*
+   * The landing page is REVIEW, not entry. The two views were split because every
+   * review surface had been accumulating on the logging screen and pushing the actual
+   * meals down the page.
+   */
+  await page.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+  const current = await page.getByRole('button', { name: /^Dashboard$/ })
+    .getAttribute('aria-current')
+  if (current !== 'page') return `the Dashboard tab was not current (${current})`
+  // And the hash reflects it, so a reload comes back to the same place.
+  return /#\/dashboard/.test(page.url()) ? true : `url was ${page.url()}`
+})
+
+/** Both views are reachable from the tab bar; most checks below live in the Journal. */
+async function goto(view, target = page) {
+  const want = `#/${view.toLowerCase()}`
+  if (new URL(target.url()).hash === want) return
+  await target.getByRole('button', { name: new RegExp(`^${view}$`, 'i') }).click()
+  await target.waitForFunction((h) => window.location.hash === h, want, { timeout: 10000 })
+}
+
+/*
+ * A reload now lands on the Dashboard, because the hash is written with replaceState
+ * on first load and a fresh page has none. Journal checks that reload have to come
+ * back, so this does both.
+ */
+async function reloadJournal(target = page) {
+  await target.reload({ waitUntil: 'networkidle' })
+  await goto('Journal', target)
+  await target.getByRole('heading', { name: /how are you today/i })
+    .waitFor({ timeout: 20000 })
+}
+
+await check('the Journal is reachable and holds the day', async () => {
+  await goto('Journal')
   await page.getByRole('heading', { name: /how are you today/i }).waitFor({ timeout: 20000 })
 })
 
@@ -86,8 +121,7 @@ await page.evaluate(() => {
   localStorage.removeItem('yoked.sections')
   localStorage.removeItem('yoked.theme')
 })
-await page.reload({ waitUntil: 'networkidle' })
-await page.getByRole('heading', { name: /how are you today/i }).waitFor({ timeout: 20000 })
+await reloadJournal()
 
 await check('today\'s date is shown', async () => {
   const eyebrow = await page.locator('.eyebrow').first().textContent()
@@ -272,8 +306,7 @@ await check('the logged exercise shows what was actually done', async () => {
 
 console.log('\n5. it survives a reload')
 
-await page.reload({ waitUntil: 'networkidle' })
-await page.getByRole('heading', { name: /how are you today/i }).waitFor({ timeout: 20000 })
+await reloadJournal()
 
 await check('the check-in ratings came back', async () => {
   // The card defaults CLOSED once answered, so the scales are not mounted on a
@@ -361,8 +394,7 @@ await check('a logged food can be starred as a usual', async () => {
 })
 
 await check('the star survives a reload', async () => {
-  await page.reload({ waitUntil: 'networkidle' })
-  await page.getByRole('heading', { name: /^Food$/ }).waitFor({ timeout: 20000 })
+  await reloadJournal()
   const card = page.locator('.card', { hasText: 'Breakfast' }).first()
   const star = card.locator('.star').first()
   await star.and(page.locator('[aria-pressed="true"]')).waitFor({ timeout: 15000 })
@@ -614,8 +646,7 @@ await check('a collapsed section still shows the day total', async () => {
 })
 
 await check('the collapse survives a reload', async () => {
-  await page.reload({ waitUntil: 'networkidle' })
-  await page.getByRole('button', { name: /^Food$/ }).waitFor({ timeout: 20000 })
+  await reloadJournal()
   const expanded = await page.getByRole('button', { name: /^Food$/ }).getAttribute('aria-expanded')
   return expanded === 'false' ? true : 'the section re-opened itself'
 })
@@ -655,8 +686,7 @@ await check('a rating can be cleared by tapping it again', async () => {
 })
 
 await check('the cleared rating stays cleared after a reload', async () => {
-  await page.reload({ waitUntil: 'networkidle' })
-  await page.getByRole('button', { name: /how are you today/i }).waitFor({ timeout: 20000 })
+  await reloadJournal()
   const body = await page.locator('body').innerText()
   return /energy 4\/5/i.test(body) ? 'the cleared rating came back' : true
 })
@@ -752,7 +782,7 @@ await check('it is labelled as the user\'s own, not prescribed', async () => {
 })
 
 await check('the session type it recorded comes back', async () => {
-  await page.reload({ waitUntil: 'networkidle' })
+  await reloadJournal()
   await page.getByRole('button', { name: /^Training$/ }).waitFor({ timeout: 20000 })
   const body = await page.locator('body').innerText()
   // 'strength' is the default chip. Before migration 007 this always read
@@ -931,6 +961,10 @@ await page.screenshot({ path: shot('logging-today.png'), fullPage: true })
 
 console.log('\n11. nudges and coach questions')
 
+// Review surfaces are on the DASHBOARD now. They used to sit on the logging
+// screen, which is exactly what the split fixed.
+await goto('Dashboard')
+
 await check('a nudge is shown, and it addresses absence rather than a bad day', async () => {
   const nudges = page.locator('.nudge')
   await nudges.first().waitFor({ timeout: 20000 })
@@ -965,8 +999,7 @@ await check('a nudge can be dismissed and stays dismissed', async () => {
   )
   // And it does not come back on the next boot, which is the whole point of
   // dismissing rather than hiding.
-  await page.reload({ waitUntil: 'networkidle' })
-  await page.getByRole('heading', { name: /^Food$/ }).waitFor({ timeout: 20000 })
+  await reloadJournal()
   const after = await page.locator('.nudge').count()
   return after < before ? true : `${after} nudges after dismissing one of ${before}`
 })
@@ -982,6 +1015,8 @@ await check('nudges do not claim the accent', async () => {
 
 console.log('\n12. the weekly check-in')
 
+await goto('Dashboard')
+
 await check('an open check-in is surfaced with its week', async () => {
   const card = page.locator('.checkin-weekly')
   await card.waitFor({ timeout: 20000 })
@@ -991,35 +1026,25 @@ await check('an open check-in is surfaced with its week', async () => {
   return /\d+ to \d+ \w+/.test(txt) ? true : `card read: ${txt.replace(/\n/g, ' | ')}`
 })
 
-await check('an open check-in claims the only accent on the screen', async () => {
+await check('the Dashboard spends the accent once', async () => {
   /*
-   * The accent rule has to hold ACROSS sections, not within each one.
+   * The accent rule used to need negotiation. With the check-in, the meals and the
+   * training prompt all on one screen there were three yellow buttons, each locally
+   * reasonable, together exactly the "column of yellow buttons" the rule forbids —
+   * so Food and Training grew a `yieldAccent` prop to go quiet when a check-in was
+   * open.
    *
-   * With both sections expanded and a check-in open there were briefly three
-   * yellow buttons: "Fill it in", the next meal's "Ate as planned", and
-   * Training's "Log a workout". Each was locally reasonable and together they
-   * were exactly the "column of yellow buttons" the rule exists to prevent.
-   * Food and Training now yield to the check-in.
-   */
-  for (const name of [/^Food$/, /^Training$/]) {
-    const btn = page.getByRole('button', { name })
-    if ((await btn.getAttribute('aria-expanded')) === 'false') await btn.click()
-  }
-  await page.locator('.card', { hasText: 'Breakfast' }).first().waitFor({ timeout: 15000 })
-
-  /*
-   * Counts PROMPTS, not submits.
+   * Splitting review from entry removed the need for that entirely: each view has one
+   * job, so one prompt per view holds by construction. This asserts the outcome rather
+   * than the mechanism, and the mechanism is gone.
    *
-   * A form's submit button is legitimately the primary action while you are inside
-   * that form: "Save it" in an open session form is not competing for attention,
-   * it is the way out. What the rule is about is unsolicited yellow — buttons
-   * offering to start something, several at once, down a scrolling page.
+   * Counts PROMPTS, not submits: a form's own submit is the way out of a form you
+   * chose to open, not unsolicited yellow competing for attention.
    */
   const found = await page.locator('.btn--primary:not([type="submit"])').allInnerTexts()
-  if (found.length !== 1) {
-    return `${found.length} yellow prompts with a check-in open: ${found.join(', ')}`
-  }
-  return /fill it in/i.test(found[0]) ? true : `the accent went to "${found[0]}"`
+  return found.length <= 1
+    ? true
+    : `${found.length} yellow prompts on the Dashboard: ${found.join(', ')}`
 })
 
 await check('it says whether answering still shapes the plan', async () => {
@@ -1094,8 +1119,9 @@ await check('the answer reached the server and closed the check-in', async () =>
 })
 
 await check('an already-reviewed check-in can be read back', async () => {
+  // A Dashboard card: the coach writing back is review, not entry.
   await page.reload({ waitUntil: 'networkidle' })
-  await page.getByRole('heading', { name: /^Food$/ }).waitFor({ timeout: 20000 })
+  await goto('Dashboard')
   const toggle = page.getByRole('button', { name: /your coach on last week/i })
   await toggle.waitFor({ timeout: 20000 })
   await toggle.click()
@@ -1107,7 +1133,11 @@ await check('an already-reviewed check-in can be read back', async () => {
 
 // ---- timezone and the baseline countdown -----------------------------------
 
-console.log('\n12. timezone and baseline')
+console.log('\n13. timezone and baseline')
+
+// The pip countdown lives in the Journal, where the logging happens; the
+// Dashboard carries a one-line version of it.
+await goto('Journal')
 
 await check('the browser timezone reaches the server', async () => {
   // Sent on boot, not asked in the quiz. The weekly slots fire in local time, so
@@ -1162,26 +1192,40 @@ await check('a mid-baseline user signs in', async () => {
   await form.locator('input[type="text"]').first().fill('uitest_baseline')
   await form.locator('input[type="password"]').first().fill(PASS)
   await form.getByRole('button', { name: /^sign in$/i }).click()
+  // Lands on the Dashboard like anyone else, then into the Journal where the
+  // countdown rail lives.
+  await obs.getByRole('button', { name: /^Journal$/ }).waitFor({ timeout: 20000 })
+  await goto('Journal', obs)
   await obs.getByRole('heading', { name: /how are you today/i }).waitFor({ timeout: 20000 })
 })
 
 await check('the countdown shows the day and when the plan arrives', async () => {
   const body = await obs.locator('body').innerText()
-  if (!/Day 3 of 14/.test(body)) return `no day count: ${body.slice(0, 300)}`
 
-  // Days remaining is asserted against the server rather than hardcoded: "day 3
-  // of 14" leaves 12 days, not 11, because day 3 has not finished yet. Deriving
-  // it here keeps the test honest whichever day the fixture is seeded on.
+  /*
+   * BOTH numbers come from the server, not from the fixture's seeded offset.
+   *
+   * The day count used to be hardcoded to "Day 3 of 14" because that is what the
+   * fixture was when this was written. The date then rolled over mid-session, the
+   * fixture became day 2, and the assertion failed against a screen that was entirely
+   * correct. A test that only passes on the day it was written is worse than no test:
+   * it reports a bug that is not there.
+   */
   const me = await obs.evaluate(async () => {
     const r = await fetch('/api/me', {
       headers: { accept: 'application/json' }, credentials: 'same-origin',
     })
     return r.json()
   })
+  const day = me.baseline?.day
   const left = me.baseline?.days_left
+
+  if (!new RegExp(`Day ${day} of 14`).test(body)) {
+    return `server says day ${day}, screen shows: ${body.slice(0, 200)}`
+  }
   return new RegExp(`plan arrives in ${left} days`).test(body)
     ? true
-    : `server says ${left} days left, screen says "${body.match(/Day 3 of 14[^\n]*/)?.[0]}"`
+    : `server says ${left} days left, screen shows "${body.match(/Day \d+ of 14[^\n]*/)?.[0]}"`
 })
 
 await check('the countdown rail marks the days elapsed', async () => {
@@ -1249,23 +1293,32 @@ await dark.goto(BASE, { waitUntil: 'domcontentloaded' })
 await dark.evaluate(() => localStorage.removeItem('yoked.theme'))
 await dark.reload({ waitUntil: 'networkidle' })
 
-// The baseline block above signed this shared context in as the OTHER fixture, and
-// both users render a Food section — so waiting on the heading alone would pass
-// while screenshotting the wrong user's day. Sign back in explicitly.
-{
+await check('dark mode picks up the dark shell', async () => {
+  /*
+   * Wrapped rather than a bare await: an unguarded wait that times out takes the whole
+   * run down with an uncaught rejection, and the suite then reports zero failures
+   * alongside a stack trace. One failed assertion is worth more than a crash.
+   *
+   * The baseline block above signed this shared context in as the OTHER fixture, so
+   * sign back in first. Both users render a Journal, so waiting on a heading alone
+   * would pass while measuring the wrong user's day.
+   */
   const form = dark.locator('form.card')
   if (await form.count()) {
     await form.locator('input[type="text"]').first().fill(USER)
     await form.locator('input[type="password"]').first().fill(PASS)
     await form.getByRole('button', { name: /^sign in$/i }).click()
   }
-}
-await dark.getByRole('heading', { name: /^Food$/ }).waitFor({ timeout: 20000 })
-await check('dark mode picks up the dark shell', async () => {
+  // The Dashboard is where sign-in lands, and the shell is what carries the theme.
+  await dark.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+
   const bg = await dark.evaluate(() => getComputedStyle(document.body).backgroundColor)
   // --shell dark is #17140F.
   return /23,\s*20,\s*15/.test(bg) ? true : `body background was ${bg}`
 })
+
+// Into the Journal for the screenshot, which is the denser of the two views.
+await goto('Journal', dark).catch(() => {})
 await dark.setViewportSize({ width: 390, height: 844 })
 await dark.screenshot({ path: shot('logging-today-dark.png'), fullPage: true })
 

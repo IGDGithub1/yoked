@@ -1,22 +1,33 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api'
+import { useRoute } from './router'
 import Auth from './screens/Auth'
 import Quiz from './screens/Quiz'
 import Ready from './screens/Ready'
-import Today from './screens/Today'
+import Dashboard from './screens/Dashboard'
+import Journal from './screens/Journal'
 import Answers from './screens/Answers'
+import Shell from './components/Shell'
 import Yolk from './components/Yolk'
 
 /**
- * Routing, such as it is.
+ * Two layers of routing, and the split between them matters.
  *
- * The server decides where a user belongs — /api/me returns a `next` step from
- * their onboarding_state and quiz progress. Duplicating that logic here would
- * mean two sources of truth that drift; a URL router adds nothing while the app
- * is this linear.
+ * THE SERVER decides whether a user belongs in the app at all: /api/me returns a
+ * `next` step from their onboarding_state and quiz progress, and a half-onboarded user
+ * goes to the quiz whatever the URL says. Duplicating that logic here would be two
+ * sources of truth that drift.
+ *
+ * THE HASH decides which of the two signed-in views they are looking at. That used to
+ * be nothing — there was one destination past onboarding and a comment here saying "a
+ * URL router adds nothing while the app is this linear", which was true at the time.
+ * With a Dashboard for review and a Journal for entry it stops being true: you need to
+ * land somewhere, get to the other, and come back without the back button ejecting you
+ * from the app.
  */
 export default function App() {
   const [state, setState] = useState({ status: 'loading' })
+  const [route, navigate] = useRoute()
 
   const boot = useCallback(async () => {
     try {
@@ -137,17 +148,25 @@ export default function App() {
     )
   }
 
-  // Past onboarding, the app IS the logging screen. There is no dashboard
-  // between them: a user who is set up came here to log something.
+  /*
+   * Past onboarding: the Dashboard for review, the Journal for entry.
+   *
+   * Both live inside the same Shell so the header and tab bar are defined once. Before
+   * the split the logging screen owned its own appbar, and a second view would have
+   * copied it — which is how two headers drift apart.
+   */
   return (
-    <Today
-      user={state.user}
-      /* Null unless mid-baseline. Drives the countdown and explains the absence
-         of targets. */
-      baseline={state.baseline}
-      onSignOut={signOut}
-      onReview={review}
-    />
+    <Shell route={route} onNavigate={navigate} onSignOut={signOut} onReview={review}>
+      {route === 'journal' ? (
+        <Journal
+          /* Null unless mid-baseline. Drives the countdown and explains the absence
+             of targets. */
+          baseline={state.baseline}
+        />
+      ) : (
+        <Dashboard user={state.user} baseline={state.baseline} onNavigate={navigate} />
+      )}
+    </Shell>
   )
 }
 

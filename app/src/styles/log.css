@@ -7,6 +7,140 @@
  * matching.
  */
 
+/* ---- the tab bar -------------------------------------------------------- */
+/*
+ * At the BOTTOM. This is a phone-first PWA and the top of a phone screen is the hardest
+ * place to reach; the two views a user switches between all day belong under a thumb.
+ *
+ * Fixed rather than sticky, so it does not scroll away mid-page, with padding added to
+ * .wrap below to keep the last card clear of it.
+ */
+.tabbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  border-top: 1px solid var(--hairline);
+  background: var(--shell);
+  /* Home-bar inset on an installed iOS PWA, where the bottom of the viewport is not
+     the bottom of the usable screen. Zero everywhere else. */
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.tab {
+  flex: 1 1 0;
+  padding: 14px 8px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-family: var(--body);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--t-quick);
+}
+.tab:hover { color: var(--ink); }
+
+/*
+ * aria-current, not a class: the active tab is styled off the same attribute a screen
+ * reader announces, so the two cannot disagree. The bar above it is the one accent,
+ * which is legitimate here — this is wayfinding, the thing DESIGN.md says earns the
+ * yellow.
+ */
+.tab[aria-current='page'] {
+  color: var(--ink);
+  box-shadow: inset 0 2px 0 var(--yolk);
+}
+
+/*
+ * Clear the fixed bar. Without this the last card sits underneath it and the final
+ * button on a page is unreachable.
+ *
+ * Scoped to a page that HAS a tab bar rather than applied to every .wrap: the quiz and
+ * the answers review use .wrap too and have no bar, and 96px of dead space at the
+ * bottom of the quiz would be a mystery.
+ */
+body:has(.tabbar) .wrap { padding-bottom: 96px; }
+
+/* ---- week at a glance --------------------------------------------------- */
+/*
+ * Seven bars, one per day. A bar rather than a line because a week is seven discrete
+ * days and a line implies something continuous between them.
+ */
+/*
+ * The chart wrapper exists so the target line can span it once.
+ *
+ * Drawn per-bar it read as a plotted series with gaps on unlogged days, which is the
+ * opposite of the point: the target is one fixed reference, and seven dashes made it
+ * look like data.
+ */
+/*
+ * Only the TRACK row is relative, not the whole chart including labels — so a target
+ * line positioned from its bottom lands on the chart baseline rather than under the
+ * day letters. That keeps the maths honest instead of offsetting by a magic number.
+ */
+.weekchart { position: relative; }
+.weekchart-tracks { position: relative; }
+
+.weekbars {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  align-items: end;
+}
+
+/* The day letters, on the same seven-column grid so they line up under the bars. */
+.weekbar-labels { margin-top: 4px; text-align: center; }
+
+.weekbar-track {
+  position: relative;
+  width: 100%;
+  height: 72px;
+  display: flex;
+  align-items: flex-end;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--hairline) 55%, var(--white));
+}
+
+.weekbar-fill {
+  width: 100%;
+  border-radius: 4px;
+  background: var(--yolk);
+  transition: height var(--t-fill) var(--ease);
+}
+/*
+ * A day with nothing logged is EMPTY, not zero. "Did not log" and "ate nothing" are
+ * different facts, and the whole drift ladder turns on the distinction, so the chart
+ * must not draw them the same way.
+ */
+.weekbar-fill[data-empty='true'] { background: transparent; }
+
+/*
+ * The target, so a bar is read against something rather than against its neighbours.
+ *
+ * Positioned from the BOTTOM of the bar area, which is the label row's height plus the
+ * track: the labels sit below the tracks, so `bottom: 0` on the wrapper would land
+ * under them rather than at the chart's baseline.
+ */
+.weekchart-target {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /*
+   * `bottom` is set inline as a percentage of the TRACK height. The day letters live
+   * outside .weekchart-tracks precisely so that percentage needs no correction — an
+   * earlier version offset it by a guessed label height, which is the kind of magic
+   * number that silently drifts the moment the font changes.
+   */
+  height: 0;
+  border-top: 1px dashed var(--muted);
+  opacity: .45;
+  pointer-events: none;
+  z-index: 1;
+}
+
 /* ---- the day stepper --------------------------------------------------- */
 
 .daynav > .btn {

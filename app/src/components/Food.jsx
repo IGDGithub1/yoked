@@ -69,7 +69,7 @@ const ADHERENCE_LABELS = {
   unplanned: 'off-plan',
 }
 
-export default function Food({ day, date, isToday, yieldAccent, onDay }) {
+export default function Food({ day, date, isToday, onDay }) {
   /*
    * Favorites are fetched ONCE for the whole section, not per meal card.
    *
@@ -119,10 +119,14 @@ export default function Food({ day, date, isToday, yieldAccent, onDay }) {
           meal={meal}
           date={date}
           prescribed={prescribedFor(meal.slot)}
-          /* The accent goes to the NEXT unlogged meal only, and not even that
-             when something more urgent on the screen has claimed it. A column of
-             yellow buttons is not several primary actions, it is none. */
-          primary={meal.slot === nextSlot && !yieldAccent}
+          /* The accent goes to the NEXT unlogged meal only. A column of yellow
+             buttons is not several primary actions, it is none.
+
+             This used to also yield to an open weekly check-in, which shared the
+             screen. It does not any more: review surfaces live on the Dashboard, so
+             one prompt per screen now holds by construction rather than by
+             negotiation between components. */
+          primary={meal.slot === nextSlot}
           favorites={favorites}
           onFavorites={setFavorites}
           onDay={onDay}
