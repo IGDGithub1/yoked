@@ -3,6 +3,8 @@ import { api } from '../api'
 import { SECTIONS } from '../questions'
 import Quiz from './Quiz'
 import Yolk from '../components/Yolk'
+import Settings from '../components/Settings'
+import Preferences from '../components/Preferences'
 
 /**
  * The user's profile: review and change what the coach knows about them.
@@ -22,7 +24,18 @@ import Yolk from '../components/Yolk'
  * section drops into the existing Quiz component at that section, so there is
  * one implementation of every field, not two that drift.
  */
-export default function Profile({ onClose }) {
+/*
+ * `standalone` means "nothing else is providing a header".
+ *
+ * Past onboarding the Profile renders INSIDE the Shell, which already has an appbar, and
+ * rendering a second one put a sticky "Yoked / Done" bar in the middle of the page. It went
+ * unnoticed while this screen was one short list; adding the preferences and settings
+ * sections made it long enough to scroll, and the stray bar appeared halfway down.
+ *
+ * Mid-onboarding it IS standalone: the "save and finish later" exit lands here before the
+ * Shell exists, and without its own header there would be no way back out.
+ */
+export default function Profile({ onClose, standalone = false }) {
   const [data, setData] = useState(null)
   const [failed, setFailed] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -88,13 +101,15 @@ export default function Profile({ onClose }) {
 
   return (
     <>
-      <header className="appbar">
-        <Yolk pct={100} size={34} />
-        <span className="brand">Yoked</span>
-        <button type="button" className="btn btn--quiet push" onClick={onClose}>
-          Done
-        </button>
-      </header>
+      {standalone && (
+        <header className="appbar">
+          <Yolk pct={100} size={34} />
+          <span className="brand">Yoked</span>
+          <button type="button" className="btn btn--quiet push" onClick={onClose}>
+            Done
+          </button>
+        </header>
+      )}
 
       <div className="wrap stack-lg">
         <div>
@@ -144,6 +159,33 @@ export default function Profile({ onClose }) {
           effect the moment you save it. Nothing your coach writes after that can
           contradict it.
         </p>
+
+        {/*
+          Below the sections, because these are visited even less often than an answer
+          correction, and because "what does the coach already believe about me" only makes
+          sense after you have seen where those beliefs came from.
+        */}
+        <div>
+          <h2 className="subheading" style={{ marginBottom: 8 }}>What your coach avoids</h2>
+          <Preferences />
+        </div>
+
+        <div>
+          <h2 className="subheading" style={{ marginBottom: 8 }}>Settings</h2>
+          <Settings />
+        </div>
+
+        {/*
+          A way out at the bottom, when the header is not providing one.
+          Inside the Shell the nav can take you anywhere, but a long screen still wants an
+          explicit "I am finished here" rather than making the user scroll back up to the
+          header and pick a destination.
+        */}
+        {!standalone && (
+          <button type="button" className="btn btn--ghost" onClick={onClose}>
+            Done
+          </button>
+        )}
       </div>
     </>
   )

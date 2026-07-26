@@ -116,3 +116,4 @@ require YK_SRC . '/lib/Nudge.php';
 require YK_SRC . '/lib/Tomorrow.php';
 require YK_SRC . '/lib/Chat.php';
 require YK_SRC . '/lib/Vetoes.php';
+require YK_SRC . '/lib/Settings.php';

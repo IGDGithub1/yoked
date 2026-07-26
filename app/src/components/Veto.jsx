@@ -180,8 +180,9 @@ export default function Veto({ subjectType, subjectId, label, onDone }) {
         <span>
           Never suggest this again
           <Help label="What this does">
-            Ticking this means your coach stops putting it in your plans, not just today.
-            You can undo it in your profile later.
+            Your coach stops putting it in your plans, not just today. It shows up under
+            "what your coach avoids" in your profile, and you can switch it back on there
+            whenever you like.
           </Help>
         </span>
       </label>

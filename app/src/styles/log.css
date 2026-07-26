@@ -677,3 +677,31 @@
   font-size: 13px;
   border-radius: var(--r-input);
 }
+
+/* ---- preferences --------------------------------------------------------- */
+
+/*
+ * One constraint. Hairline-separated rows rather than nested cards: these are a list of
+ * facts about the user, and boxing each one would read as a stack of things to deal with.
+ */
+.prefrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--hairline);
+}
+.prefrow:first-of-type { border-top: none; }
+.prefrow-body { display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; }
+
+/*
+ * Switched off, and still legible.
+ *
+ * Dimmed rather than struck through or hidden: it is a preference the user chose to stop
+ * applying, not an error and not a deletion, and they need to be able to read it to decide
+ * whether to switch it back on.
+ */
+.prefrow[data-off='true'] .small { color: var(--muted); font-weight: 500; }
+
+/* The settings selects sit two-up in a row and must not overflow at 360px. */
+.field .row > .input { flex: 1 1 0; min-width: 0; }

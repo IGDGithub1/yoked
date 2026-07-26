@@ -278,14 +278,29 @@ final class Plans
         );
     }
 
-    /** Standing vetoes — permanent dislikes, distinct from "not today". */
+    /**
+     * Standing vetoes — permanent dislikes, distinct from "not today".
+     *
+     * EXCLUDES any whose promoted constraint the user has since switched off, and that join
+     * is load-bearing rather than tidy. An accepted standing veto reaches the prompt as
+     * "These are permanent. Do not prescribe them again", and the soft constraint it created
+     * reaches it separately through Safety, which filters on `active`. So without this,
+     * switching the preference off in the profile would stop the constraint and leave the
+     * veto still saying never again: the switch would appear to work and silently would not.
+     *
+     * A veto that promoted nothing (scope standing, but the coach concluded no lasting
+     * preference) has a null promoted_constraint_id and is kept — there is no switch for the
+     * user to have thrown.
+     */
     private static function standingVetoes(int $userId): array
     {
         return DB::all(
-            'SELECT subject_type, reason_code, reason_text, created_at
-             FROM vetoes
-             WHERE user_id = ? AND scope = "standing" AND outcome = "accepted"
-             ORDER BY created_at DESC LIMIT 50',
+            'SELECT v.subject_type, v.reason_code, v.reason_text, v.created_at
+             FROM vetoes v
+             LEFT JOIN user_constraints uc ON uc.id = v.promoted_constraint_id
+             WHERE v.user_id = ? AND v.scope = "standing" AND v.outcome = "accepted"
+               AND (v.promoted_constraint_id IS NULL OR uc.active = 1)
+             ORDER BY v.created_at DESC LIMIT 50',
             [$userId]
         );
     }

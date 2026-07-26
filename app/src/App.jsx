@@ -127,6 +127,8 @@ export default function App() {
     if (route === 'profile') {
       return (
         <Profile
+          // No Shell here, so the Profile provides its own header and its own way out.
+          standalone
           onClose={() => {
             // Re-boot on the way out: editing an answer can change what the server
             // says comes next, and reusing the old `next` would strand the user on a

@@ -191,6 +191,31 @@ export const api = {
   },
 
   /*
+   * The settings the quiz never asked: schedule slots, core emphasis, and the pause switch.
+   * Tone, nudges and units are §9 quiz answers and are edited there, not here.
+   *
+   * PUT is partial — send only what changed. An absent key means "leave it alone", so
+   * toggling one thing cannot reset another.
+   */
+  settings: {
+    load: () => get('settings'),
+    save: (fields) => put('settings', fields),
+  },
+
+  /*
+   * Constraints as an EDITOR, distinct from onboarding.constraints() above, which is the
+   * read-only post-quiz list. This one returns ids, includes switched-off rows, and can
+   * change one.
+   *
+   * Soft only. The server sends `switchable` per row and refuses a hard tier with a 409, so
+   * the client renders the control from that flag rather than deciding for itself.
+   */
+  constraints: {
+    load: () => get('constraints'),
+    setActive: (id, active) => patch(`constraints/${id}`, { active }),
+  },
+
+  /*
    * The Next Day Review (§4.1a). Whether it should appear at all is the SERVER's
    * decision: the evening hour is per-user in their own timezone, and a client computing
    * it would be a second implementation differing exactly at the boundary that matters.

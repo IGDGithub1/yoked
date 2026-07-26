@@ -133,6 +133,24 @@ $seed = DB::tx(function () use ($prescribe, $monday): array {
          'Seeded for UI testing.']
     );
 
+    /*
+     * One constraint of each tier, so the profile's preferences list has both cases.
+     *
+     * The soft one is source veto_promotion deliberately: that is the row the Veto form
+     * promises can be switched back on, so it is the one the browser suite should be able to
+     * click. The hard one must render with NO switch, which is the assertion that matters.
+     */
+    DB::run(
+        'INSERT INTO user_constraints (user_id, kind, tier, subject, reason, source)
+         VALUES (?, "food", "hard", "peanuts", "anaphylaxis", "onboarding")',
+        [$userId]
+    );
+    DB::run(
+        'INSERT INTO user_constraints (user_id, kind, tier, subject, reason, source)
+         VALUES (?, "food", "soft", "salmon", "turned it down", "veto_promotion")',
+        [$userId]
+    );
+
     $planId = DB::insert(
         'INSERT INTO plan_versions (user_id, week_start, version, reason, summary)
          VALUES (?, ?, 1, "initial", ?)',

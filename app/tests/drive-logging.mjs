@@ -1644,8 +1644,11 @@ const planBefore = await prescribed()
 
 await check('the coach is reachable from the Dashboard, not the nav', async () => {
   await goto('Dashboard', chat)
+  // Waited for, not counted: the Dashboard draws its cards after five parallel fetches
+  // settle. This one happened to survive because goto() already waits on a hash change,
+  // which is luck rather than correctness.
   const card = chat.locator('.profilelink', { hasText: /coach/i })
-  if (!(await card.count())) return 'no coach card on the Dashboard'
+  await card.first().waitFor({ timeout: 20000 })
   // Deliberately NOT a nav item: the header carries the two daily views plus theme and
   // sign out, and a conversation entered when something changes does not earn a fifth.
   const inNav = await chat.locator('.navicons .navbtn[aria-label*="oach" i]').count()
@@ -1898,7 +1901,327 @@ await check('the veto survives a reload as pending', async () => {
 await veto.screenshot({ path: shot('logging-veto.png'), fullPage: true })
 await veto.close()
 
+// ---- the profile: preferences and settings -----------------------------------
+
+console.log('\n17. the profile: preferences and settings')
+
+/*
+ * The Profile is where the app finally admits what it believes about the user and lets them
+ * change it. Two halves, and the split is the point.
+ *
+ * PREFERENCES. A soft constraint gets an off switch; a hard one does not, because
+ * SPEC-safety 6 wants a limit to change only by re-answering the question behind it. The
+ * assertion that matters is the ABSENCE of a control on the hard row.
+ *
+ * SETTINGS. Seven columns that were live in the database with no way to reach them. The pause
+ * switch is the one users will actually come looking for.
+ */
+const prof = await ctx.newPage()
+await prof.goto(BASE, { waitUntil: 'domcontentloaded' })
+
+await check('the profile page signs in', async () => {
+  await prof.evaluate(async () => {
+    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
+    if (me.authenticated) {
+      await fetch('/api/logout', {
+        method: 'POST',
+        headers: { 'x-csrf-token': me.csrf, accept: 'application/json' },
+        credentials: 'same-origin',
+      })
+    }
+  })
+  await prof.reload({ waitUntil: 'networkidle' })
+  const f = prof.locator('form.card')
+  await f.waitFor({ timeout: 20000 })
+  await f.locator('input[type="text"]').first().fill(USER)
+  await f.locator('input[type="password"]').first().fill(PASS)
+  await f.getByRole('button', { name: /^sign in$/i }).click()
+  await prof.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+})
+
+await check('the profile is reachable from the Dashboard, not the nav', async () => {
+  /*
+   * WAIT for the card rather than counting immediately.
+   *
+   * The Dashboard fetches five endpoints in parallel and renders its cards only once they
+   * settle, so a click straight after sign-in lands on a screen that has not drawn them yet.
+   * The first version of this test counted 0 and reported "no profile card", which reads as a
+   * missing feature rather than a race, and every assertion after it failed on a page it had
+   * never reached.
+   */
+  const card = prof.locator('.profilelink', { hasText: /profile/i })
+  await card.first().waitFor({ timeout: 20000 })
+  await card.first().click()
+  await prof.waitForFunction(() => window.location.hash === '#/profile', { timeout: 10000 })
+  await prof.getByRole('heading', { name: /change anything/i }).waitFor({ timeout: 20000 })
+  return true
+})
+
+await check('there is exactly one header on the page', async () => {
+  /*
+   * The Profile renders inside the Shell past onboarding, and the Shell already has an
+   * appbar. Its own header made a second one, which is `position: sticky` and so parked a
+   * stray "Yoked / Done" bar in the MIDDLE of the page. Invisible while this screen was one
+   * short list; the preferences and settings sections made it long enough to scroll and the
+   * bar appeared halfway down.
+   *
+   * Caught by looking at a screenshot rather than by any assertion, which is the argument
+   * for having one.
+   */
+  const bars = await prof.locator('.appbar').count()
+  return bars === 1 ? true : `${bars} appbars on the profile`
+})
+
+await check('there is still a way out of the profile', async () => {
+  // The header carried "Done". Dropping it must not leave a long screen with no explicit
+  // exit, even though the nav can reach anywhere.
+  const done = await prof.getByRole('button', { name: /^done$/i }).count()
+  return done > 0 ? true : 'no way to leave the profile'
+})
+
+await check('both constraint tiers are listed', async () => {
+  /*
+   * The heading renders before the list does: Preferences fetches its own rows, so the
+   * section title is on screen while the rows are still in flight. Counting at that moment
+   * reported "the hard constraint is not listed" against a screen that was about to show it,
+   * and worse, the next test ("a HARD constraint has no off switch") then PASSED by finding
+   * no controls on a row that did not exist yet. An absence assertion is only meaningful
+   * once the thing it is about is present.
+   */
+  await prof.getByRole('heading', { name: /what your coach avoids/i })
+    .waitFor({ timeout: 20000 })
+  await prof.locator('.prefrow', { hasText: /peanuts/i }).first()
+    .waitFor({ timeout: 20000 })
+  await prof.locator('.prefrow', { hasText: /salmon/i }).first()
+    .waitFor({ timeout: 20000 })
+  return true
+})
+
+await check('a HARD constraint has no off switch', async () => {
+  /*
+   * The load-bearing assertion of this block, and it asserts an absence.
+   *
+   * SPEC-safety 6: "an LLM that can be argued out of a constraint has no constraints." A UI
+   * that can be tapped out of one is the same failure with a different input device. An
+   * allergy must not be two taps from being switched off.
+   */
+  const row = prof.locator('.prefrow', { hasText: /peanuts/i }).first()
+  // Present first. Counting controls on a row that has not rendered returns 0 and passes
+  // for entirely the wrong reason.
+  await row.waitFor({ timeout: 20000 })
+  const buttons = await row.getByRole('button').count()
+  return buttons === 0
+    ? true
+    : `the hard constraint row has ${buttons} control(s) on it`
+})
+
+await check('the hard section says where the change actually happens', async () => {
+  // A refusal with no route forward reads as a bug rather than a decision.
+  const text = (await prof.locator('.card', { hasText: /^Never/ }).first().innerText())
+    .toLowerCase()
+  return /answer|section/.test(text)
+    ? true
+    : `the hard section does not point anywhere: ${text}`
+})
+
+await check('a SOFT preference can be switched off', async () => {
+  const row = prof.locator('.prefrow', { hasText: /salmon/i }).first()
+  const btn = row.getByRole('button', { name: /switch off/i })
+  if (!(await btn.count())) return 'no switch on the soft preference'
+  await btn.first().click()
+  await prof.locator('.prefrow', { hasText: /salmon/i })
+    .getByRole('button', { name: /switch back on/i })
+    .waitFor({ timeout: 20000 })
+  return true
+})
+
+await check('a switched-off preference is still readable, not hidden', async () => {
+  // Dimmed rather than removed: it is a state the user chose, and they need to be able to
+  // read it to decide whether to undo it.
+  const row = prof.locator('.prefrow', { hasText: /salmon/i }).first()
+  const off = await row.getAttribute('data-off')
+  if (off !== 'true') return 'the row is not marked as switched off'
+  const text = (await row.innerText()).toLowerCase()
+  return /switched off/.test(text) ? true : `the row does not say it is off: ${text}`
+})
+
+await check('it stops reaching the coach, checked at the API', async () => {
+  /*
+   * The screen is not the proof. Safety::forUser filters on `active`, so this reads the
+   * server's own view rather than trusting the button to have meant something.
+   */
+  const stillOn = await prof.evaluate(async () => {
+    const r = await fetch('/api/constraints', { credentials: 'same-origin' })
+    const b = await r.json()
+    const salmon = (b.constraints || []).find((c) => /salmon/i.test(c.subject))
+    return salmon ? salmon.active : null
+  })
+  return stillOn === false ? true : `the API still reports active=${stillOn}`
+})
+
+await check('it can be switched back on', async () => {
+  const row = prof.locator('.prefrow', { hasText: /salmon/i }).first()
+  await row.getByRole('button', { name: /switch back on/i }).click()
+  await prof.locator('.prefrow', { hasText: /salmon/i })
+    .getByRole('button', { name: /switch off/i })
+    .waitFor({ timeout: 20000 })
+  return true
+})
+
+await check('the API refuses a hard constraint even when asked directly', async () => {
+  /*
+   * Past the UI entirely. The button is absent, but absence in the DOM is not a security
+   * boundary — anyone can call the endpoint. The refusal has to be server-side.
+   */
+  const result = await prof.evaluate(async () => {
+    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
+    const list = await (await fetch('/api/constraints', { credentials: 'same-origin' })).json()
+    const hard = (list.constraints || []).find((c) => c.tier === 'hard')
+    if (!hard) return { error: 'no hard constraint to try' }
+    const r = await fetch(`/api/constraints/${hard.id}`, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        'x-csrf-token': me.csrf,
+        accept: 'application/json',
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({ active: false }),
+    })
+    const after = await (await fetch('/api/constraints', { credentials: 'same-origin' })).json()
+    const still = (after.constraints || []).find((c) => c.id === hard.id)
+    return { status: r.status, active: still ? still.active : null }
+  })
+  if (result.error) return result.error
+  if (result.status < 400) return `the API accepted it with ${result.status}`
+  return result.active === true
+    ? true
+    : `the hard constraint is now active=${result.active}`
+})
+
+await check('the settings panel exposes the pause', async () => {
+  await prof.getByRole('heading', { name: /^settings$/i }).waitFor({ timeout: 20000 })
+  const sw = prof.getByRole('switch', { name: /pause coaching/i })
+  return (await sw.count()) ? true : 'no pause control'
+})
+
+await check('pausing saves and says what it stops', async () => {
+  const sw = prof.getByRole('switch', { name: /pause coaching/i }).first()
+  const was = await sw.getAttribute('aria-checked')
+  await sw.click()
+  // Read the server, not the toggle: an optimistic flip proves nothing about the write.
+  await prof.waitForFunction(async (before) => {
+    const r = await fetch('/api/settings', { credentials: 'same-origin' })
+    const b = await r.json()
+    return String(b.settings.coaching_paused) !== before
+  }, was === 'true' ? 'true' : 'false', { timeout: 20000 })
+  return true
+})
+
+await check('the paused copy explains that logging keeps working', async () => {
+  // The fear this has to answer is "will I lose my data". Say no before they ask.
+  const text = (await prof.locator('.card', { hasText: /pause coaching/i }).first().innerText())
+    .toLowerCase()
+  return /log|lost/.test(text) ? true : `the pause copy does not reassure: ${text}`
+})
+
+await check('unpausing restores it', async () => {
+  const sw = prof.getByRole('switch', { name: /pause coaching/i }).first()
+  if ((await sw.getAttribute('aria-checked')) === 'true') await sw.click()
+  await prof.waitForFunction(async () => {
+    const r = await fetch('/api/settings', { credentials: 'same-origin' })
+    const b = await r.json()
+    return b.settings.coaching_paused === false
+  }, null, { timeout: 20000 })
+  return true
+})
+
+await check('the schedule slots are shown with the timezone they are read in', async () => {
+  // "18:00" is ambiguous on its own. The zone is detected from the browser rather than
+  // editable, because the device is a better source of truth than a dropdown.
+  const card = prof.locator('.card', { hasText: /when things happen/i }).first()
+  if (!(await card.count())) return 'no schedule card'
+  const text = await card.innerText()
+  return /\//.test(text) || /UTC/i.test(text)
+    ? true
+    : `no timezone shown beside the times: ${text}`
+})
+
+await check('a check-in after the plan is refused, with a reason', async () => {
+  /*
+   * The rule that stops the feature being a foot-gun. The check-in opens before generation so
+   * there is time to answer it; reversed, a user gets plans built from data not yet
+   * collected and never works out why their answers seem ignored.
+   */
+  const r = await prof.evaluate(async () => {
+    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
+    const res = await fetch('/api/settings', {
+      method: 'PUT',
+      headers: {
+        'content-type': 'application/json',
+        'x-csrf-token': me.csrf,
+        accept: 'application/json',
+      },
+      credentials: 'same-origin',
+      // Sunday 20:00, past the default Sunday 18:00 generation.
+      body: JSON.stringify({ checkin_weekday: 7, checkin_hour: 20 }),
+    })
+    return { status: res.status, body: await res.json() }
+  })
+  if (r.status < 400) return `the reversed schedule was accepted with ${r.status}`
+  return /before/i.test(String(r.body?.error))
+    ? true
+    : `the error does not explain the ordering: ${r.body?.error}`
+})
+
+await check('core work offers every level the plan rules understand', async () => {
+  const group = prof.getByRole('radiogroup', { name: /core work/i })
+  if (!(await group.count())) return 'no core work control'
+  const n = await group.getByRole('radio').count()
+  return n === 4 ? true : `${n} core options, expected 4 (off/light/standard/heavy)`
+})
+
+await check('changing core work saves', async () => {
+  await prof.getByRole('radio', { name: /^heavy$/i }).click()
+  await prof.waitForFunction(async () => {
+    const r = await fetch('/api/settings', { credentials: 'same-origin' })
+    const b = await r.json()
+    return b.settings.core_emphasis === 'heavy'
+  }, null, { timeout: 20000 })
+  // Put it back, so a re-run starts from the same place.
+  await prof.getByRole('radio', { name: /^standard$/i }).click()
+  return true
+})
+
+await check('the tomorrow preview can be set and turned off', async () => {
+  /*
+   * 0 is a real value meaning off, not a missing one, and a truthiness check anywhere in the
+   * chain would quietly restore the default. This fixture ALREADY sits at 0, so asserting
+   * "it is 0" would pass without proving anything. Set it to a real hour first, then off,
+   * so both transitions are exercised.
+   */
+  const sel = prof.getByLabel(/tomorrow preview/i)
+  if (!(await sel.count())) return 'no tomorrow preview control'
+
+  await sel.selectOption('21')
+  await prof.waitForFunction(async () => {
+    const r = await fetch('/api/settings', { credentials: 'same-origin' })
+    return (await r.json()).settings.review_hour === 21
+  }, null, { timeout: 20000 })
+
+  await sel.selectOption('0')
+  await prof.waitForFunction(async () => {
+    const r = await fetch('/api/settings', { credentials: 'same-origin' })
+    return (await r.json()).settings.review_hour === 0
+  }, null, { timeout: 20000 })
+  return true
+})
+
+await prof.screenshot({ path: shot('logging-profile.png'), fullPage: true })
+await prof.close()
+
 // ---- dark mode -------------------------------------------------------------
+
 
 
 const dark = await ctx.newPage()

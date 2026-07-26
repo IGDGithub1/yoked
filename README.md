@@ -28,6 +28,7 @@ baseline, and report their week back to the coach that plans the next one.
 | Next Day Review | ✅ §4.1a evening card: tomorrow, prep flags, dismissible |
 | Chat | ✅ §6 evaluate-and-revise at `#/coach`; the write path cannot touch a plan |
 | Vetoes | ✅ §5 reason required, replace not delete, standing promotes to a SOFT constraint |
+| Profile | ✅ quiz sections, the settings the quiz never asked, and an off switch for soft preferences only |
 
 `bin/test-plans.php` seeds the two users from the specs, generates their weeks,
 and asserts the output against the spec decisions.
