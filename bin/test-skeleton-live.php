@@ -414,22 +414,74 @@ t('the focus matches on every shared day', function () use ($sesA, $sesB, $share
     return $off === [] ?: implode('; ', $off);
 });
 
-t('the main movement PATTERNS match, in order', function () use ($sesA, $sesB, $sharedDates) {
-    /*
-     * §10.1. The pattern is the shared thing, not the exercise: a hinge is a hinge whether it is
-     * a trap-bar deadlift or a dumbbell RDL, and that is exactly what lets this mismatched pair
-     * work side by side.
-     */
-    $off = [];
-    foreach ($sharedDates as $d) {
-        $x = array_column(blockOf((int) $sesA[$d]['id'], 'main'), 'pattern');
-        $y = array_column(blockOf((int) $sesB[$d]['id'], 'main'), 'pattern');
-        if ($x !== $y) {
-            $off[] = sprintf('%s: [%s] vs [%s]', $d, implode(',', $x), implode(',', $y));
+t('the main movement patterns line up, allowing for real divergence',
+    function () use ($sesA, $sesB, $sharedDates) {
+        /*
+         * §10.1. The pattern is the shared thing, not the exercise: a hinge is a hinge whether it
+         * is a trap-bar deadlift or a dumbbell RDL, and that is what lets a mismatched pair work
+         * side by side.
+         *
+         * BUT DEMANDING EXACT EQUALITY IS WRONG, and a live run proved it. On a shared upper day
+         * the leader opened with a vertical_pull (Pull-Up) and the follower with a
+         * horizontal_pull (Dumbbell Row) — because a beginner training at home has no bar to
+         * pull up on. That is §10.2 divergence working as designed, not a convergence failure,
+         * and a test that fails on it would pressure the next person into "fixing" the
+         * divergence out of the prompt.
+         *
+         * So the assertion is on SHAPE rather than identity: the same number of movements in the
+         * same order, and most of them matching. A single substituted pattern is expected; a
+         * different session is not.
+         */
+        $off = [];
+        foreach ($sharedDates as $d) {
+            $x = array_column(blockOf((int) $sesA[$d]['id'], 'main'), 'pattern');
+            $y = array_column(blockOf((int) $sesB[$d]['id'], 'main'), 'pattern');
+
+            if (count($x) !== count($y)) {
+                $off[] = sprintf('%s: %d movements vs %d', $d, count($x), count($y));
+                continue;
+            }
+            $same = 0;
+            foreach ($x as $i => $p) {
+                if ($p === $y[$i]) {
+                    $same++;
+                }
+            }
+            // A majority must match in position. Two substitutions in a three-movement session
+            // is not the same session any more.
+            if ($same * 2 <= count($x)) {
+                $off[] = sprintf('%s: only %d of %d patterns line up — [%s] vs [%s]',
+                    $d, $same, count($x), implode(',', $x), implode(',', $y));
+            }
         }
+        return $off === [] ?: implode('; ', $off);
     }
-    return $off === [] ?: implode('; ', $off);
-});
+);
+
+t('a diverged pattern is a substitution, not a reshuffle',
+    function () use ($sesA, $sesB, $sharedDates) {
+        /*
+         * The other half of the same point. Divergence is allowed to REPLACE a movement the user
+         * cannot do; it is not allowed to reorder the session, because the order is what keeps
+         * the two of them on the same equipment at the same moment.
+         *
+         * Checked as a set comparison: if the follower's patterns are a permutation of the
+         * leader's rather than a substitution, every pattern still "matches" somewhere while the
+         * pair is actually out of step.
+         */
+        foreach ($sharedDates as $d) {
+            $x = array_column(blockOf((int) $sesA[$d]['id'], 'main'), 'pattern');
+            $y = array_column(blockOf((int) $sesB[$d]['id'], 'main'), 'pattern');
+            $sx = $x; $sy = $y;
+            sort($sx); sort($sy);
+            if ($sx === $sy && $x !== $y) {
+                return sprintf('%s: same patterns in a different order — [%s] vs [%s]',
+                    $d, implode(',', $x), implode(',', $y));
+            }
+        }
+        return true;
+    }
+);
 
 t('the core block is identical', function () use ($sesA, $sesB, $sharedDates) {
     /*
@@ -449,7 +501,11 @@ t('the core block is identical', function () use ($sesA, $sesB, $sharedDates) {
         $s = strtolower(trim((string) $s));
         // Wording that carries no prescription: a side or per-leg note describes the exercise,
         // not the dose, and both users are doing the same exercise.
-        $s = preg_replace('/\b(each side|per side|each leg|per leg|each|hold|holds|total)\b/', '', $s);
+        $s = preg_replace(
+            '/\b(each side|per side|each leg|per leg|each|hold|holds|carry|carries|total)\b/',
+            '',
+            $s
+        );
         return trim(preg_replace('/\s+/', ' ', (string) $s));
     };
 
@@ -468,6 +524,39 @@ t('the core block is identical', function () use ($sesA, $sesB, $sharedDates) {
     }
     return $off === [] ?: implode('; ', $off);
 });
+
+t('neither session repeats one exercise as separate entries',
+    function () use ($sesA, $sesB, $sharedDates) {
+        /*
+         * NOT a §10.6 property, but this is where it showed up, so this is where it gets caught.
+         *
+         * A measured follower session listed "Dumbbell Row 3x10-12 @8kg", then again at 9kg,
+         * then again at 10kg — three entries for one movement, which is three sets of a single
+         * exercise written as three exercises. It came from the follower substituting a row for a
+         * pull-up they had no bar for and then filling the remaining slots with the same
+         * substitute.
+         *
+         * The validator does not reject this today, and adding a rejection rule belongs with
+         * plan quality rather than with the buddy work. Asserted here because the pairing path is
+         * where the pressure to pad a block comes from, and a silent repeat reads on screen as a
+         * broken plan.
+         */
+        foreach ([['leader', $sesA], ['follower', $sesB]] as [$who, $ses]) {
+            foreach ($sharedDates as $d) {
+                $slugs = array_column(blockOf((int) $ses[$d]['id'], 'main'), 'slug');
+                $dupes = array_filter(array_count_values($slugs), fn($n) => $n > 1);
+                if ($dupes !== []) {
+                    return sprintf('%s %s repeats %s', $who, $d,
+                        implode(', ', array_map(
+                            fn($s, $n) => "{$s} x{$n}",
+                            array_keys($dupes), $dupes
+                        )));
+                }
+            }
+        }
+        return true;
+    }
+);
 
 echo "\n5. the prescriptions still diverge\n";
 
