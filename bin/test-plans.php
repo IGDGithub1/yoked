@@ -12,8 +12,13 @@ declare(strict_types=1);
  * week in docs/sample-week.md was written by hand, and this is the first time
  * the app produces one itself.
  *
+ * Two halves. The schema, prompt assembly, validator and retry merge are free and run by
+ * default. The two live generations are OPT-IN behind --live: 22k-31k output tokens and
+ * minutes each, which is worth paying deliberately and wrong to pay on every routine run.
+ *
+ *   php bin/test-plans.php               structural only, seconds, free
+ *   php bin/test-plans.php --live        plus two real weeks (~$0.30, several minutes)
  *   php bin/test-plans.php --seed-only   seed users, generate nothing
- *   php bin/test-plans.php               seed + generate + validate (~$0.30)
  *   php bin/test-plans.php --keep        leave the test users behind
  */
 
@@ -29,6 +34,21 @@ require YK_SRC . '/lib/Plans.php';
 $args     = array_slice($argv, 1);
 $seedOnly = in_array('--seed-only', $args, true);
 $keep     = in_array('--keep', $args, true);
+
+/*
+ * Live generation is OPT-IN, matching test-chat.php and test-vetoes.php.
+ *
+ * Sections 5 and 6 each generate a real week: 22k-31k output tokens, three to ten minutes
+ * apiece, and money. That is worth paying deliberately and wrong to pay on every routine
+ * run — bin/testall.sh was taking over ten minutes on this one suite and getting truncated
+ * by the ssh timeout, which is how a harness ends up reporting a verdict it did not earn.
+ *
+ * Everything in sections 1 to 4a is free and still runs by default: the schema, the prompt
+ * assembly, the validator, and the retry merge. That is the half that catches regressions.
+ */
+// Named $liveGen, not $live: a closure below already uses $live for a plan_versions row
+// (Plans::live), and two meanings of one name in one file is a bug waiting to be written.
+$liveGen = in_array('--live', $args, true);
 
 $pass = 0;
 $fail = 0;
@@ -740,7 +760,10 @@ echo "\n5. live generation — User #1\n";
 $week = nextMonday();
 $gen1 = null;
 
-t('generates and persists a week', function () use ($ids, $week, &$gen1) {
+t('generates and persists a week', function () use ($ids, $week, &$gen1, $liveGen) {
+    if (!$liveGen) {
+        return null;
+    }
     $started = microtime(true);
     $gen1 = Plans::generateWeek($ids['u1'], $week, 'initial');
     $secs = round(microtime(true) - $started, 1);
@@ -946,7 +969,10 @@ if ($gen1 !== null && $gen1['ok']) {
 echo "\n6. live generation — User #2 (buddy, different prescription)\n";
 
 $gen2 = null;
-t('generates a week for the buddy', function () use ($ids, $week, &$gen2) {
+t('generates a week for the buddy', function () use ($ids, $week, &$gen2, $liveGen) {
+    if (!$liveGen) {
+        return null;
+    }
     $gen2 = Plans::generateWeek($ids['u2'], $week, 'initial');
     if (!$gen2['ok']) {
         return 'generation failed: ' . $gen2['error']
@@ -1061,5 +1087,8 @@ if (!$keep) {
     printf("\n  test users kept: u1=%d u2=%d\n", $ids['u1'], $ids['u2']);
 }
 
+if (!$liveGen) {
+    echo "\nnote: run with --live to actually generate weeks (costs money, takes minutes).\n";
+}
 printf("\n%d passed, %d failed\n", $pass, $fail);
 exit($fail === 0 ? 0 : 1);

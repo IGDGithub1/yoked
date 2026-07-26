@@ -29,9 +29,28 @@ baseline, and report their week back to the coach that plans the next one.
 | Chat | ✅ §6 evaluate-and-revise at `#/coach`; the write path cannot touch a plan |
 | Vetoes | ✅ §5 reason required, replace not delete, standing promotes to a SOFT constraint |
 | Profile | ✅ quiz sections, the settings the quiz never asked, and an off switch for soft preferences only |
+| Visibility | ✅ one authority for who sees what; the privacy flags finally bite (§10.4) |
+| Buddy system | ⬜ §10 pairing. Generation is already buddy-aware; there is no way to pair |
 
-`bin/test-plans.php` seeds the two users from the specs, generates their weeks,
-and asserts the output against the spec decisions.
+### Running the tests
+
+```
+sh bin/testall.sh              every PHP suite, ~20s, free
+sh bin/lintall.sh              parse-check every PHP file
+cd app && npm run drive        re-seed the fixtures, then drive the browser
+```
+
+`bin/testall.sh` reports a suite as passing only if it prints an explicit
+`N passed, 0 failed` AND exits 0. An earlier version matched a progress line and
+announced ALL GREEN over a run that had been killed by a timeout.
+
+The expensive halves are opt-in, because they cost money and take minutes: `--live`
+on `test-plans.php` (two real week generations), `test-chat.php`, and
+`test-vetoes.php`. `bin/test-plans.php` seeds the two users from the specs,
+generates their weeks, and asserts the output against the spec decisions.
+
+The browser suite mutates its fixture, so `npm run drive` re-seeds before running.
+`npm run drive:logging` skips that and is only right straight after a manual seed.
 
 ## The loop
 
@@ -77,47 +96,51 @@ Bash cannot reach:
 
 ## Verifying it works
 
-Every suite runs on the server via SSH. The `--offline` / `--seed-only` flags
-skip API calls where a suite has them.
+Every PHP suite runs on the server via SSH. `bin/testall.sh` runs them all; the
+individual scripts are listed here because you will usually want just one.
 
 ```sh
 php bin/envcheck.php          # PHP version, extensions, outbound HTTPS
 php bin/dbcheck.php           # connection, table count, FK count
-php bin/smoketest.php         # 22 schema assertions, rolled back
-php bin/test-goals.php        # 46 evaluator assertions incl. keto parity
-php bin/test-schedule.php     # 21 date assertions; no DB, no API
-php bin/test-baseline.php     # 24 lifecycle assertions: observation, graduation
-php bin/test-checkin.php      # 29 assertions: opening, lateness, skipping
-php bin/test-drift.php        # 32 assertions: escalation ladder, nudges, notifications
-php bin/test-tomorrow.php     # 18 assertions: the evening window, prep flags, dismissal
+php bin/smoketest.php         # schema assertions, rolled back
+php bin/test-goals.php        # evaluator, incl. keto parity
+php bin/test-schedule.php     # date arithmetic; no DB, no API
+php bin/test-baseline.php     # observation window and graduation
+php bin/test-checkin.php      # opening, lateness, skipping
+php bin/test-drift.php        # escalation ladder, nudges, notifications
+php bin/test-tomorrow.php     # the evening window, prep flags, dismissal
+php bin/test-vetoes.php       # SPEC-safety 7: promotion is SOFT-only
+php bin/test-settings.php     # the profile; a hard constraint has no off switch
+php bin/test-visibility.php   # who sees what; the privacy flags
 php bin/test-claude.php       # API client; --offline for shape checks only
-php bin/test-logging.php      # 46 assertions over real HTTP: food, training, check-in
-php bin/test-plans.php        # end-to-end generation; --seed-only to skip API
+php bin/test-logging.php      # over real HTTP: food, training, check-in
+php bin/test-plans.php        # generation; --live to actually generate
 ```
 
 The logging UI is driven in a real browser, because the client/server contract is
-where the interesting failures live and a build only proves it compiles. Seed the
-fixtures first. They have to be seeded on the day you run them, since the screen
-opens on today and the plan week must contain it:
+where the interesting failures live and a build only proves it compiles.
 
-```sh
-php bin/seed-uitest.php       # two users, re-runnable:
-                              #   uitest_logging  active, plan for TODAY
-                              #   uitest_baseline day 3 of 14, no plan
-                              #   uitest_review   review_hour 1, plan for tomorrow
-                              # plus an open weekly check-in and a reviewed one
-```
 ```powershell
-cd app; npm run drive:logging   # 110 checks: log it, reload, confirm it stuck
+cd app; npm run drive           # re-seed, then drive
 ```
 
-Re-seed before each run — the suite mutates the fixture, and it refuses to start
-against a dirty one rather than producing a screenful of misleading failures.
+The fixtures must be seeded on the day you run them: the screen opens on today and
+the plan week has to contain it. `npm run drive` handles that. The suite mutates
+what it seeds, so running `drive:logging` twice without re-seeding will refuse to
+start rather than produce a screenful of misleading failures.
 
-It also guards three things a unit test cannot see: that the page never scrolls
-sideways at 360px, that the accent stays spent once per view, and that **every
-selected control looks selected**. That last one has shipped broken twice — both
-times a chip using `role="radio"`/`aria-checked` against CSS that only styled
+Three fixtures, all `coaching_paused` so cron never spends money on them:
+
+```
+uitest_logging   active, plan for today, constraints of every facet
+uitest_baseline  day 3 of 14, no plan
+uitest_review    a real evening review_hour, in a timezone picked to be inside it
+```
+
+The browser suite also guards three things a unit test cannot see: that the page
+never scrolls sideways at 360px, that the accent stays spent once per view, and that
+**every selected control looks selected**. That last one has shipped broken twice —
+both times a chip using `role="radio"`/`aria-checked` against CSS that only styled
 `aria-pressed`, so a screen reader announced the choice while a sighted user saw
 nothing change.
 

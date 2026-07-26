@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "drive:logging": "node tests/drive-logging.mjs"
+    "drive:logging": "node tests/drive-logging.mjs",
+    "drive:seed": "powershell -NoProfile -File ../bin/reseed-ui.ps1",
+    "drive": "npm run drive:seed && npm run drive:logging"
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",

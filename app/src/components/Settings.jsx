@@ -280,14 +280,15 @@ export default function Settings() {
           onChange={(v) => save({ hide_measurements: v })}
         />
         {/*
-          Honest about what these do TODAY, which is nothing.
-          There is no sharing in the app yet, so a toggle labelled "keep private" would
-          otherwise read as protection against something that is already happening. Saying so
-          costs one line and avoids a promise the app is not keeping.
+          Honest about the scope, which is narrow.
+          These now govern what a training buddy can see, and nothing else: there is no
+          public profile and no other reader. Worth saying, because "keep private" with no
+          object invites the reader to imagine a larger audience than exists.
         */}
         <p className="tiny muted prose" style={{ margin: 0 }}>
-          Nothing is shared with anyone today. These are here for when sharing arrives, so
-          the answer is already on file rather than asked at the wrong moment.
+          These control what a training buddy can see. Your sessions are always visible to a
+          buddy, since that is the point of pairing up. Your weight, measurements and photos
+          are not, unless you turn them on here.
         </p>
       </div>
 

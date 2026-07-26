@@ -183,8 +183,9 @@ await check('today\'s date is shown', async () => {
   const logged = tags.filter((t) => /as planned|substituted|skipped|off-plan/.test(t))
   if (logged.length > 0) {
     console.error(
-      `\nThe fixture already has food logged (${logged.join(', ')}). Re-seed first:\n` +
-      "  ssh … \"cd … && php bin/seed-uitest.php\"\n"
+      `\nThe fixture already has food logged (${logged.join(', ')}).\n` +
+      '\nUse `npm run drive`, which re-seeds first. `npm run drive:logging` skips that\n' +
+      'and is only right when you have just seeded by hand.\n'
     )
     await browser.close()
     process.exit(2)
@@ -2247,18 +2248,19 @@ await check('the coaching voice is editable here now, not in the quiz', async ()
   return true
 })
 
-await check('the privacy toggles admit that sharing does not exist yet', async () => {
+await check('the privacy toggles say who they are keeping things from', async () => {
   /*
-   * hide_photos and hide_measurements are written and read by nothing. A toggle labelled
-   * "keep private" implies protection against something already happening, which would be a
-   * promise the app is not keeping.
+   * These govern what a training BUDDY sees and nothing else. "Keep private" with no object
+   * invites the reader to imagine a larger audience than exists, and the honest scope is
+   * narrow: sessions are always visible to a buddy because that is the point of pairing,
+   * body metrics are not.
    */
   const card = prof.locator('.card', { hasText: /privacy/i }).first()
   if (!(await card.count())) return 'no privacy card'
   const text = (await card.innerText()).toLowerCase()
-  return /nothing is shared/.test(text)
+  return /buddy/.test(text)
     ? true
-    : `the privacy copy does not say sharing is not live: ${text}`
+    : `the privacy copy does not name who can see: ${text}`
 })
 
 await check('the quiz no longer offers a section 9', async () => {
