@@ -71,6 +71,7 @@ require YK_SRC . '/routes/tomorrow.php';
 require YK_SRC . '/routes/chat.php';
 require YK_SRC . '/routes/vetoes.php';
 require YK_SRC . '/routes/settings.php';
+require YK_SRC . '/routes/friends.php';
 
 // ---- Resolve path ----------------------------------------------------------
 

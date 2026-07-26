@@ -705,3 +705,36 @@
 
 /* The settings selects sit two-up in a row and must not overflow at 360px. */
 .field .row > .input { flex: 1 1 0; min-width: 0; }
+
+/* ---- the nav badge ------------------------------------------------------- */
+
+/*
+ * A count on a nav icon, for friend requests.
+ *
+ * Absolutely positioned against the button, which needs the button to be a positioning
+ * context — .navbtn is not one by default, so that is set here rather than in base.css
+ * where a stray `position: relative` on every nav button would be a surprise.
+ *
+ * aria-hidden in the markup: the count is already in the button's aria-label, and a screen
+ * reader announcing "Friends, 2 waiting" then "2" reads the number twice.
+ */
+.navbtn { position: relative; }
+
+.navbadge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--yolk-deep);
+  color: var(--shell);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  /* Against the shell, so the badge reads as sitting on top of the icon rather than
+     merging with it when the two overlap. */
+  box-shadow: 0 0 0 2px var(--shell);
+}

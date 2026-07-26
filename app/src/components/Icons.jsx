@@ -25,6 +25,7 @@ import {
   ScrollText,
   Sun,
   UserCog,
+  Users,
 } from 'lucide-react'
 
 /**
@@ -66,3 +67,6 @@ export const UserIcon = wrap(UserCog)
 
 /** The coach card. Also not in the nav: entered when there is something to say. */
 export const MessageIcon = wrap(MessageSquare)
+
+/** Friends. In the nav, because a request waiting on you needs somewhere to show a badge. */
+export const UsersIcon = wrap(Users)

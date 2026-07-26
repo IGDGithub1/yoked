@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import Yolk from './Yolk'
 import ThemeToggle from './ThemeToggle'
-import { GaugeIcon, LogOutIcon, ScrollTextIcon } from './Icons'
+import { GaugeIcon, LogOutIcon, ScrollTextIcon, UsersIcon } from './Icons'
 
 /**
  * The chrome both signed-in views share.
@@ -18,7 +18,7 @@ import { GaugeIcon, LogOutIcon, ScrollTextIcon } from './Icons'
  * Order is deliberate: the two DESTINATIONS first, then the two SETTINGS-ish controls,
  * with sign-out last because it is the one that ends the session.
  */
-export default function Shell({ route, onNavigate, onSignOut, children }) {
+export default function Shell({ route, onNavigate, onSignOut, friendRequests = 0, children }) {
   const [confirming, setConfirming] = useState(false)
 
   return (
@@ -54,6 +54,16 @@ export default function Shell({ route, onNavigate, onSignOut, children }) {
             onNavigate={onNavigate}
             label="Journal"
             Icon={ScrollTextIcon}
+          />
+          <NavIcon
+            route="friends"
+            current={route}
+            onNavigate={onNavigate}
+            label="Friends"
+            Icon={UsersIcon}
+            /* A count, not a dot: "3 waiting" is worth knowing before you tap. Only ever
+               requests made TO you, since those are the ones that need an answer. */
+            badge={friendRequests}
           />
 
           <ThemeToggle />
@@ -100,18 +110,22 @@ export default function Shell({ route, onNavigate, onSignOut, children }) {
  * aria-current="page" rather than a class, so the attribute a screen reader announces
  * and the one the CSS styles are the same thing and cannot disagree.
  */
-function NavIcon({ route, current, onNavigate, label, Icon }) {
+function NavIcon({ route, current, onNavigate, label, Icon, badge = 0 }) {
   const active = route === current
   return (
     <button
       type="button"
       className="navbtn"
       aria-current={active ? 'page' : undefined}
-      aria-label={label}
-      title={label}
+      /* The count belongs in the accessible name, not just the pixels. A screen reader
+         announcing "Friends" while a sighted user sees "Friends (2)" is the same class of
+         bug as a selected chip that only looks selected to the accessibility tree. */
+      aria-label={badge > 0 ? `${label}, ${badge} waiting` : label}
+      title={badge > 0 ? `${label} (${badge} waiting)` : label}
       onClick={() => onNavigate(route)}
     >
       <Icon />
+      {badge > 0 && <span className="navbadge" aria-hidden="true">{badge}</span>}
     </button>
   )
 }

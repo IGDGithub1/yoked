@@ -53,11 +53,33 @@ DB::run(
     'DELETE FROM users WHERE username IN (?, ?, ?)',
     $allUsers
 );
-// Login is rate limited per identifier, and a re-seed mid-testing would
-// otherwise inherit the previous run's failed attempts.
+/*
+ * Clear the login throttles this fixture will trip.
+ *
+ * Two buckets, and only the first was being cleared. Per-IDENTIFIER is the obvious one: a
+ * re-seed mid-testing would otherwise inherit the previous run's attempts.
+ *
+ * Per-IP is the one that actually broke a run. The browser suite signs in seven separate
+ * times — once per fixture per section — against a ceiling of 20 per IP per 15 minutes, so
+ * two consecutive runs plus a couple of hand probes exhausts it and every block from that
+ * point on fails at the sign-in screen. Thirty cascading failures that all look like real
+ * bugs, and the cause is the app defending itself correctly.
+ *
+ * Cleared by AGE rather than by address, because this script runs over SSH on the server and
+ * the browser runs on someone's laptop: RateLimit::ip() here returns 0.0.0.0, not the address
+ * that will actually be doing the signing in. So there is no way to name the right bucket.
+ *
+ * An EXPIRED window is safe to delete for anyone: RateLimit treats a window older than its
+ * period as spent and starts a new one, so removing those rows changes no decision. It only
+ * stops a stale row from being counted against the next run.
+ */
 foreach ($allUsers as $u) {
     DB::run('DELETE FROM rate_limits WHERE bucket LIKE ?', ['login:%' . $u . '%']);
 }
+DB::run(
+    'DELETE FROM rate_limits
+     WHERE bucket LIKE "login:ip:%" AND window_start < (NOW() - INTERVAL 15 MINUTE)'
+);
 
 if ($drop) {
     echo 'removed ' . implode(', ', $allUsers) . "\n";
@@ -508,4 +530,33 @@ printf(
     "seeded %s / %s — user #%d, review_hour %d in %s (local %s), tomorrow %s (one prep-heavy meal)\n",
     UI_REVIEW_USER, UI_PASS, $revUser, UI_REVIEW_HOUR, $revTz,
     Schedule::now($revTz)->format('H:i'), $revTom
+);
+
+// ---- the social graph -------------------------------------------------------
+
+/*
+ * One accepted friendship and one request waiting, using the fixtures that already exist.
+ *
+ * Both states are needed and neither can be produced by the suite alone: accepting requires
+ * signing in as the OTHER person, and the browser suite drives one session at a time. So the
+ * fixture supplies what the UI has to render, and the suite drives what a single user can
+ * actually do — search, ask, accept, remove.
+ *
+ * uitest_review asks uitest_logging, so the main fixture opens with a badge of 1.
+ * uitest_baseline is already a friend, so the list is not empty either.
+ */
+DB::run(
+    'INSERT INTO friendships (user_lo, user_hi, requester_id, status, responded_at)
+     VALUES (?, ?, ?, "accepted", NOW())',
+    [min($seed['user_id'], $blUser), max($seed['user_id'], $blUser), $blUser]
+);
+DB::run(
+    'INSERT INTO friendships (user_lo, user_hi, requester_id, status)
+     VALUES (?, ?, ?, "pending")',
+    [min($seed['user_id'], $revUser), max($seed['user_id'], $revUser), $revUser]
+);
+
+printf(
+    "seeded the social graph — %s is friends with %s and has a request from %s\n",
+    UI_USER, UI_BASE_USER, UI_REVIEW_USER
 );

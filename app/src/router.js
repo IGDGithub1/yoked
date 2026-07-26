@@ -28,12 +28,16 @@ import { useEffect, useState } from 'react'
 /**
  * The destinations a signed-in, onboarded user can reach.
  *
+ * `friends` IS in the nav, unlike the two below it, because a friend request is another
+ * person waiting on an answer and a badge needs somewhere to sit. It is the only social
+ * surface in the app, and exists to make buddy pairing possible (§10.1).
+ *
  * `coach` and `profile` are real routes but NOT in the nav. Both are reached from a
  * Dashboard card: the profile is visited rarely once the quiz is answered, and the coach
  * is entered when there is something to say rather than browsed. Being routes anyway is
  * what makes them linkable and gives them a working back button.
  */
-export const ROUTES = ['dashboard', 'journal', 'coach', 'profile']
+export const ROUTES = ['dashboard', 'journal', 'friends', 'coach', 'profile']
 
 const DEFAULT = 'dashboard'
 

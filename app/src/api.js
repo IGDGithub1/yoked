@@ -210,6 +210,21 @@ export const api = {
    * Soft only. The server sends `switchable` per row and refuses a hard tier with a 409, so
    * the client renders the control from that flag rather than deciding for itself.
    */
+  /*
+   * Friends (§10.1). A prerequisite for buddy pairing rather than a social feature.
+   *
+   * Search is deliberately narrow: username and display name match on a prefix, email only
+   * in full. The server decides that, and every result carries a `relationship` so the UI
+   * renders its button from the server's view rather than guessing.
+   */
+  friends: {
+    load: () => get('friends'),
+    search: (q) => get(`friends/search?q=${encodeURIComponent(q)}`),
+    request: (userId) => post('friends', { user_id: userId }),
+    /* accept | decline | remove | block | unblock */
+    act: (userId, action) => patch(`friends/${userId}`, { action }),
+  },
+
   constraints: {
     load: () => get('constraints'),
     setActive: (id, active) => patch(`constraints/${id}`, { active }),

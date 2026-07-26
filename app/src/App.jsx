@@ -7,6 +7,7 @@ import Ready from './screens/Ready'
 import Dashboard from './screens/Dashboard'
 import Journal from './screens/Journal'
 import Coach from './screens/Coach'
+import Friends from './components/Friends'
 import Profile from './screens/Profile'
 import Shell from './components/Shell'
 import Yolk from './components/Yolk'
@@ -29,6 +30,14 @@ import Yolk from './components/Yolk'
 export default function App() {
   const [state, setState] = useState({ status: 'loading' })
   const [route, navigate] = useRoute()
+  /*
+   * Friend requests waiting on this user, for the nav badge.
+   *
+   * Held here rather than in the Friends screen because the badge has to be visible from
+   * every view — the whole point is telling someone who is on the Journal that a person is
+   * waiting on them.
+   */
+  const [friendRequests, setFriendRequests] = useState(0)
 
   const boot = useCallback(async () => {
     try {
@@ -53,6 +62,12 @@ export default function App() {
       if (tz && tz !== me.user?.timezone) {
         api.setTimezone(tz).catch(() => {})
       }
+
+      // Fire and forget, like the timezone: a badge is not worth blocking the app for, and
+      // it refreshes on the next boot or when the Friends screen writes.
+      api.friends.load()
+        .then((r) => setFriendRequests(r.pending || 0))
+        .catch(() => {})
     } catch {
       setState({ status: 'offline' })
     }
@@ -159,7 +174,12 @@ export default function App() {
    * it — which is how two headers drift apart.
    */
   return (
-    <Shell route={route} onNavigate={navigate} onSignOut={signOut}>
+    <Shell
+      route={route}
+      onNavigate={navigate}
+      onSignOut={signOut}
+      friendRequests={friendRequests}
+    >
       {route === 'journal' && (
         <Journal
           /* Null unless mid-baseline. Drives the countdown and explains the absence
@@ -168,6 +188,20 @@ export default function App() {
         />
       )}
       {route === 'coach' && <Coach />}
+      {route === 'friends' && (
+        <div className="wrap stack-lg">
+          <div>
+            <p className="eyebrow">Friends</p>
+            <h1 className="heading">Who you train with.</h1>
+            <p className="small muted prose" style={{ marginTop: 6 }}>
+              Connecting with someone here is what lets the two of you sync your weeks.
+            </p>
+          </div>
+          {/* Re-reads the badge whenever the screen changes something, so accepting a
+              request clears the count without a reload. */}
+          <Friends onCount={setFriendRequests} />
+        </div>
+      )}
       {route === 'profile' && (
         <Profile
           onClose={() => {

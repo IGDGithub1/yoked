@@ -115,7 +115,8 @@ await check('all navigation is in one place, and it is the header', async () => 
    * fixed bottom bar without anyone noticing.
    */
   const inHeader = await page.locator('.appbar .navicons .navbtn').count()
-  if (inHeader < 4) return `${inHeader} nav controls in the header, expected 4`
+  // Dashboard, Journal, Friends, theme, sign out.
+  if (inHeader < 5) return `${inHeader} nav controls in the header, expected 5`
   const bottomBar = await page.locator('.tabbar').count()
   return bottomBar === 0 ? true : 'a bottom tab bar is still present'
 })
@@ -2320,7 +2321,191 @@ await check('the tomorrow preview can be set and turned off', async () => {
 await prof.screenshot({ path: shot('logging-profile.png'), fullPage: true })
 await prof.close()
 
+// ---- friends -----------------------------------------------------------------
+
+console.log('\n18. friends')
+
+/*
+ * The social graph (SPEC-coaching 10.1), which exists so buddy pairing can.
+ *
+ * bin/test-friends.php owns the rules: 35 assertions on search, blocking, and the fact that
+ * a partial email matches nobody. What the browser owns is the half that only exists on
+ * screen: the nav badge, the button the server told us to render, and the copy that explains
+ * why half an email address finds nothing.
+ *
+ * The fixture arrives with one accepted friend and one request waiting, because accepting
+ * needs a second session and this suite drives one at a time.
+ */
+const fr = await ctx.newPage()
+await fr.goto(BASE, { waitUntil: 'domcontentloaded' })
+
+await check('the friends page signs in', async () => {
+  await fr.evaluate(async () => {
+    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
+    if (me.authenticated) {
+      await fetch('/api/logout', {
+        method: 'POST',
+        headers: { 'x-csrf-token': me.csrf, accept: 'application/json' },
+        credentials: 'same-origin',
+      })
+    }
+  })
+  await fr.reload({ waitUntil: 'networkidle' })
+  const f = fr.locator('form.card')
+  await f.waitFor({ timeout: 20000 })
+  await f.locator('input[type="text"]').first().fill(USER)
+  await f.locator('input[type="password"]').first().fill(PASS)
+  await f.getByRole('button', { name: /^sign in$/i }).click()
+  await fr.getByRole('button', { name: /^Dashboard$/ }).waitFor({ timeout: 20000 })
+})
+
+await check('a waiting request shows a badge in the nav', async () => {
+  /*
+   * The whole reason friends is a nav item rather than a Dashboard card: someone on the
+   * Journal needs to know a person is waiting on them.
+   *
+   * WAITED FOR, not counted. The count is fetched fire-and-forget during boot, deliberately,
+   * so a badge never blocks the app from rendering — which means it arrives a beat after the
+   * nav does. Counting immediately reported "no badge" against a badge that was on its way,
+   * and the same race then failed the aria-label check below it.
+   */
+  const btn = fr.getByRole('button', { name: /friends/i })
+  await btn.first().waitFor({ timeout: 20000 })
+  await fr.locator('.navbtn .navbadge').first().waitFor({ timeout: 20000 })
+  return true
+})
+
+await check('the count is in the accessible name, not only the pixels', async () => {
+  // A screen reader announcing "Friends" while a sighted user sees "Friends (1)" is the same
+  // class of bug as a selected chip that only looks selected to the accessibility tree.
+  const label = await fr.getByRole('button', { name: /friends/i }).first()
+    .getAttribute('aria-label')
+  return /\d/.test(String(label))
+    ? true
+    : `the label carries no count: ${label}`
+})
+
+await check('the nav reaches the friends view', async () => {
+  await fr.getByRole('button', { name: /friends/i }).first().click()
+  await fr.waitForFunction(() => window.location.hash === '#/friends', { timeout: 10000 })
+  await fr.getByRole('heading', { name: /who you train with/i }).waitFor({ timeout: 20000 })
+  return true
+})
+
+await check('the incoming request leads, with context to decide on', async () => {
+  // Joined-when and mutual-friend count are the difference between an informed accept and a
+  // blind one. Deliberately not on search results: being looked up should reveal nothing.
+  const card = fr.locator('.card', { hasText: /wants? to connect/i }).first()
+  await card.waitFor({ timeout: 20000 })
+  const text = (await card.innerText()).toLowerCase()
+  if (!/joined/.test(text)) return `no joined date on the request: ${text}`
+  return /mutual/.test(text) ? true : `no mutual-friend context: ${text}`
+})
+
+await check('a mutual friend is counted, never named', function () {
+  // Listing them would tell a stranger who you know before you have agreed to anything.
+  return fr.locator('.card', { hasText: /wants? to connect/i }).first().innerText()
+    .then((t) => !/uitest_baseline|Baseline/i.test(t)
+      ? true
+      : `the mutual friend is named: ${t}`)
+})
+
+await check('an existing friend is listed', async () => {
+  const card = fr.locator('.card', { hasText: /your friends/i }).first()
+  const text = await card.innerText()
+  return /baseline/i.test(text) ? true : `the friend list reads: ${text}`
+})
+
+await check('a short query searches for nothing', async () => {
+  /*
+   * Below three characters the server returns nothing, and the client does not even ask:
+   * firing a request per keystroke would burn the rate limit before anyone found anybody.
+   */
+  const box = fr.getByLabel(/find someone/i)
+  await box.fill('ui')
+  await fr.waitForTimeout(700)
+  const results = await fr.locator('.card', { hasText: /add a friend/i })
+    .locator('.prefrow').count()
+  return results === 0 ? true : `${results} results for a two-character query`
+})
+
+await check('a name prefix finds people', async () => {
+  await fr.getByLabel(/find someone/i).fill('uitest_rev')
+  await fr.locator('.card', { hasText: /add a friend/i })
+    .locator('.prefrow').first().waitFor({ timeout: 20000 })
+  return true
+})
+
+await check('a partial email finds nobody, and the copy says why', async () => {
+  /*
+   * The load-bearing privacy behaviour, checked at the screen as well as the library. A
+   * partial match would turn the search into an oracle for "does this address have an
+   * account here". Getting nothing back looks broken unless the UI says it is deliberate.
+   */
+  const card = fr.locator('.card', { hasText: /add a friend/i }).first()
+  const explains = (await card.innerText()).toLowerCase()
+  if (!/full/.test(explains)) {
+    return `the form does not explain the email rule: ${explains}`
+  }
+  await fr.getByLabel(/find someone/i).fill('uitest_review@')
+  await fr.waitForTimeout(900)
+  const n = await card.locator('.prefrow').count()
+  return n === 0 ? true : `a partial email matched ${n} user(s)`
+})
+
+await check('the search result offers the button the SERVER chose', async () => {
+  /*
+   * uitest_review has already asked us, so the right control is "Accept", not "Add". The
+   * relationship comes from the server precisely so the client cannot get this wrong.
+   */
+  await fr.getByLabel(/find someone/i).fill('uitest_review')
+  const row = fr.locator('.card', { hasText: /add a friend/i }).locator('.prefrow').first()
+  await row.waitFor({ timeout: 20000 })
+  const label = (await row.innerText()).toLowerCase()
+  return /accept/.test(label)
+    ? true
+    : `offered "${label}" for someone who already asked us`
+})
+
+await check('accepting clears the badge without a reload', async () => {
+  const card = fr.locator('.card', { hasText: /wants? to connect/i }).first()
+  await card.getByRole('button', { name: /^accept$/i }).click()
+
+  // Read the server, not the DOM: an optimistic update proves nothing about the write.
+  await fr.waitForFunction(async () => {
+    const r = await fetch('/api/friends', { credentials: 'same-origin' })
+    return (await r.json()).pending === 0
+  }, null, { timeout: 20000 })
+
+  // And the badge is gone, which is the part a user sees.
+  const badge = await fr.getByRole('button', { name: /friends/i }).first()
+    .locator('.navbadge').count()
+  return badge === 0 ? true : 'the badge survived accepting the request'
+})
+
+await check('the accepted person moves into the friends list', async () => {
+  const card = fr.locator('.card', { hasText: /your friends/i }).first()
+  const text = await card.innerText()
+  return /review/i.test(text) ? true : `the friend list reads: ${text}`
+})
+
+await check('removing a friend takes effect on the server', async () => {
+  const row = fr.locator('.card', { hasText: /your friends/i })
+    .locator('.prefrow', { hasText: /review/i }).first()
+  await row.getByRole('button', { name: /remove/i }).click()
+  await fr.waitForFunction(async () => {
+    const r = await fetch('/api/friends', { credentials: 'same-origin' })
+    const b = await r.json()
+    return !(b.friends.friends || []).some((p) => /review/i.test(p.username))
+  }, null, { timeout: 20000 })
+  return true
+})
+
+await fr.screenshot({ path: shot('logging-friends.png'), fullPage: true })
+await fr.close()
+
 // ---- dark mode -------------------------------------------------------------
+
 
 
 

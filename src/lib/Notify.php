@@ -38,6 +38,10 @@ final class Notify
         // from plan_ready on purpose: the user asked for something and did not get it, and
         // routing that through a "your plan is ready" message would be actively misleading.
         'veto_decided',
+        // The social graph. Both are one-offs about another PERSON waiting, not app nagging,
+        // so both are created with dedupe disabled: suppressing a second request after an
+        // unfriend-and-retry would silently swallow it.
+        'friend_request', 'friend_accepted',
     ];
 
     /**
