@@ -559,6 +559,49 @@ function inferEquipment(
     return null;
 }
 
+/**
+ * How this exercise is loaded, which decides what the log screen asks for.
+ *
+ * Getting it wrong is visible immediately: a plank that asks for kilos, or a bench press with
+ * no weight field. The schema's own comment calls it "which log columns are meaningful".
+ *
+ * Inferred from the pattern and equipment rather than the source, which has no equivalent
+ * column. Conservative order: timed and distance work first, since those are the ones that look
+ * absurd when mislabelled, then bodyweight, then weight as the default.
+ */
+function loadTypeFor(array $c): string
+{
+    $n = strtolower($c['name']);
+    $eq = $c['equipment'];
+
+    // Timed holds and stretches: seconds, not reps or load.
+    if (preg_match('/\b(plank|hold|hang|stretch|isometric|wall sit|dead bug|bird dog)\b/', $n) === 1
+        || $c['category'] === 'mobility') {
+        return 'time';
+    }
+
+    // Carries and cardio: measured in distance or duration.
+    if ($c['pattern'] === 'carry' || preg_match('/\b(carry|walk|sprint|run)\b/', $n) === 1) {
+        return 'distance';
+    }
+    if ($c['category'] === 'cardio' || $c['category'] === 'activity') {
+        return 'time';
+    }
+
+    // Assisted machines and bands take load off rather than adding it.
+    if (in_array('assisted_machine', $eq, true)) {
+        return 'assisted';
+    }
+
+    // Nothing to load it with.
+    if ($eq === [] || $eq === ['pull_up_bar'] || $eq === ['dip_station']
+        || $eq === ['trx'] || $eq === ['gymnastic_rings']) {
+        return 'bodyweight';
+    }
+
+    return 'weight';
+}
+
 // ---------------------------------------------------------------------------
 // Load what we already have — existing rows are CANONICAL
 // ---------------------------------------------------------------------------
@@ -944,5 +987,131 @@ if (!$commit) {
     exit(0);
 }
 
-echo "\n--commit is not wired yet: the ambiguities need deciding first.\n";
-exit(1);
+// ---------------------------------------------------------------------------
+// Write
+// ---------------------------------------------------------------------------
+
+/*
+ * REFUSES TO RUN WITH ANYTHING UNRESOLVED.
+ *
+ * An ambiguous row has no pattern or no equipment, and both are NOT NULL in the schema — so
+ * this would either fail mid-write or, worse, insert a guess. The dry run exists to get this
+ * to zero; if it is not zero, the decisions are not finished.
+ */
+if ($plan['ambiguous'] !== []) {
+    printf("\nREFUSING: %d rows are still ambiguous. Resolve them first.\n",
+        count($plan['ambiguous']));
+    exit(1);
+}
+
+$before = (int) (DB::one('SELECT COUNT(*) AS n FROM exercises')['n'] ?? 0);
+printf("\nwriting… (%d exercises before)\n", $before);
+
+$created = 0;
+$aliased = 0;
+$failed  = [];
+
+/*
+ * One transaction.
+ *
+ * A half-imported library is worse than none: the vocabulary would carry exercises whose
+ * aliases never landed, so a logged "DB Bench" would stop resolving. Either the whole library
+ * moves or nothing does.
+ */
+DB::tx(function () use ($plan, &$created, &$aliased, &$failed, $existing): void {
+    foreach ($plan['create'] as $c) {
+        try {
+            $id = DB::insert(
+                'INSERT INTO exercises
+                    (slug, name, category, pattern, equipment, load_type, demo_url, is_system)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
+                [
+                    $c['slug'],
+                    $c['name'],
+                    $c['category'],
+                    $c['pattern'],
+                    json_encode($c['equipment']),
+                    /*
+                     * load_type decides which log fields are meaningful, so it is inferred from
+                     * the same signals the prescription uses rather than defaulted to 'weight'.
+                     * A plank logged in kilos would be nonsense on the screen.
+                     */
+                    loadTypeFor($c),
+                    $c['demo'],
+                ]
+            );
+            $created++;
+
+            /*
+             * The source name as an alias for itself.
+             *
+             * The model is told to use slugs, but a user typing a free-form log writes the
+             * name. resolveSlug checks aliases, so seeding the display name costs one row and
+             * makes "Barbell Squat" resolve without a second thought.
+             */
+            if (strtolower($c['name']) !== strtolower($c['slug'])) {
+                DB::run(
+                    'INSERT IGNORE INTO exercise_aliases (alias, exercise_id) VALUES (?, ?)',
+                    [$c['name'], $id]
+                );
+            }
+        } catch (Throwable $e) {
+            $failed[] = $c['slug'] . ': ' . $e->getMessage();
+        }
+    }
+
+    /*
+     * Merges become aliases, never new rows.
+     *
+     * This is the whole reason the dry run exists. logged_exercises and prescribed_exercises
+     * reference exercises.id, so a "Dumbbell Bench Press" imported as its own row would leave
+     * every set logged under db-bench-press orphaned from the exercise the model now
+     * prescribes. An alias keeps one canonical id and lets both names resolve to it.
+     */
+    foreach ($plan['merge'] as $m) {
+        $target = $existing[$m['onto']] ?? null;
+        if ($target === null) {
+            $failed[] = "merge {$m['name']}: target {$m['onto']} vanished";
+            continue;
+        }
+        DB::run(
+            'INSERT IGNORE INTO exercise_aliases (alias, exercise_id) VALUES (?, ?)',
+            [$m['name'], (int) $target['id']]
+        );
+        $aliased++;
+    }
+});
+
+$after = (int) (DB::one('SELECT COUNT(*) AS n FROM exercises')['n'] ?? 0);
+
+printf("\ncreated  %d\n", $created);
+printf("aliased  %d  (merges, plus %d display names)\n", $aliased, $created);
+printf("library  %d -> %d\n", $before, $after);
+
+if ($failed !== []) {
+    printf("\n%d FAILED:\n", count($failed));
+    foreach (array_slice($failed, 0, 20) as $f) {
+        printf("  %s\n", $f);
+    }
+}
+
+echo "\nverifying what a constrained user now sees:\n";
+require_once YK_SRC . '/lib/PlanSchema.php';
+foreach ([
+    ['bodyweight, nothing at home', ['bodyweight'], []],
+    ['home gym, dumbbells only',    ['home_gym'],   ['dumbbell']],
+    ['full gym',                    ['full_gym'],   null],
+] as [$label, $access, $kit]) {
+    $v = PlanSchema::vocabulary(
+        null, $access, $kit, PlanSchema::categoriesFor($access, true)
+    );
+    $n = 0;
+    foreach ($v as $pats) {
+        foreach ($pats as $slugs) {
+            $n += count($slugs);
+        }
+    }
+    printf("  %-30s %d exercises\n", $label, $n);
+}
+
+exit($failed === [] ? 0 : 1);
