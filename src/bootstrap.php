@@ -116,6 +116,7 @@ require YK_SRC . '/lib/Onboarding.php';
 require YK_SRC . '/lib/Nutrition.php';
 require YK_SRC . '/lib/FoodSearch.php';
 require YK_SRC . '/lib/Training.php';
+require YK_SRC . '/lib/Media.php';    // progress photos; CheckIn reports them
 require YK_SRC . '/lib/CheckIn.php';
 require YK_SRC . '/lib/Notify.php';
 require YK_SRC . '/lib/Drift.php';

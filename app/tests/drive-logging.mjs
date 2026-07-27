@@ -1205,6 +1205,135 @@ await check('an open check-in is surfaced with its week', async () => {
     : `card read: ${txt.replace(/\n/g, ' | ')}`
 })
 
+await check('the check-in offers progress photos, and says they are optional', async () => {
+  /*
+   * 7.2. Photos every couple of weeks, because weekly shows too little change to motivate and
+   * because the scale lies in both directions during a recomp — it can sit still for a month
+   * while the mirror does not.
+   *
+   * Optional and SAID to be optional: somebody who does not want to photograph themselves must
+   * not feel chased for it.
+   */
+  const card = page.locator('.checkin-weekly')
+  const open = card.getByRole('button', { name: /fill it in/i })
+  if (await open.count()) {
+    await open.first().click()
+    await page.waitForTimeout(400)
+  }
+
+  const text = (await card.innerText()).toLowerCase()
+  if (!/progress photos/.test(text)) {
+    return `no photo section on the check-in: ${text.replace(/\n/g, ' | ')}`
+  }
+  if (!/if you want them/.test(text)) {
+    return 'the photos are not presented as optional'
+  }
+
+  for (const angle of ['front', 'side', 'back']) {
+    const slot = card.getByLabel(new RegExp(`add a ${angle} photo`, 'i'))
+    if ((await slot.count()) === 0) return `no slot for the ${angle} photo`
+  }
+
+  /*
+   * The form is left OPEN, deliberately, and there is no way to close it.
+   *
+   * The only other button is "Not this week", which SKIPS the check-in permanently — clicking
+   * it to tidy up would destroy the fixture for every assertion after this one. The form has no
+   * cancel.
+   *
+   * A later test opens the same form, so it has to tolerate finding it already open. That is
+   * handled where it lives rather than here, because this test cannot undo itself.
+   */
+  return true
+})
+
+await check('a photo uploads, appears, and rubbish is refused', async () => {
+  /*
+   * The whole pipeline in one assertion, because the pieces are only correct together: the
+   * upload is re-encoded (which strips EXIF, and a progress photo's EXIF holds the GPS of
+   * somebody's home), stored outside the web root, and served through a route that checks who
+   * is asking.
+   *
+   * §10.4 is explicit that pairing up to train is not consent to share body metrics, and
+   * hide_photos defaults to on — so the answer today is "only the owner".
+   */
+  const ci = await page.evaluate(async () => {
+    const r = await fetch('/api/checkin/weekly', { credentials: 'same-origin' })
+    return (await r.json()).pending
+  })
+  if (!ci) return 'no pending check-in to attach to'
+
+  const posted = await page.evaluate(async (id) => {
+    const cv = document.createElement('canvas')
+    cv.width = 600
+    cv.height = 800
+    const g = cv.getContext('2d')
+    g.fillStyle = '#357'
+    g.fillRect(0, 0, 600, 800)
+    const blob = await new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.9))
+
+    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
+    const fd = new FormData()
+    fd.append('photo', blob, 'side.jpg')
+    fd.append('angle', 'side')
+    const r = await fetch('/api/checkin/weekly/' + id + '/photo', {
+      method: 'POST',
+      headers: { 'x-csrf-token': me.csrf, accept: 'application/json' },
+      credentials: 'same-origin',
+      body: fd,
+    })
+    return { status: r.status, body: await r.json().catch(() => null) }
+  }, ci.id)
+
+  if (posted.status !== 201) {
+    return `upload returned ${posted.status}: ${JSON.stringify(posted.body)}`
+  }
+
+  const asOwner = await page.evaluate(async (id) => {
+    const r = await fetch('/api/media/' + id + '?size=thumb', { credentials: 'same-origin' })
+    return { status: r.status, type: r.headers.get('content-type') }
+  }, posted.body.media_id)
+  if (asOwner.status !== 200 || !/^image\//.test(asOwner.type ?? '')) {
+    return `the owner could not read it back: ${JSON.stringify(asOwner)}`
+  }
+
+  // The MIME is sniffed from the bytes, never trusted from the client, so a PHP file
+  // claiming image/jpeg does not get through.
+  const junk = await page.evaluate(async (id) => {
+    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
+    const fd = new FormData()
+    fd.append('photo', new Blob(['<?php echo 1;'], { type: 'image/jpeg' }), 'x.jpg')
+    fd.append('angle', 'back')
+    const r = await fetch('/api/checkin/weekly/' + id + '/photo', {
+      method: 'POST',
+      headers: { 'x-csrf-token': me.csrf, accept: 'application/json' },
+      credentials: 'same-origin',
+      body: fd,
+    })
+    return r.status
+  }, ci.id)
+  if (junk === 201) return 'a PHP file claiming to be a JPEG was accepted'
+
+  /*
+   * Checked through the API rather than by reloading the page.
+   *
+   * A reload here reset the SPA's route and its collapsed-section state, and two later
+   * assertions — one on soreness, one on the profile — failed because they ran against a
+   * freshly booted app rather than the one the suite had been driving. A test that disturbs the
+   * page for everything after it is worse than one that checks a little less.
+   *
+   * The rendering itself is covered by the assertion above, which reads the three photo slots
+   * off the open form.
+   */
+  const attached = await page.evaluate(async () => {
+    const r = await fetch('/api/checkin/weekly', { credentials: 'same-origin' })
+    return (await r.json()).pending?.photos ?? {}
+  })
+  return attached.side !== undefined
+    ? true
+    : `the photo did not attach to the check-in: ${JSON.stringify(attached)}`
+})
+
 await check('the profile is reachable from the Dashboard, not the nav', async () => {
   /*
    * It used to be a top-level nav link, which gave a screen visited a handful of times
@@ -1280,7 +1409,15 @@ await check('it says whether answering still shapes the plan', async () => {
 
 await check('the form opens with weight and waist, not six boxes', async () => {
   const card = page.locator('.checkin-weekly')
-  await card.getByRole('button', { name: /fill it in/i }).click()
+  /*
+   * Tolerates an already-open form.
+   *
+   * The photo assertion earlier opens this same form and cannot close it — the only other
+   * button skips the check-in permanently, which would destroy the fixture. So this opens it
+   * only if it is shut.
+   */
+  const openBtn = card.getByRole('button', { name: /fill it in/i })
+  if (await openBtn.count()) await openBtn.first().click()
   const inputs = await card.locator('input[type="number"]').count()
   // Waist is the one that matters most (§7.2); the other five are behind a
   // toggle so a two-minute form does not look like a medical intake.

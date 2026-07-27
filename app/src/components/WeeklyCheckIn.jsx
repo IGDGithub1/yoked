@@ -178,6 +178,16 @@ export default function WeeklyCheckIn({ data, onAnswered }) {
             </div>
           )}
 
+          {/*
+            Progress photos (§7.2).
+
+            Optional, and last, because the form has to stay answerable in two minutes and
+            somebody who does not want to photograph themselves should not have to scroll past
+            it three times. The scale lies in both directions during a recomp, which is the
+            argument for having them at all.
+          */}
+          <PhotoRow checkinId={pending.id} photos={pending.photos ?? {}} onChanged={onAnswered} />
+
           <label className="field">
             <span className="tiny muted">How did the week go?</span>
             <textarea
@@ -297,4 +307,129 @@ function formatRange(start, end) {
   return sameMonth
     ? `${day(a)} to ${day(b)} ${month(b)}`
     : `${day(a)} ${month(a)} to ${day(b)} ${month(b)}`
+}
+
+const ANGLES = [
+  { key: 'front', label: 'Front' },
+  { key: 'side', label: 'Side' },
+  { key: 'back', label: 'Back' },
+]
+
+/**
+ * Three optional photo slots (§7.2).
+ *
+ * OPTIONAL AND SAID SO. Photos are the strongest evidence a recomp is working — the scale moves
+ * the wrong way while the mirror moves the right way — but somebody who does not want to
+ * photograph themselves must not feel chased for it. Nothing here is required and the copy does
+ * not nag.
+ *
+ * `capture="environment"` opens the rear camera on a phone rather than the file picker, because
+ * this is almost always a photo being taken now rather than one being found.
+ *
+ * The image comes from GET /api/media/{id}, which checks the asker owns it. That means an
+ * <img src> works because the session cookie rides along — but it also means these are never
+ * shareable URLs, which is the point (§10.4: pairing up to train is not consent to share body
+ * metrics, and hide_photos defaults to on).
+ */
+function PhotoRow({ checkinId, photos, onChanged }) {
+  const [busy, setBusy] = useState(null)
+  const [error, setError] = useState(null)
+
+  async function upload(angle, file) {
+    if (!file) return
+    setError(null)
+    setBusy(angle)
+    try {
+      await api.checkin.photo(checkinId, angle, file)
+      onChanged?.()
+    } catch (e) {
+      setError(e.message || 'That photo did not upload.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function remove(angle) {
+    setError(null)
+    setBusy(angle)
+    try {
+      await api.checkin.removePhoto(checkinId, angle)
+      onChanged?.()
+    } catch (e) {
+      setError(e.message || 'That did not delete.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="field">
+      <span className="tiny muted">
+        Progress photos, if you want them
+        <Help label="progress photos">
+          Every couple of weeks is enough to see a change; weekly rarely is. They are private
+          to you — not your buddy, not your coach — and the point is that the scale can sit
+          still for a month while these do not.
+        </Help>
+      </span>
+
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        {ANGLES.map(({ key, label }) => {
+          const mediaId = photos[key]
+          return (
+            <div key={key} className="stack-tight" style={{ alignItems: 'center' }}>
+              {mediaId ? (
+                <>
+                  <img
+                    src={`/api/media/${mediaId}?size=thumb`}
+                    alt={`${label} progress photo`}
+                    style={{
+                      width: 84,
+                      height: 84,
+                      objectFit: 'cover',
+                      borderRadius: 8,
+                      display: 'block',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn--quiet btn--small"
+                    disabled={busy === key}
+                    onClick={() => remove(key)}
+                  >
+                    Remove
+                  </button>
+                </>
+              ) : (
+                <label
+                  className="btn btn--quiet btn--small"
+                  style={{
+                    width: 84,
+                    height: 84,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {busy === key ? '…' : label}
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png"
+                    capture="environment"
+                    aria-label={`Add a ${label.toLowerCase()} photo`}
+                    style={{ display: 'none' }}
+                    disabled={busy === key}
+                    onChange={(e) => upload(key, e.target.files?.[0])}
+                  />
+                </label>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {error && <p className="error tiny" style={{ margin: 0 }}>{error}</p>}
+    </div>
+  )
 }

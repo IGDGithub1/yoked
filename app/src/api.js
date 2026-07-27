@@ -30,8 +30,17 @@ export class ApiError extends Error {
 }
 
 async function request(method, path, payload, { retryOnCsrf = true } = {}) {
+  /*
+   * FormData is passed through untouched, and DELIBERATELY has no content-type.
+   *
+   * The browser sets multipart/form-data itself along with the boundary marker, and a
+   * hand-written header would omit the boundary — which makes the body unparseable on the
+   * server, with an empty $_FILES and no error to explain it.
+   */
+  const isForm = typeof FormData !== 'undefined' && payload instanceof FormData
+
   const headers = { accept: 'application/json' }
-  if (payload !== undefined) headers['content-type'] = 'application/json'
+  if (payload !== undefined && !isForm) headers['content-type'] = 'application/json'
   if (csrf && method !== 'GET') headers['x-csrf-token'] = csrf
 
   const res = await fetch(`/api/${path.replace(/^\//, '')}`, {
@@ -40,7 +49,7 @@ async function request(method, path, payload, { retryOnCsrf = true } = {}) {
     // Cookies ARE the session. Without this the API sees every request as
     // anonymous and nothing works.
     credentials: 'same-origin',
-    body: payload !== undefined ? JSON.stringify(payload) : undefined,
+    body: payload === undefined ? undefined : (isForm ? payload : JSON.stringify(payload)),
   })
 
   let body = null
@@ -292,6 +301,22 @@ export const api = {
     answer: (id, fields) => put(`checkin/weekly/${id}`, fields),
     /* A deliberate pass, which stops the nudges. Ignoring it does not. */
     skip: (id) => post(`checkin/weekly/${id}/skip`),
+
+    /*
+     * Progress photos (§7.2), one per angle: front | side | back.
+     *
+     * multipart, so the payload is a FormData and `request` leaves the content-type to the
+     * browser — it has to set the multipart boundary, and a hand-written header would omit it.
+     *
+     * Re-uploading an angle replaces it, which is what somebody retaking a bad photo expects.
+     */
+    photo: (id, angle, file) => {
+      const fd = new FormData()
+      fd.append('photo', file)
+      fd.append('angle', angle)
+      return post(`checkin/weekly/${id}/photo`, fd)
+    },
+    removePhoto: (id, angle) => del(`checkin/weekly/${id}/photo?angle=${angle}`),
   },
 }
 
