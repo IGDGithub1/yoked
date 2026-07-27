@@ -1387,6 +1387,92 @@ t('the nutrition prompt carries the training week it is feeding', function () us
         ?: 'the prompt does not tell it to leave the training alone';
 });
 
+t('the prompt forbids sessions on unavailable days, optional included', function () use ($ids) {
+    /*
+     * Two live generations died on this and both times the offending sessions were OPTIONAL:
+     * cardio on a Tuesday and mobility on a Thursday, on a user whose grid said neither day was
+     * available. The model was not overreaching on the commitment — it had filled its quota
+     * from the shared days and then added bonuses, which the prompt invites without ever saying
+     * bonuses live on available days too.
+     *
+     * The validator rejects those outright, so the prompt has to be at least as firm as the
+     * validator. Anything softer just buys a rejected plan and a wasted generation.
+     */
+    $u    = $ids['u1'];
+    $week = date('Y-m-d', strtotime('next monday'));
+
+    $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+    $gather->setAccessible(true);
+    $ctx = $gather->invoke(null, $u, $week);
+    if (($ctx['error'] ?? null) !== null) {
+        return 'context failed: ' . (string) $ctx['error'];
+    }
+
+    /*
+     * Checked across BOTH prompts.
+     *
+     * The standing rule lives in systemPrompt, which is the cached prefix and the right home
+     * for something that never varies. The per-request reminder is in userPrompt. Reading only
+     * one reported a missing rule that was present all along, which is the same mistake the
+     * shared-day marker test records making.
+     */
+    $sys = new ReflectionMethod(Plans::class, 'systemPrompt');
+    $sys->setAccessible(true);
+    $prompt = new ReflectionMethod(Plans::class, 'userPrompt');
+    $prompt->setAccessible(true);
+    $all = (string) $sys->invoke(null, $ctx)
+         . "\n" . (string) $prompt->invoke(null, $ctx, $week, []);
+
+    if (!str_contains($all, 'NEVER SCHEDULE ANYTHING ON AN UNAVAILABLE DAY')) {
+        return 'the rule is not stated';
+    }
+    // And that it explicitly covers the case that actually failed.
+    return str_contains($all, 'not an optional one')
+        ?: 'the rule does not say optional sessions are covered';
+});
+
+t('a trend with too few readings does not break the nutrition prompt', function () use ($ids) {
+    /*
+     * weightTrend always returns something, but with fewer than two readings it returns only
+     * ['points', 'direction' => 'insufficient data'] — no weeks, no delta_kg. The first version
+     * of nutritionPrompt guarded on the array being non-null, which passes, and then
+     * interpolated two keys that were not there.
+     *
+     * Caught as two PHP warnings inside a paid live generation, which is the expensive way to
+     * find a missing guard.
+     */
+    $u    = $ids['u1'];
+    $week = date('Y-m-d', strtotime('next monday'));
+
+    $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+    $gather->setAccessible(true);
+    $ctx = $gather->invoke(null, $u, $week);
+
+    // Force the shape a brand-new user has.
+    $ctx['trend'] = ['points' => [], 'direction' => 'insufficient data'];
+
+    $m = new ReflectionMethod(Plans::class, 'nutritionPrompt');
+    $m->setAccessible(true);
+
+    $warnings = [];
+    set_error_handler(static function (int $no, string $msg) use (&$warnings): bool {
+        $warnings[] = $msg;
+        return true;
+    });
+    try {
+        $text = (string) $m->invoke(null, $ctx, $week, ['sessions' => [], 'summary' => '']);
+    } finally {
+        restore_error_handler();
+    }
+
+    if ($warnings !== []) {
+        return 'the prompt raised: ' . implode('; ', $warnings);
+    }
+    // And it says nothing about a trend it does not have.
+    return !str_contains($text, 'WEIGHT TREND')
+        ?: 'a trend section was written for a user with no readings';
+});
+
 echo "\n7. cost\n";
 $summary = Claude::usageSummary(1);
 foreach ($summary['by_purpose'] as $row) {

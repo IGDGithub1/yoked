@@ -852,6 +852,24 @@ final class Plans
             . 'is_committed false — bonus, never debt. Active recovery and rest '
             . 'days never count toward the committed total.',
 
+            /*
+             * The availability grid binds OPTIONAL sessions too.
+             *
+             * Live runs failed twice on this and both times the offending sessions were
+             * optional: a cardio day and a mobility day dropped onto weekdays the user had
+             * marked unavailable. The model was not overreaching on the commitment — it had
+             * filled its quota and then added bonuses, which the prompt invites ("anything
+             * beyond is a bonus") without ever saying bonuses live on available days too.
+             *
+             * The validator rejects these outright, so a plan that includes one is not a
+             * generous plan, it is a rejected plan and a wasted generation.
+             */
+            'NEVER SCHEDULE ANYTHING ON AN UNAVAILABLE DAY. A day the availability grid '
+            . 'marks unavailable takes NO session of any kind — not a committed one, not an '
+            . 'optional one, not cardio, not mobility, not active recovery. If there is not '
+            . 'enough room in their available days for everything worth doing, do less. A '
+            . 'plan with a session on a closed day is rejected in full.',
+
             'CUT BY GOAL VALUE, NOT CALENDAR POSITION: if the ideal structure '
             . 'wants more sessions than the committed count allows, drop what '
             . 'the GOAL needs least. If cardio is their lagging metric, keep the '
@@ -946,7 +964,8 @@ final class Plans
          * all that food context and reasonably assumes meals are wanted.
          */
         $out[] = 'Sessions only in this answer — the meal plan is asked for separately. '
-               . 'Training sessions go on the days the availability grid allows.';
+               . 'EVERY session goes on a day the availability grid marks available, including '
+               . 'optional ones.';
 
         // History first: what actually happened outranks what was planned.
         if ($ctx['history'] !== []) {
@@ -1415,7 +1434,15 @@ final class Plans
          * starving on the low days". A circumstance — travel, a week of night shifts — changes
          * what is cookable, which is the difference between a plan followed and a plan ignored.
          */
-        if (($ctx['trend'] ?? null) !== null) {
+        /*
+         * Guarded on the DIRECTION, not on the array being present.
+         *
+         * weightTrend always returns something; with fewer than two readings it returns just
+         * ['points', 'direction' => 'insufficient data'] and no weeks or delta_kg. A null check
+         * therefore passes and then interpolates two missing keys — which is exactly what a
+         * live run caught here, as two PHP warnings inside a paid generation.
+         */
+        if (($ctx['trend']['direction'] ?? 'insufficient data') !== 'insufficient data') {
             $out[] = '';
             $out[] = '=== WEIGHT TREND ===';
             $out[] = "Direction over {$ctx['trend']['weeks']} readings: "
