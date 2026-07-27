@@ -20,6 +20,19 @@ declare(strict_types=1);
 final class Safety
 {
     /**
+     * How many times one movement may appear in a week.
+     *
+     * Twice is ordinary — an upper/lower split hits chest twice by design — and a third is
+     * defensible for a lagging lift. Four does not leave enough recovery between exposures and
+     * crowds out everything else the week should cover.
+     *
+     * Deliberately a WITHIN-week limit. Repetition across weeks is a programme rather than a
+     * flaw: progressive overload needs the same lift repeated, since you cannot measure progress
+     * on a squat by squatting something else.
+     */
+    public const MAX_WEEKLY_FREQUENCY = 3;
+
+    /**
      * Load a user's active constraints, split by tier.
      *
      * Includes anything INHERITED from a training buddy (SPEC-coaching §10.2b), which arrives
@@ -183,6 +196,7 @@ final class Safety
             self::checkCommittedCount($plan, $userId),
             self::checkExerciseLibrary($plan),
             self::checkNoRepeats($plan),
+            self::checkWeeklyFrequency($plan),
             self::checkCoreBlocks($plan)
         )));
     }
@@ -786,6 +800,51 @@ final class Safety
             }
         }
 
+        return $violations;
+    }
+
+    /**
+     * No movement more than three times in a week.
+     *
+     * Repetition ACROSS weeks is not the problem — the same session every Monday for two months
+     * is a programme, and progressive overload requires it: you cannot measure progress on a
+     * squat by squatting something else. Repetition WITHIN a week is different. The same
+     * movement six times in seven days does not leave enough recovery between exposures, and it
+     * crowds out everything else the week should cover.
+     *
+     * Three is the ceiling because twice is ordinary — an upper body split hits chest twice a
+     * week by design — and a third exposure is defensible for a lagging lift. Four is not.
+     *
+     * Counted on the resolved slug, so an alias cannot smuggle a fourth appearance past it, and
+     * across ALL sessions including optional ones: a bonus session still costs recovery.
+     */
+    private static function checkWeeklyFrequency(array $plan): array
+    {
+        $counts = [];
+        foreach ($plan['sessions'] ?? [] as $session) {
+            foreach ($session['exercises'] ?? [] as $ex) {
+                $slug = trim((string) ($ex['slug'] ?? ''));
+                if ($slug === '') {
+                    continue;
+                }
+                $canonical = PlanSchema::resolveSlug($slug) ?? strtolower($slug);
+                $counts[$canonical] = ($counts[$canonical] ?? 0) + 1;
+            }
+        }
+
+        $violations = [];
+        foreach ($counts as $slug => $n) {
+            if ($n > self::MAX_WEEKLY_FREQUENCY) {
+                $violations[] = sprintf(
+                    "'%s' appears %d times this week; the limit is %d. The same movement more "
+                    . 'often than that does not leave enough recovery between sessions. Replace '
+                    . 'the extra ones with a different exercise for the same muscle.',
+                    $slug,
+                    $n,
+                    self::MAX_WEEKLY_FREQUENCY
+                );
+            }
+        }
         return $violations;
     }
 

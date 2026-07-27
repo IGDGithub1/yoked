@@ -599,6 +599,17 @@ t('rejects an unknown exercise slug', function () use ($ids) {
 });
 
 t('accepts a clean minimal plan', function () use ($ids) {
+    /*
+     * A DIFFERENT pair of exercises each day.
+     *
+     * This fixture used to repeat leg-press and plank across all five days, which
+     * checkWeeklyFrequency now rejects — correctly, since six exposures to one movement in a
+     * week does not leave enough recovery. A "clean plan" fixture has to be a plan that is
+     * actually clean, so it rotates.
+     */
+    $main = ['leg-press', 'back-squat', 'db-bench-press', 'barbell-row', 'overhead-press'];
+    $core = ['plank', 'dead-bug', 'side-plank', 'pallof-press', 'bird-dog'];
+
     $sessions = [];
     for ($i = 0; $i < 5; $i++) {
         $sessions[] = [
@@ -606,8 +617,8 @@ t('accepts a clean minimal plan', function () use ($ids) {
             'session_type' => 'strength', 'focus' => 'full', 'is_committed' => true,
             'target_minutes' => 55, 'location' => 'full_gym',
             'exercises' => [
-                ['slug' => 'leg-press', 'block' => 'main', 'sets' => 3, 'target_reps' => '10'],
-                ['slug' => 'plank', 'block' => 'core', 'sets' => 3, 'target_seconds' => 40],
+                ['slug' => $main[$i], 'block' => 'main', 'sets' => 3, 'target_reps' => '10'],
+                ['slug' => $core[$i], 'block' => 'core', 'sets' => 3, 'target_seconds' => 40],
             ],
         ];
     }
@@ -2246,6 +2257,219 @@ t('a merged duplicate still resolves by its old name', function () {
         }
     }
     return true;
+});
+
+// ---------------------------------------------------------------------------
+echo "\n6g. variety within the week, and a skill ceiling (§7.3)\n";
+
+/** A week of $n sessions, each holding the given slugs. */
+function weekOf(array $perDay): array
+{
+    $sessions = [];
+    foreach ($perDay as $i => $slugs) {
+        $ex = [];
+        foreach ($slugs as $s) {
+            $ex[] = ['slug' => $s, 'block' => 'main', 'sets' => 3, 'target_reps' => '10'];
+        }
+        $sessions[] = [
+            'date' => date('Y-m-d', strtotime(nextMonday() . " +{$i} days")),
+            'session_type' => 'strength', 'focus' => 'full', 'is_committed' => true,
+            'exercises' => $ex,
+        ];
+    }
+    return ['sessions' => $sessions];
+}
+
+t('the same movement four times in a week is rejected', function () {
+    /*
+     * The variety problem, correctly framed. Repetition ACROSS weeks is a programme — the same
+     * session every Monday for two months is how progressive overload works, since you cannot
+     * measure progress on a squat by squatting something else. Repetition WITHIN a week is the
+     * flaw: six exposures in seven days does not leave enough recovery and crowds out
+     * everything else.
+     */
+    $m = new ReflectionMethod(Safety::class, 'checkWeeklyFrequency');
+    $m->setAccessible(true);
+    $v = $m->invoke(null, weekOf([
+        ['back-squat'], ['back-squat'], ['back-squat'], ['back-squat'],
+    ]));
+    foreach ($v as $violation) {
+        if (str_contains($violation, 'appears 4 times')) {
+            return true;
+        }
+    }
+    return 'four exposures in a week were accepted: ' . implode(' | ', $v);
+});
+
+t('three times a week is fine', function () {
+    // Twice is ordinary for a split; a third is defensible for a lagging lift.
+    $m = new ReflectionMethod(Safety::class, 'checkWeeklyFrequency');
+    $m->setAccessible(true);
+    $v = $m->invoke(null, weekOf([['back-squat'], ['back-squat'], ['back-squat']]));
+    return $v === [] ?: 'three exposures were rejected: ' . implode(' | ', $v);
+});
+
+t('the SAME movement across weeks is not the frequency check business', function () {
+    /*
+     * Asserted because the obvious reading of "variety" is cross-week rotation, and building
+     * that would have fought progressive overload. The check only ever sees one week.
+     */
+    $m = new ReflectionMethod(Safety::class, 'checkWeeklyFrequency');
+    $m->setAccessible(true);
+    // A plan is one week, so two sessions is two sessions — there is no week-two to conflict.
+    $v = $m->invoke(null, weekOf([['back-squat'], ['back-squat']]));
+    return $v === [] ?: 'a twice-weekly squat was rejected';
+});
+
+t('an alias cannot smuggle a fourth appearance past the limit', function () {
+    $alias = DB::one(
+        'SELECT a.alias, e.slug FROM exercise_aliases a
+         JOIN exercises e ON e.id = a.exercise_id LIMIT 1'
+    );
+    if ($alias === null) {
+        return null;
+    }
+    $m = new ReflectionMethod(Safety::class, 'checkWeeklyFrequency');
+    $m->setAccessible(true);
+    $v = $m->invoke(null, weekOf([
+        [(string) $alias['slug']], [(string) $alias['slug']],
+        [(string) $alias['slug']], [(string) $alias['alias']],
+    ]));
+    return $v !== []
+        ?: "'{$alias['alias']}' was counted as a different movement from '{$alias['slug']}'";
+});
+
+t('optional sessions count toward the limit', function () {
+    // A bonus session still costs recovery, so it cannot be a way around the rule.
+    $m = new ReflectionMethod(Safety::class, 'checkWeeklyFrequency');
+    $m->setAccessible(true);
+    $plan = weekOf([['back-squat'], ['back-squat'], ['back-squat']]);
+    $plan['sessions'][] = [
+        'date' => date('Y-m-d', strtotime(nextMonday() . ' +4 days')),
+        'session_type' => 'strength', 'focus' => 'full',
+        'is_committed' => false,   // optional
+        'exercises' => [
+            ['slug' => 'back-squat', 'block' => 'main', 'sets' => 3, 'target_reps' => '10'],
+        ],
+    ];
+    return $m->invoke(null, $plan) !== []
+        ?: 'an optional session was used to exceed the weekly limit';
+});
+
+t('a beginner is never offered an expert movement', function () {
+    /*
+     * The library has 44 expert-level exercises — atlas stones, renegade rows, clean and jerk.
+     * The only guard was the model's judgement from stated experience, which works until it
+     * does not, and the failure mode is somebody attempting one in week one.
+     */
+    $v = PlanSchema::vocabulary(
+        null, ['full_gym'], null, ['strength'], PlanSchema::levelsUpTo('beginner')
+    );
+    $flat = [];
+    foreach ($v as $pats) {
+        foreach ($pats as $slugs) {
+            foreach ($slugs as $s) {
+                $flat[] = $s;
+            }
+        }
+    }
+    if ($flat === []) {
+        return 'a beginner was offered no exercises at all';
+    }
+    foreach ($flat as $slug) {
+        $r = DB::one('SELECT level FROM exercises WHERE slug = ?', [$slug]);
+        if (($r['level'] ?? null) === 'expert') {
+            return "a beginner was offered {$slug}, which is expert level";
+        }
+    }
+    return true;
+});
+
+t('an advanced user still gets everything', function () {
+    $beginner = PlanSchema::vocabulary(
+        null, ['full_gym'], null, ['strength'], PlanSchema::levelsUpTo('beginner')
+    );
+    $advanced = PlanSchema::vocabulary(
+        null, ['full_gym'], null, ['strength'], PlanSchema::levelsUpTo('advanced')
+    );
+    $count = static function (array $v): int {
+        $n = 0;
+        foreach ($v as $pats) {
+            foreach ($pats as $s) {
+                $n += count($s);
+            }
+        }
+        return $n;
+    };
+    return $count($advanced) > $count($beginner)
+        ?: 'an advanced user sees no more than a beginner';
+});
+
+t('a returning user gets intermediate, not expert', function () {
+    /*
+     * They have the movement patterns but not the current strength. §8's whole baseline
+     * fortnight exists because what somebody did three years ago is not what they can do today.
+     */
+    $levels = PlanSchema::levelsUpTo('returning');
+    if (!in_array('intermediate', $levels ?? [], true)) {
+        return 'a returning user was capped below intermediate';
+    }
+    return !in_array('expert', $levels ?? [], true)
+        ?: 'a returning user was offered expert movements';
+});
+
+t('an unstated experience applies no ceiling', function () {
+    // Withholding exercises from somebody we never asked would be a worse error than a
+    // slightly wider vocabulary, and the model still sees their profile.
+    return PlanSchema::levelsUpTo(null) === null
+        ?: 'an unstated experience was given a ceiling';
+});
+
+t('exercises with no level are never filtered out', function () {
+    /*
+     * NULL means the difficulty is unknown or does not apply — activities, cardio, and our own
+     * 90 originals which predate the column. Excluding those would silently strip a beginner's
+     * vocabulary of everything the app shipped with.
+     */
+    $v = PlanSchema::vocabulary(
+        null, ['full_gym'], null, ['strength'], ['beginner']
+    );
+    $flat = [];
+    foreach ($v as $pats) {
+        foreach ($pats as $slugs) {
+            foreach ($slugs as $s) {
+                $flat[$s] = true;
+            }
+        }
+    }
+    // db-curl is one of ours and has no level.
+    $orig = DB::one('SELECT slug FROM exercises WHERE level IS NULL AND category = "strength" LIMIT 1');
+    if ($orig === null) {
+        return null;
+    }
+    return isset($flat[(string) $orig['slug']])
+        ?: "{$orig['slug']} has no level and was filtered out of a beginner's vocabulary";
+});
+
+t('the prompt states both rules', function () use ($ids) {
+    $u = $ids['u1'];
+    $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+    $gather->setAccessible(true);
+    $ctx = $gather->invoke(null, $u, date('Y-m-d', strtotime('next monday')));
+
+    $sys = new ReflectionMethod(Plans::class, 'systemPrompt');
+    $sys->setAccessible(true);
+    $text = (string) $sys->invoke(null, $ctx);
+
+    if (!str_contains($text, 'NO MOVEMENT MORE THAN THREE TIMES IN THE WEEK')) {
+        return 'the frequency rule is not in the prompt';
+    }
+    if (!str_contains($text, 'KEEP THE MAIN LIFTS, ROTATE THE ACCESSORIES')) {
+        return 'the rotation rule is not in the prompt';
+    }
+    // And it says WHY the compounds stay, or the model reads it as arbitrary.
+    return str_contains($text, 'progressed and measured')
+        ?: 'the prompt does not explain why the main lifts stay put';
 });
 
 echo "\n7. cost\n";

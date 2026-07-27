@@ -476,7 +476,8 @@ final class PlanSchema
         ?string $access = null,
         array $accessSet = [],
         ?array $homeKit = null,
-        ?array $categories = null
+        ?array $categories = null,
+        ?array $levels = null
     ): array {
         /*
          * Category filtering happens in SQL rather than in the loop below.
@@ -487,10 +488,29 @@ final class PlanSchema
         $sql = 'SELECT slug, name, category, pattern, equipment, load_type, primary_muscle
                 FROM exercises';
         $params = [];
+        $where  = [];
+
         if ($categories !== null && $categories !== []) {
-            $in = implode(',', array_fill(0, count($categories), '?'));
-            $sql .= " WHERE category IN ({$in})";
-            $params = $categories;
+            $where[] = 'category IN (' . implode(',', array_fill(0, count($categories), '?')) . ')';
+            $params = array_merge($params, $categories);
+        }
+
+        /*
+         * A skill ceiling, so a beginner is never shown an expert movement.
+         *
+         * `level IS NULL OR` is load-bearing: NULL means the difficulty is unknown or does not
+         * apply — activities, cardio, and our own 90 originals which predate the column — and
+         * excluding those would silently strip a beginner's vocabulary of everything the app
+         * shipped with.
+         */
+        if ($levels !== null && $levels !== []) {
+            $where[] = '(level IS NULL OR level IN ('
+                     . implode(',', array_fill(0, count($levels), '?')) . '))';
+            $params = array_merge($params, $levels);
+        }
+
+        if ($where !== []) {
+            $sql .= ' WHERE ' . implode(' AND ', $where);
         }
         /*
          * SHORTEST NAME FIRST WITHIN A PATTERN, then alphabetical.
@@ -582,6 +602,45 @@ final class PlanSchema
      * because past six the additions are grip variations rather than different exercises.
      */
     public const ISOLATION_PER_MUSCLE = 6;
+
+    /**
+     * The hardest exercise level a given experience should be offered.
+     *
+     * A beginner should not be handed a renegade row or an atlas stone, and the only guard
+     * until now was the model's judgement from the user's stated experience — which works until
+     * it does not, and the failure mode is somebody attempting an expert movement in week one.
+     *
+     * 'returning' gets intermediate rather than expert: they have the movement patterns but not
+     * the current strength, and the whole §8 baseline fortnight exists because what somebody did
+     * three years ago is not what they can do today.
+     *
+     * 'never' and 'beginner' both stop at beginner. There is no shortage — 504 of 1002
+     * exercises are beginner-level.
+     */
+    public const LEVEL_CEILING = [
+        'never'        => 'beginner',
+        'beginner'     => 'beginner',
+        'returning'    => 'intermediate',
+        'intermediate' => 'intermediate',
+        'advanced'     => 'expert',
+    ];
+
+    /** Levels at or below a ceiling, for the vocabulary filter. */
+    public static function levelsUpTo(?string $experience): ?array
+    {
+        if ($experience === null) {
+            return null;   // unstated: no ceiling, the model judges as it did before
+        }
+        $ceiling = self::LEVEL_CEILING[$experience] ?? null;
+        if ($ceiling === null) {
+            return null;
+        }
+        return match ($ceiling) {
+            'beginner'     => ['beginner'],
+            'intermediate' => ['beginner', 'intermediate'],
+            default        => ['beginner', 'intermediate', 'expert'],
+        };
+    }
 
     public const HOME_KIT = [
         'dumbbell'        => ['dumbbell', 'incline_bench', 'box'],

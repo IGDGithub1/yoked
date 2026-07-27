@@ -169,6 +169,7 @@ foreach (DB::all('SELECT id, slug, name, category, pattern FROM exercises') as $
 
     $primary   = null;
     $secondary = [];
+    $level     = null;
 
     if ($src !== null) {
         $p = strtolower((string) ($src['primary_muscles'][0] ?? ''));
@@ -179,6 +180,15 @@ foreach (DB::all('SELECT id, slug, name, category, pattern FROM exercises') as $
                 $secondary[] = $mapped;
             }
         }
+        /*
+         * Skill floor, so a beginner is not handed an expert movement.
+         *
+         * NULL where the source left it blank, which is activities and most cardio — difficulty
+         * is not a property of "Walking the dog". NULL means unknown rather than easy, so
+         * nothing keys a safety decision off its absence.
+         */
+        $lv = strtolower(trim((string) ($src['level'] ?? '')));
+        $level = in_array($lv, ['beginner', 'intermediate', 'expert'], true) ? $lv : null;
     }
 
     /*
@@ -213,6 +223,7 @@ foreach (DB::all('SELECT id, slug, name, category, pattern FROM exercises') as $
         'pattern'   => (string) $e['pattern'],
         'primary'   => $primary,
         'secondary' => array_values(array_unique($secondary)),
+        'level'     => $level,
         'how'       => $how,
     ];
 }
@@ -246,6 +257,16 @@ foreach ($nullCat as $c => $n) {
     printf("  %-10s %d\n", $c, $n);
 }
 
+echo "\n=== skill level, so a beginner is not handed an expert movement ===\n";
+$lv = [];
+foreach ($plan as $p) {
+    $lv[$p['level'] ?? '(null)'] = ($lv[$p['level'] ?? '(null)'] ?? 0) + 1;
+}
+arsort($lv);
+foreach ($lv as $k => $n) {
+    printf("  %-14s %4d\n", $k, $n);
+}
+
 echo "\n=== isolation, by muscle — the reason this exists ===\n";
 $iso = [];
 foreach ($plan as $p) {
@@ -267,8 +288,9 @@ $written = 0;
 DB::tx(function () use ($plan, &$written): void {
     foreach ($plan as $p) {
         DB::run(
-            'UPDATE exercises SET primary_muscle = ?, secondary_muscles = ? WHERE id = ?',
-            [$p['primary'], json_encode($p['secondary']), $p['id']]
+            'UPDATE exercises SET primary_muscle = ?, secondary_muscles = ?, level = ?
+             WHERE id = ?',
+            [$p['primary'], json_encode($p['secondary']), $p['level'], $p['id']]
         );
         $written++;
     }

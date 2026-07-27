@@ -456,7 +456,10 @@ final class Plans
                 // Scoped by category as well as access: activities are reportable-only unless
                 // there is an outdoors day, mobility is warm-up prose rather than slugs, and
                 // cardio only matters to somebody who does any.
-                PlanSchema::categoriesFor($accessSet, $wantsCardio)
+                PlanSchema::categoriesFor($accessSet, $wantsCardio),
+                // A skill ceiling: a beginner is never shown an expert movement. Null when
+                // experience is unstated, which leaves the judgement to the model as before.
+                PlanSchema::levelsUpTo($trainingPrefs['experience'] ?? null)
             ),
             // Which of those the user is banned from, so the prompt can mark them rather than
             // hide them. Enforcement stays with Safety::validatePlan.
@@ -990,6 +993,29 @@ final class Plans
             . 'session. Multiple sets of a movement are ONE entry with a set count, not '
             . 'repeated entries. If a substitution would duplicate something already in the '
             . 'session, pick a different exercise.',
+
+            /*
+             * Frequency, and the variety that follows from it (§7.3).
+             *
+             * The thing to avoid is repetition WITHIN a week, not across weeks. The same
+             * session every Monday for two months is a programme, and progressive overload
+             * requires it — you cannot measure progress on a squat by squatting something
+             * else. Six exposures to one movement in seven days is the actual problem:
+             * not enough recovery, and it crowds out everything else.
+             *
+             * The accessory half is where variety belongs, and the library now supports it:
+             * 27 vertical pulls where there were 3.
+             */
+            'NO MOVEMENT MORE THAN THREE TIMES IN THE WEEK. Twice is normal for a split, a '
+            . 'third is fine for a lagging lift, four does not leave enough recovery. Count '
+            . 'across every session including the optional ones.',
+
+            'KEEP THE MAIN LIFTS, ROTATE THE ACCESSORIES. The compound movements — squat, '
+            . 'hinge, press, row, pull — should stay week to week so their loads can be '
+            . 'progressed and measured. The isolation work around them is where variety '
+            . 'belongs: a lateral raise has no PR to chase, so vary it freely. As somebody '
+            . 'gets stronger, move them toward harder variants of the same pattern rather '
+            . 'than swapping the pattern out.',
 
             'CUT BY GOAL VALUE, NOT CALENDAR POSITION: if the ideal structure '
             . 'wants more sessions than the committed count allows, drop what '
