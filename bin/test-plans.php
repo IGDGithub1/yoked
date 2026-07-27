@@ -2217,6 +2217,37 @@ t('the cap keeps the plain version of a movement', function () {
     return true;
 });
 
+t('a merged duplicate still resolves by its old name', function () {
+    /*
+     * Six pairs of near-identical slugs existed after the import — our originals colliding with
+     * the source's plurals, leg-extension against leg-extensions. The plural was ALIASED onto
+     * the singular rather than deleted.
+     *
+     * A full prune was considered and rejected on the numbers: six pairs in 1008 exercises,
+     * worth ~24 tokens of 3,340. The "49 bicep curls" that prompted the idea are variations —
+     * incline, preacher, drag, spider — not duplicates, and the isolation cap had already
+     * handled that bucket.
+     *
+     * Aliasing gets the same prompt benefit with none of the risk: an exercise is what a user
+     * LOGS against, and deleting one breaks that log permanently the first time somebody types
+     * the plural.
+     */
+    foreach (['hammer-curls' => 'hammer-curl',
+              'leg-extensions' => 'leg-extension',
+              'standing-calf-raises' => 'standing-calf-raise'] as $old => $canonical) {
+        // Gone from the library, so it never renders twice in the vocabulary.
+        $row = DB::one('SELECT slug FROM exercises WHERE slug = ?', [$old]);
+        if ($row !== null) {
+            return "{$old} is still a library row";
+        }
+        // But still resolvable, so a log or a plan naming it does not break.
+        if (PlanSchema::resolveSlug($old) !== $canonical) {
+            return "{$old} no longer resolves to {$canonical}";
+        }
+    }
+    return true;
+});
+
 echo "\n7. cost\n";
 $summary = Claude::usageSummary(1);
 foreach ($summary['by_purpose'] as $row) {
