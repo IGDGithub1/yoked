@@ -270,14 +270,39 @@ final class BuddySkeleton
         $out[] = 'COPY THE CORE BLOCK IN FULL: same exercises, same sets, same reps or holds. '
                . 'It is mostly floor work, so there is no loading problem, and ten minutes of '
                . 'matched work side by side is where a pair actually talks.';
-        $out[] = 'DECIDE FOR THEM: the exercise VARIANT within each pattern, the loads, the rep '
-               . 'ranges, the set counts, and the rest intervals. A hinge is a hinge whether it '
-               . 'is a trap-bar deadlift or a kettlebell swing.';
+        /*
+         * Scoped to the MAIN block, deliberately.
+         *
+         * This used to say "decide the variant and the set counts" without saying where, while
+         * the core instruction below said to reproduce the core exactly. Two lines of the same
+         * prompt telling the model opposite things about the same block, and a live run
+         * resolved the contradiction by dropping a core exercise.
+         */
+        $out[] = 'DECIDE FOR THEM, IN THE MAIN BLOCK: the exercise VARIANT within each pattern, '
+               . 'the loads, the rep ranges, the set counts, and the rest intervals. A hinge is '
+               . 'a hinge whether it is a trap-bar deadlift or a kettlebell swing.';
         $out[] = '';
-        $out[] = 'DIVERGE WHERE YOU MUST: if matching a pattern would mean prescribing something '
-               . 'this user\'s hard constraints forbid, or something that does not serve their '
-               . 'goal, change THAT movement and keep the day and the slot. Same gym, same hour, '
-               . 'different exercise. That is expected, not a failure.';
+        /*
+         * Divergence needs a CONSTRAINT, not a preference.
+         *
+         * This used to end "...or something that does not serve their goal", which is a
+         * loophole wide enough to drive anything through — a beginner's goal can be argued to
+         * not need any particular exercise, and a live run dropped a core exercise on exactly
+         * that reasoning. §10.0 already settled the trade: the pairing outranks individual
+         * optimisation. Divergence is for things the user CANNOT do, not for things that would
+         * be marginally better done differently.
+         *
+         * Substitution also has to REPLACE rather than remove. "Change that movement" was read
+         * as licence to drop one, which leaves the pair doing different amounts of work.
+         */
+        $out[] = 'DIVERGE ONLY WHERE YOU MUST: if matching a movement would mean prescribing '
+               . 'something this user\'s hard constraints forbid, or equipment they do not have, '
+               . 'REPLACE that one movement and keep the day, the slot and the count. Same gym, '
+               . 'same hour, one different exercise. That is expected, not a failure.';
+        $out[] = 'A movement being merely non-ideal for them is NOT a reason to change it. '
+               . 'Training alongside their buddy is worth more than a marginally better '
+               . 'exercise choice, and dropping a movement rather than swapping it leaves the '
+               . 'two of them doing different amounts of work.';
 
         foreach ($skeleton['days'] as $date => $day) {
             $out[] = '';

@@ -522,6 +522,18 @@ t('the core block is identical', function () use ($sesA, $sesB, $sharedDates) {
          * exactly, so dropping the duplicate here loses nothing.
          */
         $s = trim(preg_replace('/^\d+\s*(s|sec|secs|seconds|m|metres|meters)$/', '', $s) ?? $s);
+        /*
+         * A placeholder in a required field is not a prescription.
+         *
+         * target_reps is REQUIRED by the schema, so a timed hold or a loaded carry still has to
+         * put something there. The convention is "-", and a live run produced "0" instead —
+         * which is a real display bug ("3 × 0" on screen, now addressed in the schema
+         * description) but not a divergence between two users, since the actual dose lives in
+         * target_seconds or target_distance_m and those are compared exactly.
+         */
+        if ($s === '0' || $s === '-' || $s === 'n/a' || $s === 'none') {
+            $s = '';
+        }
         return $s;
     };
 

@@ -2052,7 +2052,7 @@ t('the follower is told to match the shape and decide the loads', function () {
     $text = (string) $prompt->invoke(null, $ctx, $week, []);
 
     foreach (['SHARED SESSIONS WITH', 'COPY EXACTLY', 'COPY THE CORE BLOCK IN FULL',
-              'DECIDE FOR THEM', 'DIVERGE WHERE YOU MUST'] as $needed) {
+              'DECIDE FOR THEM', 'DIVERGE ONLY WHERE YOU MUST'] as $needed) {
         if (!str_contains($text, $needed)) {
             return "the follower block is missing \"{$needed}\"";
         }
@@ -2064,6 +2064,46 @@ t('the follower is told to match the shape and decide the loads', function () {
     // The patterns must be named, not just gestured at.
     return str_contains($text, 'squat') && str_contains($text, 'hinge')
         ?: 'the skeleton block does not name the movement patterns';
+});
+
+t('the prompt does not contradict itself about the core block', function () {
+    /*
+     * The bug a live run found by obeying the wrong half.
+     *
+     * "DECIDE FOR THEM: the exercise variant ... and the set counts" and "the core block is
+     * IDENTICAL, do not substitute here" were both in the same prompt with nothing saying which
+     * block the first applied to. The model resolved the contradiction by dropping a core
+     * exercise, which is a defensible reading of an indefensible prompt.
+     *
+     * "Decide for them" is now scoped to the main block explicitly.
+     */
+    $a = seedUser('skel_ctr_a', 2);
+    $b = seedUser('skel_ctr_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    $week = nextWeek();
+    leaderPlan($a, $week, [1, 3]);
+    $text = BuddySkeleton::promptBlock(BuddySkeleton::toFollow($b, $week));
+
+    if (!str_contains($text, 'DECIDE FOR THEM, IN THE MAIN BLOCK')) {
+        return 'the free-choice instruction is not scoped to the main block';
+    }
+    /*
+     * And divergence needs a CONSTRAINT rather than a preference. "...or something that does
+     * not serve their goal" was a loophole wide enough to justify dropping anything, since a
+     * beginner's goal can be argued not to need any particular exercise.
+     */
+    if (str_contains($text, 'does not serve their goal')) {
+        return 'divergence can still be justified by preference rather than constraint';
+    }
+    if (!str_contains($text, 'merely non-ideal')) {
+        return 'nothing rules out changing a movement that is merely suboptimal';
+    }
+    // A substitution replaces; it does not remove. Otherwise the pair does different amounts.
+    return str_contains($text, 'REPLACE that one movement')
+        ?: 'the prompt does not say a substitution must replace rather than drop';
 });
 
 t('divergence on a hard constraint is explicitly allowed', function () {

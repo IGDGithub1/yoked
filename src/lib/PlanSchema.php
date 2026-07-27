@@ -274,9 +274,24 @@ final class PlanSchema
                 'block' => ['type' => 'string', 'enum' => ['warmup', 'main', 'core', 'cooldown']],
 
                 'sets' => ['type' => 'integer'],
-                // Text, not integer: "8", "8-10", "12/side", "AMRAP", and "-"
-                // for a timed or distance movement, are all real.
-                'target_reps'  => ['type' => 'string'],
+                /*
+                 * Text, not integer: "8", "8-10", "12/side" and "AMRAP" are all real.
+                 *
+                 * REQUIRED, so a timed or distance movement still has to put something here,
+                 * and the convention has to be stated or the model invents one. A live run
+                 * produced "0" for a 45-second plank — which reaches the screen as "3 × 0" and
+                 * reads as a broken prescription rather than a hold.
+                 *
+                 * The description travels with the schema to the model, unlike the comment
+                 * above it, which is why this moved out of a PHP comment.
+                 */
+                'target_reps'  => [
+                    'type'        => 'string',
+                    'description' => 'Reps as text: "8", "8-10", "12/side", "AMRAP". For a '
+                                   . 'timed hold or a loaded carry there are no reps — use "-" '
+                                   . 'and put the real dose in target_seconds or '
+                                   . 'target_distance_m. Never "0".',
+                ],
                 'rest_seconds' => ['type' => 'integer'],
 
                 // Genuinely optional — which of these applies depends on the
