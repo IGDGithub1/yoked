@@ -116,7 +116,17 @@ final class PlanSchema
         return $count;
     }
 
-    /** Structured outputs reject several JSON Schema keywords; see lint(). */
+    /**
+     * The whole week in one document.
+     *
+     * KEPT, BUT NO LONGER WHAT GENERATION USES. Plans::generateWeek now asks for training and
+     * nutrition in two separate calls (see training() and nutrition() below), because one
+     * document meant a short answer on the food half destroyed a perfectly good training week.
+     *
+     * Still here because the merge helper, the validator and several tests reason about a
+     * combined plan, and because the two halves are combined again before persisting. Treat
+     * this as the SHAPE of a plan, not as a request.
+     */
     public static function build(): array
     {
         return [
@@ -136,6 +146,61 @@ final class PlanSchema
                     'type'  => 'array',
                     'items' => self::session(),
                 ],
+                'days' => [
+                    'type'  => 'array',
+                    'items' => self::day(),
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * The training half, on its own.
+     *
+     * WHY THE SPLIT EXISTS. A week used to be one request: seven days of sessions AND seven
+     * days of meals with structured ingredients, 22k-31k output tokens. Measured over six live
+     * buddy generations, three of them came back with one day of nutrition instead of seven —
+     * and because the two halves shared a document, the complete and valid training week died
+     * with the food. Every leader succeeded; every failure was the second user of a pair, whose
+     * prompt carries the shared-session skeleton on top of everything else.
+     *
+     * Asking for half as much in each call makes that failure mode structurally smaller, and
+     * makes it survivable: a short answer on food now costs food.
+     *
+     * The summary belongs here rather than in both. It is the coach's read on the WEEK, and
+     * two independently written summaries would contradict each other.
+     */
+    public static function training(): array
+    {
+        return [
+            'type'                 => 'object',
+            'additionalProperties' => false,
+            'required'             => ['summary', 'expectations', 'sessions'],
+            'properties'           => [
+                'summary'      => ['type' => 'string'],
+                'expectations' => ['type' => 'string'],
+                'sessions'     => [
+                    'type'  => 'array',
+                    'items' => self::session(),
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * The nutrition half, on its own.
+     *
+     * No summary: the training call writes it, and this one is told what the week's training
+     * looks like so the food can suit it. Asking for a second summary would produce two views
+     * of one week that disagree.
+     */
+    public static function nutrition(): array
+    {
+        return [
+            'type'                 => 'object',
+            'additionalProperties' => false,
+            'required'             => ['days'],
+            'properties'           => [
                 'days' => [
                     'type'  => 'array',
                     'items' => self::day(),

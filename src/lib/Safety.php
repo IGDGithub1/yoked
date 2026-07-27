@@ -156,46 +156,78 @@ final class Safety
      */
     public static function validatePlan(array $plan, int $userId): array
     {
-        $constraints = self::forUser($userId);
-        $hard = $constraints['hard'];
+        return array_values(array_unique(array_merge(
+            self::validateTraining($plan, $userId),
+            self::validateNutrition($plan, $userId)
+        )));
+    }
 
-        $violations = [];
+    /**
+     * The training half only (sessions).
+     *
+     * SPLIT OUT BECAUSE GENERATION IS SPLIT. Training and nutrition are now asked for in two
+     * calls, so each has to be judged on its own — a training week cannot be held back because
+     * the food half came up short, which is exactly what used to happen.
+     *
+     * The division is clean rather than convenient: not one of the nine checks reads both
+     * `sessions` and `days`. Five are training, four are nutrition, and none of them had to be
+     * altered to be separated.
+     */
+    public static function validateTraining(array $plan, int $userId): array
+    {
+        $bans = self::hardBans($userId);
 
-        // Index hard constraints by kind for cheap lookup.
-        $foodBans     = [];
-        $movementBans = [];
-        $cardioBans   = [];
-        $floors       = [];
-        foreach ($hard as $c) {
-            $subject = strtolower((string) $c['subject']);
-            switch ($c['kind']) {
-                case 'food':      $foodBans[$subject]     = $c; break;
-                case 'movement':  $movementBans[$subject] = $c; break;
-                case 'cardio':    $cardioBans[$subject]   = $c; break;
-                case 'target_floor':
-                    $floors[$subject] = (float) $c['floor_value'];
-                    break;
-                // 'condition' constraints are MODIFIERS, not blocks — they
-                // carry guidance text into the prompt and have nothing to
-                // validate here. 'equipment' is handled via availability.
-            }
-        }
-
-        $violations = array_merge(
-            $violations,
-            // First, because everything below assumes a whole week is present.
-            self::checkWeekIsWhole($plan),
-            self::checkMeals($plan, $foodBans),
-            self::checkMealCompleteness($plan),
-            self::checkExercises($plan, $movementBans, $cardioBans),
-            self::checkFloors($plan, $floors),
+        return array_values(array_unique(array_merge(
+            self::checkExercises($plan, $bans['movement'], $bans['cardio']),
             self::checkAvailability($plan, $userId),
             self::checkCommittedCount($plan, $userId),
             self::checkExerciseLibrary($plan),
             self::checkCoreBlocks($plan)
-        );
+        )));
+    }
 
-        return array_values(array_unique($violations));
+    /**
+     * The nutrition half only (days and their meals).
+     *
+     * checkWeekIsWhole runs first, because everything below it assumes seven days are present
+     * and reporting "Thursday dinner has no ingredients" about a plan with no Thursday is
+     * noise. It is also the check that caught the failure this split exists to contain: a
+     * one-day answer where seven were asked for.
+     */
+    public static function validateNutrition(array $plan, int $userId): array
+    {
+        $bans = self::hardBans($userId);
+
+        return array_values(array_unique(array_merge(
+            self::checkWeekIsWhole($plan),
+            self::checkMeals($plan, $bans['food']),
+            self::checkMealCompleteness($plan),
+            self::checkFloors($plan, $bans['floors'])
+        )));
+    }
+
+    /**
+     * Hard constraints indexed by kind, for cheap lookup during validation.
+     *
+     * 'condition' constraints are MODIFIERS, not blocks — they carry guidance text into the
+     * prompt and have nothing to validate here. 'equipment' is handled via availability.
+     */
+    private static function hardBans(int $userId): array
+    {
+        $out = ['food' => [], 'movement' => [], 'cardio' => [], 'floors' => []];
+
+        foreach (self::forUser($userId)['hard'] as $c) {
+            $subject = strtolower((string) $c['subject']);
+            switch ($c['kind']) {
+                case 'food':      $out['food'][$subject]     = $c; break;
+                case 'movement':  $out['movement'][$subject] = $c; break;
+                case 'cardio':    $out['cardio'][$subject]   = $c; break;
+                case 'target_floor':
+                    $out['floors'][$subject] = (float) $c['floor_value'];
+                    break;
+            }
+        }
+        return $out;
     }
 
     /**

@@ -1074,6 +1074,319 @@ if ($gen2 !== null && $gen2['ok']) {
     });
 }
 
+// ---------------------------------------------------------------------------
+echo "\n6b. training and nutrition are generated separately\n";
+
+t('the two schemas cover the whole plan between them, and do not overlap', function () {
+    /*
+     * The split is only safe because the halves are genuinely disjoint. If a field lived in
+     * both, two calls could disagree about it and the merge would silently pick one.
+     */
+    $whole = array_keys(PlanSchema::build()['properties']);
+    $train = array_keys(PlanSchema::training()['properties']);
+    $food  = array_keys(PlanSchema::nutrition()['properties']);
+
+    $both = array_intersect($train, $food);
+    if ($both !== []) {
+        return 'both halves claim: ' . implode(', ', $both);
+    }
+    $missing = array_diff($whole, array_merge($train, $food));
+    return $missing === []
+        ?: 'no half produces: ' . implode(', ', $missing);
+});
+
+t('the training schema asks for sessions and NOT for days', function () {
+    // The whole point. A training call that still asks for seven days of meals has not been
+    // split, it has been duplicated.
+    $s = PlanSchema::training();
+    if (!isset($s['properties']['sessions'])) {
+        return 'the training half does not ask for sessions';
+    }
+    if (isset($s['properties']['days'])) {
+        return 'the training half still asks for nutrition days';
+    }
+    return in_array('sessions', $s['required'], true)
+        ?: 'sessions is optional in the training half';
+});
+
+t('the nutrition schema asks for days and NOT for sessions', function () {
+    $s = PlanSchema::nutrition();
+    if (!isset($s['properties']['days'])) {
+        return 'the nutrition half does not ask for days';
+    }
+    return !isset($s['properties']['sessions'])
+        ?: 'the nutrition half still asks for training sessions';
+});
+
+t('only one half writes the summary', function () {
+    // Two independently written summaries of one week would contradict each other.
+    $train = PlanSchema::training()['properties'];
+    $food  = PlanSchema::nutrition()['properties'];
+    if (!isset($train['summary'])) {
+        return 'nobody writes the summary';
+    }
+    return !isset($food['summary'])
+        ?: 'both halves write a summary';
+});
+
+t('both schemas survive the structured-output linter', function () {
+    // Same rules as the combined one: no unsupported keywords, no blown optional budget.
+    foreach (['training' => PlanSchema::training(),
+              'nutrition' => PlanSchema::nutrition()] as $name => $schema) {
+        $problems = PlanSchema::lint($schema);
+        if ($problems !== []) {
+            return "{$name}: " . implode('; ', $problems);
+        }
+    }
+    return true;
+});
+
+t('the training validator ignores a missing meal plan', function () use ($ids) {
+    /*
+     * The assertion the whole split rests on. A training week with no days at all must be
+     * judged clean by the training validator — otherwise a short food answer would still take
+     * the training half down with it, which is the failure this was built to stop.
+     */
+    $u = $ids['u1'];
+    $plan = [
+        'summary' => 'x', 'expectations' => 'y',
+        'sessions' => [],   // empty is fine here; checkCommittedCount is what judges the count
+        // no 'days' key at all
+    ];
+    $v = Safety::validateTraining($plan, $u);
+    foreach ($v as $violation) {
+        if (stripos($violation, 'day') !== false || stripos($violation, 'meal') !== false) {
+            return "the training validator complained about food: {$violation}";
+        }
+    }
+    return true;
+});
+
+t('the nutrition validator still catches a one-day answer', function () use ($ids) {
+    /*
+     * The exact failure that cost three live generations: one day returned where seven were
+     * asked for. It has to keep being caught — the split contains the damage, it does not make
+     * a fragment acceptable.
+     */
+    $u = $ids['u1'];
+    $v = Safety::validateNutrition([
+        'days' => [['date' => date('Y-m-d'), 'meals' => []]],
+    ], $u);
+    foreach ($v as $violation) {
+        if (str_contains($violation, 'a week needs 7')) {
+            return true;
+        }
+    }
+    return 'a one-day meal plan was accepted: ' . implode(' | ', $v);
+});
+
+t('the nutrition validator ignores missing sessions', function () use ($ids) {
+    // The mirror of the training case. Food is judged on food.
+    $u = $ids['u1'];
+    $days = [];
+    for ($i = 0; $i < 7; $i++) {
+        $days[] = ['date' => date('Y-m-d', strtotime("+{$i} days")), 'meals' => []];
+    }
+    $v = Safety::validateNutrition(['days' => $days], $u);
+    foreach ($v as $violation) {
+        if (stripos($violation, 'session') !== false
+            || stripos($violation, 'exercise') !== false) {
+            return "the nutrition validator complained about training: {$violation}";
+        }
+    }
+    return true;
+});
+
+t('validatePlan still checks both halves', function () use ($ids) {
+    /*
+     * The combined validator is still used by tests and by anything reasoning about a whole
+     * plan, so splitting the implementation must not have narrowed it. A plan that is bad in
+     * both directions should report both.
+     */
+    $u = $ids['u1'];
+    $v = Safety::validatePlan(['sessions' => [], 'days' => []], $u);
+    $sawFood = false;
+    foreach ($v as $violation) {
+        if (str_contains($violation, 'no days at all')) {
+            $sawFood = true;
+        }
+    }
+    return $sawFood ?: 'the combined validator no longer checks nutrition: ' . implode(' | ', $v);
+});
+
+t('a week with no meal days is listed as awaiting nutrition', function () use ($ids) {
+    /*
+     * The retry sweep's work list. Counted from prescribed_days rather than trusted from the
+     * generation_meta flag: the rows are what the user actually has, and a flag can be stale in
+     * both directions.
+     */
+    $u = $ids['u1'];
+    $week = date('Y-m-d', strtotime('next monday'));
+
+    DB::run('DELETE FROM plan_versions WHERE user_id = ? AND week_start = ?', [$u, $week]);
+    $planId = (int) DB::insert(
+        'INSERT INTO plan_versions (user_id, week_start, version, reason, summary)
+         VALUES (?, ?, 1, "initial", "training only")',
+        [$u, $week]
+    );
+
+    $found = false;
+    foreach (Plans::awaitingNutrition(date('Y-m-d')) as $p) {
+        if ($p['plan_version_id'] === $planId) {
+            $found = true;
+        }
+    }
+    if (!$found) {
+        return 'a plan with no days was not picked up';
+    }
+
+    // And once it has days, it drops off the list.
+    DB::run(
+        'INSERT INTO prescribed_days
+            (plan_version_id, day_date, target_calories, target_protein_g,
+             target_fat_g, target_carbs_g)
+         VALUES (?, ?, 2000, 150, 60, 200)',
+        [$planId, $week]
+    );
+    foreach (Plans::awaitingNutrition(date('Y-m-d')) as $p) {
+        if ($p['plan_version_id'] === $planId) {
+            return 'a fed plan is still listed as awaiting nutrition';
+        }
+    }
+
+    DB::run('DELETE FROM plan_versions WHERE id = ?', [$planId]);
+    return true;
+});
+
+t('a week already gone by is not backfilled', function () use ($ids) {
+    // Paying to fill in meals for a week somebody has already lived through helps nobody.
+    $u = $ids['u1'];
+    $old = date('Y-m-d', strtotime('monday -4 weeks'));
+
+    DB::run('DELETE FROM plan_versions WHERE user_id = ? AND week_start = ?', [$u, $old]);
+    $planId = (int) DB::insert(
+        'INSERT INTO plan_versions (user_id, week_start, version, reason)
+         VALUES (?, ?, 1, "initial")',
+        [$u, $old]
+    );
+
+    foreach (Plans::awaitingNutrition(date('Y-m-d')) as $p) {
+        if ($p['plan_version_id'] === $planId) {
+            DB::run('DELETE FROM plan_versions WHERE id = ?', [$planId]);
+            return 'a month-old week was queued for backfill';
+        }
+    }
+    DB::run('DELETE FROM plan_versions WHERE id = ?', [$planId]);
+    return true;
+});
+
+t('a superseded plan is never backfilled', function () use ($ids) {
+    // It is not what the user is looking at, so feeding it would spend money on a plan nobody
+    // can see.
+    $u = $ids['u1'];
+    $week = date('Y-m-d', strtotime('next monday'));
+
+    DB::run('DELETE FROM plan_versions WHERE user_id = ? AND week_start = ?', [$u, $week]);
+    $planId = (int) DB::insert(
+        'INSERT INTO plan_versions (user_id, week_start, version, reason, superseded_at)
+         VALUES (?, ?, 1, "initial", NOW())',
+        [$u, $week]
+    );
+
+    $listed = false;
+    foreach (Plans::awaitingNutrition(date('Y-m-d')) as $p) {
+        if ($p['plan_version_id'] === $planId) {
+            $listed = true;
+        }
+    }
+    DB::run('DELETE FROM plan_versions WHERE id = ?', [$planId]);
+    return !$listed ?: 'a superseded plan was queued for backfill';
+});
+
+t('filling a week that already has meals costs nothing', function () use ($ids) {
+    /*
+     * Two overlapping sweeps, or a manual run after an automatic one. fillNutrition has to
+     * check before it spends, because the claim only guards concurrent runs and not a second
+     * one a minute later.
+     */
+    $u = $ids['u1'];
+    $week = date('Y-m-d', strtotime('next monday'));
+
+    DB::run('DELETE FROM plan_versions WHERE user_id = ? AND week_start = ?', [$u, $week]);
+    $planId = (int) DB::insert(
+        'INSERT INTO plan_versions (user_id, week_start, version, reason)
+         VALUES (?, ?, 1, "initial")',
+        [$u, $week]
+    );
+    DB::run(
+        'INSERT INTO prescribed_days
+            (plan_version_id, day_date, target_calories, target_protein_g,
+             target_fat_g, target_carbs_g)
+         VALUES (?, ?, 2000, 150, 60, 200)',
+        [$planId, $week]
+    );
+
+    $before = (int) (DB::one('SELECT COUNT(*) AS n FROM ai_calls')['n'] ?? 0);
+    $r = Plans::fillNutrition($u, $week);
+    $after = (int) (DB::one('SELECT COUNT(*) AS n FROM ai_calls')['n'] ?? 0);
+
+    DB::run('DELETE FROM plan_versions WHERE id = ?', [$planId]);
+
+    if (!$r['ok']) {
+        return 'filling an already-fed week reported failure: ' . (string) $r['error'];
+    }
+    return $before === $after
+        ?: 'an already-fed week still made a model call';
+});
+
+t('the nutrition prompt carries the training week it is feeding', function () use ($ids) {
+    /*
+     * The food half has to know which days are heavy, or it cannot put the carbohydrates
+     * anywhere sensible. It must NOT be handed the exercise list — a thousand tokens of rep
+     * ranges it cannot act on.
+     */
+    $u    = $ids['u1'];
+    $week = date('Y-m-d', strtotime('next monday'));
+
+    $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+    $gather->setAccessible(true);
+    $ctx = $gather->invoke(null, $u, $week);
+    if (($ctx['error'] ?? null) !== null) {
+        return 'context failed: ' . (string) $ctx['error'];
+    }
+
+    $m = new ReflectionMethod(Plans::class, 'nutritionPrompt');
+    $m->setAccessible(true);
+    $text = (string) $m->invoke(null, $ctx, $week, [
+        'summary'  => 'A calibration week.',
+        'sessions' => [[
+            'date' => $week, 'session_type' => 'strength', 'focus' => 'lower',
+            'is_committed' => true, 'target_minutes' => 60,
+        ]],
+    ]);
+
+    if (!str_contains($text, 'MEAL PLAN')) {
+        return 'the prompt does not say it wants a meal plan';
+    }
+    if (!str_contains($text, 'strength')) {
+        return 'the training week is not described to the food half';
+    }
+    if (!str_contains($text, 'rest')) {
+        return 'the rest days are not marked, so the food cannot follow the training';
+    }
+    if (!str_contains($text, 'A calibration week.')) {
+        return 'the week\'s intent is not passed on';
+    }
+    // Seven dates, so a short answer has no excuse.
+    if (!str_contains($text, 'EVERY ONE of those seven dates')) {
+        return 'the prompt does not insist on all seven days';
+    }
+    // The food half must not re-emit the training, which would be a second chance to get it
+    // wrong and a second chance to disagree with what is already persisted.
+    return str_contains($text, 'do not return it')
+        ?: 'the prompt does not tell it to leave the training alone';
+});
+
 echo "\n7. cost\n";
 $summary = Claude::usageSummary(1);
 foreach ($summary['by_purpose'] as $row) {

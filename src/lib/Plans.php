@@ -132,11 +132,29 @@ final class Plans
             default            => 'plan_generation',
         };
 
-        // Validation runs inside the retry loop: a violating plan names its
-        // violations in the retry prompt and is regenerated. Two retries, then
-        // fail loudly (SPEC-safety.md §5).
-        $result = Claude::generateValidated(
-            PlanSchema::build(),
+        /*
+         * TWO CALLS, TRAINING FIRST.
+         *
+         * A week used to be one request: seven days of sessions AND seven days of meals with
+         * structured ingredients, 22k-31k output tokens. Measured over six live buddy
+         * generations, three came back with ONE day of nutrition where seven were asked for —
+         * and because the halves shared a document, a complete, valid training week was thrown
+         * away along with the food. Every leader succeeded; every failure was the second user
+         * of a pair, whose prompt also carries the shared-session skeleton.
+         *
+         * Splitting does two things. Each call asks for roughly half as much, which makes the
+         * short-answer failure less likely. And it makes that failure survivable, which matters
+         * more: a fragment on the food half now costs the food half.
+         *
+         * Training goes first because it is what the buddy pairing depends on and what the user
+         * is most likely to need tomorrow, and because the nutrition call is told what the
+         * training week looks like so the food can suit it.
+         *
+         * Validation runs inside each retry loop: a violating plan names its violations in the
+         * retry prompt and is regenerated. Two retries, then fail (SPEC-safety.md §5).
+         */
+        $training = Claude::generateValidated(
+            PlanSchema::training(),
             [
                 'purpose'      => $purpose,
                 'user_id'      => $userId,
@@ -148,27 +166,98 @@ final class Plans
                     'content' => self::userPrompt($context, $weekStart, $extraContext),
                 ]],
             ],
-            fn(array $plan): array => Safety::validatePlan($plan, $userId),
+            fn(array $plan): array => Safety::validateTraining($plan, $userId),
             3,
             // Graft a retry's answer onto the previous one rather than replacing
             // it. See mergePlans, and the note in Claude::generateValidated.
             self::mergePlans(...)
         );
 
-        if (!$result['ok']) {
+        /*
+         * A failed TRAINING half is still a failed week.
+         *
+         * There is no useful half-plan in the other direction: meals with no sessions is not a
+         * training programme, and the buddy pairing, adherence and everything §10 does are
+         * built on sessions existing.
+         */
+        if (!$training['ok']) {
             return ['ok' => false, 'plan_version_id' => null, 'plan' => null,
-                    'error' => $result['error'] ?? 'Generation failed.',
-                    'violations' => $result['violations'] ?? []];
+                    'error' => $training['error'] ?? 'Generation failed.',
+                    'violations' => $training['violations'] ?? []];
         }
 
-        $planVersionId = self::persist($userId, $weekStart, $reason, $result['data'], [
-            'attempts' => $result['attempts'] ?? 1,
-            'model'    => $result['model'] ?? null,
-            'usage'    => $result['usage'] ?? [],
+        $plan = $training['data'];
+
+        $nutrition = self::generateNutrition($userId, $weekStart, $context, $plan, $purpose);
+        if ($nutrition !== null) {
+            $plan['days'] = $nutrition['days'] ?? [];
+        }
+
+        $planVersionId = self::persist($userId, $weekStart, $reason, $plan, [
+            'attempts' => $training['attempts'] ?? 1,
+            'model'    => $training['model'] ?? null,
+            'usage'    => $training['usage'] ?? [],
+            // Recorded so the retry sweep can find weeks that still need feeding, and so a
+            // half-written week is visible in the history rather than looking complete.
+            'nutrition_pending' => $nutrition === null,
         ]);
 
         return ['ok' => true, 'plan_version_id' => $planVersionId,
-                'plan' => $result['data'], 'error' => null, 'violations' => []];
+                'plan' => $plan, 'error' => null, 'violations' => [],
+                'nutrition_pending' => $nutrition === null];
+    }
+
+    /**
+     * The food half, generated against the training week that was just written.
+     *
+     * Returns null when it could not be produced. That is not an error the caller should
+     * propagate: the training week is already good, and a user with a complete training plan
+     * and no meals yet is in a far better position than one with nothing. The week is marked
+     * nutrition_pending and bin/cron.php picks it up.
+     *
+     * Separate from generateWeek so the retry sweep can call it on its own, against a plan that
+     * already exists.
+     */
+    public static function generateNutrition(
+        int $userId,
+        string $weekStart,
+        array $context,
+        array $trainingPlan,
+        string $purpose = 'plan_generation'
+    ): ?array {
+        $result = Claude::generateValidated(
+            PlanSchema::nutrition(),
+            [
+                'purpose'      => $purpose,
+                'user_id'      => $userId,
+                'max_tokens'   => self::MAX_OUTPUT_TOKENS,
+                // The same cached prefix as the training call, so the second request pays for
+                // the profile once. Anthropic keys the cache on the literal prefix, so this
+                // only works while the two calls build the system prompt identically.
+                'system'       => self::systemPrompt($context),
+                'cache_system' => self::CACHE_SYSTEM,
+                'messages'     => [[
+                    'role'    => 'user',
+                    'content' => self::nutritionPrompt($context, $weekStart, $trainingPlan),
+                ]],
+            ],
+            fn(array $plan): array => Safety::validateNutrition($plan, $userId),
+            3,
+            self::mergePlans(...)
+        );
+
+        if (!$result['ok']) {
+            error_log(sprintf(
+                '[yoked] nutrition half failed for user %d week %s: %s',
+                $userId,
+                $weekStart,
+                (string) ($result['error'] ?? '?')
+                . ($result['violations'] ? ' | ' . implode('; ', $result['violations']) : '')
+            ));
+            return null;
+        }
+
+        return $result['data'];
     }
 
     // ---- context assembly --------------------------------------------------
@@ -847,9 +936,17 @@ final class Plans
     {
         $out = [];
         $end = date('Y-m-d', strtotime($weekStart . ' +6 days'));
-        $out[] = "Build the week of {$weekStart} (Monday) through {$end} (Sunday).";
-        $out[] = 'Every date in that range needs a nutrition day. Training '
-               . 'sessions go on the days the availability grid allows.';
+        $out[] = "Build the TRAINING week of {$weekStart} (Monday) through {$end} (Sunday).";
+        /*
+         * Training only. The food half is a separate call (see nutritionPrompt).
+         *
+         * Said explicitly because this prompt still carries the user's whole profile, including
+         * their food preferences and dietary constraints — the system prompt is shared between
+         * the two calls so the cached prefix is paid for once. Without this line the model sees
+         * all that food context and reasonably assumes meals are wanted.
+         */
+        $out[] = 'Sessions only in this answer — the meal plan is asked for separately. '
+               . 'Training sessions go on the days the availability grid allows.';
 
         // History first: what actually happened outranks what was planned.
         if ($ctx['history'] !== []) {
@@ -1239,6 +1336,131 @@ final class Plans
         return implode("\n", $out);
     }
 
+    /**
+     * The food half's request, written against the training week that already exists.
+     *
+     * MUCH SHORTER THAN userPrompt, deliberately. The profile, the food preferences, the
+     * dietary constraints and the macro floors are all in the SYSTEM prompt, which both calls
+     * share — so this only has to say what week, what training it is feeding, and the handful
+     * of volatile signals that change how somebody should eat.
+     *
+     * Sharing the system prompt is also what keeps the second call cheap: Anthropic caches on
+     * the literal prefix, so the profile is paid for once across the pair of requests. That
+     * only holds while both calls build the system prompt identically, which is why this takes
+     * the same $ctx rather than assembling its own.
+     */
+    private static function nutritionPrompt(
+        array $ctx,
+        string $weekStart,
+        array $trainingPlan
+    ): string {
+        $out = [];
+        $end = date('Y-m-d', strtotime($weekStart . ' +6 days'));
+
+        $out[] = "Build the MEAL PLAN for the week of {$weekStart} (Monday) through "
+               . "{$end} (Sunday).";
+        $out[] = 'EVERY ONE of those seven dates needs a day entry, with its macro targets and '
+               . 'its meals. Six days and a note is not a week; a partial answer is rejected '
+               . 'and regenerated, which wastes everybody\'s time.';
+        $out[] = 'The training for this week is already written and is shown below. Do not '
+               . 'change it and do not return it — feed it.';
+
+        /*
+         * The week's training, as a shape rather than in full.
+         *
+         * What nutrition actually needs from a session is when it is, how long, and how hard —
+         * enough to put the carbohydrates near the heavy days and keep the rest days lighter.
+         * Sending the whole exercise list would spend a thousand tokens telling the food half
+         * about rep ranges it cannot act on.
+         */
+        $out[] = '';
+        $out[] = '=== THIS WEEK\'S TRAINING ===';
+        $byDate = [];
+        foreach ($trainingPlan['sessions'] ?? [] as $s) {
+            $date = (string) ($s['date'] ?? '');
+            if ($date === '') {
+                continue;
+            }
+            $bits = [(string) ($s['session_type'] ?? 'session')];
+            if (($s['focus'] ?? 'none') !== 'none') {
+                $bits[] = (string) $s['focus'];
+            }
+            if (($s['target_minutes'] ?? null) !== null) {
+                $bits[] = $s['target_minutes'] . ' min';
+            }
+            if (($s['is_committed'] ?? false) !== true) {
+                $bits[] = 'optional';
+            }
+            $byDate[$date][] = implode(', ', $bits);
+        }
+        for ($i = 0; $i < 7; $i++) {
+            $date = date('Y-m-d', strtotime($weekStart . " +{$i} days"));
+            $name = date('D', strtotime($date));
+            $out[] = "  {$name} {$date}: "
+                   . ($byDate[$date] ?? [] ? implode(' | ', $byDate[$date]) : 'rest');
+        }
+
+        // Where the week is going, in the coach's own words, so the food matches the intent
+        // rather than only the schedule.
+        if (($trainingPlan['summary'] ?? '') !== '') {
+            $out[] = '';
+            $out[] = '=== THE WEEK\'S INTENT ===';
+            $out[] = (string) $trainingPlan['summary'];
+        }
+
+        /*
+         * The volatile signals that change how somebody should eat this week.
+         *
+         * Weight trend decides whether the targets hold or move. A check-in can say "I was
+         * starving on the low days". A circumstance — travel, a week of night shifts — changes
+         * what is cookable, which is the difference between a plan followed and a plan ignored.
+         */
+        if (($ctx['trend'] ?? null) !== null) {
+            $out[] = '';
+            $out[] = '=== WEIGHT TREND ===';
+            $out[] = "Direction over {$ctx['trend']['weeks']} readings: "
+                   . "{$ctx['trend']['direction']} ({$ctx['trend']['delta_kg']} kg). "
+                   . 'Read the trend, not any single reading.';
+        }
+
+        if (($ctx['checkins'] ?? []) !== []) {
+            $latest = $ctx['checkins'][0];
+            $said   = trim((string) ($latest['self_report'] ?? ''));
+            if ($said !== '') {
+                $out[] = '';
+                $out[] = '=== WHAT THEY SAID LAST WEEK ===';
+                $out[] = $said;
+            }
+        }
+
+        if (($ctx['circumstances'] ?? []) !== []) {
+            $out[] = '';
+            $out[] = '=== ACTIVE CIRCUMSTANCES ===';
+            foreach ($ctx['circumstances'] as $c) {
+                $out[] = '  - ' . (string) ($c['note'] ?? $c['kind'] ?? '');
+            }
+        }
+
+        // Recent adherence, as one line. A user who has been missing macro targets needs
+        // easier food, not a better-argued plan.
+        if (($ctx['history'] ?? []) !== []) {
+            $onTarget = 0;
+            foreach ($ctx['history'] as $d) {
+                if ((int) ($d['macro_on_target'] ?? 0) === 1) {
+                    $onTarget++;
+                }
+            }
+            $out[] = '';
+            $out[] = sprintf(
+                'Recent eating: %d of %d logged days hit their macro targets.',
+                $onTarget,
+                count($ctx['history'])
+            );
+        }
+
+        return implode("\n", $out);
+    }
+
     // ---- persistence -------------------------------------------------------
 
     /**
@@ -1304,6 +1526,135 @@ final class Plans
 
             return $planVersionId;
         });
+    }
+
+    /**
+     * Weeks whose training was written but whose food never arrived.
+     *
+     * The retry sweep's work list. Only live plans, only weeks that are current or still to
+     * come — backfilling meals for a week somebody has already lived through would be spending
+     * money to fill in history.
+     *
+     * @return list<array{user_id:int, week_start:string, plan_version_id:int}>
+     */
+    public static function awaitingNutrition(string $today): array
+    {
+        $out = [];
+        foreach (DB::all(
+            'SELECT pv.id, pv.user_id, pv.week_start, pv.generation_meta
+             FROM plan_versions pv
+             LEFT JOIN prescribed_days pd ON pd.plan_version_id = pv.id
+             WHERE pv.superseded_at IS NULL
+               AND pv.week_start >= DATE_SUB(?, INTERVAL 6 DAY)
+             GROUP BY pv.id
+             HAVING COUNT(pd.id) = 0',
+            [$today]
+        ) as $r) {
+            /*
+             * Counted rather than trusting the flag.
+             *
+             * generation_meta says what we BELIEVED at write time; the absence of
+             * prescribed_days rows is what the user actually has. A plan whose nutrition was
+             * filled in by an earlier sweep has rows and a stale flag, and a plan that lost its
+             * days some other way still needs feeding.
+             */
+            $out[] = [
+                'plan_version_id' => (int) $r['id'],
+                'user_id'         => (int) $r['user_id'],
+                'week_start'      => (string) $r['week_start'],
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Fill in the food for a week whose training is already written.
+     *
+     * Adds prescribed_days to the EXISTING plan version rather than superseding it. A new
+     * version would be dishonest — nothing about the training changed, and adherence points at
+     * version ids, so re-versioning would orphan anything already logged against this week.
+     *
+     * Returns ['ok', 'error']. Safe to call twice: a plan that already has days is left alone.
+     */
+    public static function fillNutrition(int $userId, string $weekStart): array
+    {
+        $plan = DB::one(
+            'SELECT id FROM plan_versions
+             WHERE user_id = ? AND week_start = ? AND superseded_at IS NULL
+             ORDER BY id DESC LIMIT 1',
+            [$userId, $weekStart]
+        );
+        if ($plan === null) {
+            return ['ok' => false, 'error' => 'No live plan for that week.'];
+        }
+        $planVersionId = (int) $plan['id'];
+
+        $existing = DB::one(
+            'SELECT COUNT(*) AS n FROM prescribed_days WHERE plan_version_id = ?',
+            [$planVersionId]
+        );
+        if ((int) ($existing['n'] ?? 0) > 0) {
+            return ['ok' => true, 'error' => null];   // already fed
+        }
+
+        $context = self::gatherContext($userId, $weekStart);
+        if ($context['error'] !== null) {
+            return ['ok' => false, 'error' => (string) $context['error']];
+        }
+
+        /*
+         * The training half is read back from the database rather than regenerated.
+         *
+         * It is what the user is actually looking at, and asking the model for it again would
+         * cost a second training week and risk producing a different one.
+         */
+        $sessions = [];
+        foreach (DB::all(
+            'SELECT session_date, session_type, focus, is_committed, target_minutes
+             FROM prescribed_sessions
+             WHERE plan_version_id = ?
+             ORDER BY session_date, sort_order',
+            [$planVersionId]
+        ) as $s) {
+            $sessions[] = [
+                'date'           => (string) $s['session_date'],
+                'session_type'   => (string) $s['session_type'],
+                'focus'          => $s['focus'],
+                'is_committed'   => (bool) $s['is_committed'],
+                'target_minutes' => $s['target_minutes'] === null
+                    ? null : (int) $s['target_minutes'],
+            ];
+        }
+
+        $summaryRow = DB::one(
+            'SELECT summary FROM plan_versions WHERE id = ?', [$planVersionId]
+        );
+
+        $nutrition = self::generateNutrition(
+            $userId,
+            $weekStart,
+            $context,
+            ['sessions' => $sessions, 'summary' => (string) ($summaryRow['summary'] ?? '')],
+            'plan_generation'
+        );
+        if ($nutrition === null) {
+            return ['ok' => false, 'error' => 'The meal plan could not be generated.'];
+        }
+
+        self::persistDays($planVersionId, $nutrition);
+
+        // The flag was only ever a hint; the rows are the truth. Cleared anyway so the history
+        // does not keep claiming a week is half-written after it has been finished.
+        DB::run(
+            "UPDATE plan_versions
+             SET generation_meta = JSON_SET(
+                 COALESCE(generation_meta, '{}'), '$.nutrition_pending', false
+             )
+             WHERE id = ?",
+            [$planVersionId]
+        );
+
+        return ['ok' => true, 'error' => null];
     }
 
     /** Summary plus expectations — both are shown to the user. */

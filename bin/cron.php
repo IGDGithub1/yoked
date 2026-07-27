@@ -411,6 +411,93 @@ function jobWeeklyPlan(?int $onlyUser, bool $dryRun): array
  * No Claude call, no cron_runs claim. It is one guarded UPDATE whose WHERE clause
  * is its own idempotency — two concurrent sweeps cannot both win it.
  */
+/**
+ * Finish the weeks whose training was written but whose food never arrived.
+ *
+ * Plans::generateWeek asks for training and nutrition in two calls. A short answer on the food
+ * half no longer destroys the training week — it persists, marked nutrition_pending, and this
+ * picks it up.
+ *
+ * Runs straight after weekly_plan so a Sunday gap is usually closed within the same sweep, and
+ * a user who lost their meals at 4am has them by 5.
+ *
+ * IDEMPOTENT BY CONSTRUCTION. The work list is "live plans with no prescribed_days rows", so a
+ * week filled in by an earlier run simply is not in it. Plans::fillNutrition checks again
+ * before spending anything, which covers two sweeps overlapping.
+ *
+ * A failure here is not escalated: the training week is intact and the user has a plan. It will
+ * be retried on the next tick, and a week that has gone past is dropped from the list rather
+ * than backfilled, because paying to fill in history helps nobody.
+ */
+function jobNutritionBackfill(?int $onlyUser, bool $dryRun): array
+{
+    $results = ['filled' => 0, 'skipped' => 0, 'failed' => 0];
+
+    $pending = Plans::awaitingNutrition(date('Y-m-d'));
+    foreach ($pending as $p) {
+        if ($onlyUser !== null && $p['user_id'] !== $onlyUser) {
+            continue;
+        }
+
+        $userRow = DB::one(
+            'SELECT display_name, coaching_paused FROM users u
+             LEFT JOIN profiles pr ON pr.user_id = u.id
+             WHERE u.id = ?',
+            [$p['user_id']]
+        );
+        $name = (string) ($userRow['display_name'] ?? "user {$p['user_id']}");
+
+        // Paused coaching means paused spending, and this is a model call like any other.
+        if ((int) ($userRow['coaching_paused'] ?? 0) === 1) {
+            say("  {$name}: coaching paused, leaving the week unfed", false);
+            $results['skipped']++;
+            continue;
+        }
+
+        if ($dryRun) {
+            say("  {$name}: WOULD fill nutrition for week of {$p['week_start']}");
+            $results['filled']++;
+            continue;
+        }
+
+        /*
+         * Claimed per (user, week) like every other job, so two overlapping sweeps cannot both
+         * pay for the same meal plan. The period is the week rather than the date, because the
+         * thing being filled is a week.
+         */
+        $runId = claim('nutrition_backfill', $p['user_id'], $p['week_start']);
+        if ($runId === false) {
+            say("  {$name}: claimed by another run", false);
+            $results['skipped']++;
+            continue;
+        }
+
+        $started = microtime(true);
+        say("  {$name}: filling nutrition for week of {$p['week_start']} …");
+
+        try {
+            $r = Plans::fillNutrition($p['user_id'], $p['week_start']);
+            if ($r['ok']) {
+                $secs = round(microtime(true) - $started, 1);
+                say("  {$name}: ok ({$secs}s)");
+                finish($runId, 'ok', null, $started);
+                $results['filled']++;
+            } else {
+                $detail = (string) ($r['error'] ?? 'unknown');
+                say("  {$name}: FAILED — {$detail}");
+                finish($runId, 'failed', $detail, $started);
+                $results['failed']++;
+            }
+        } catch (Throwable $e) {
+            say("  {$name}: ABORTED — " . $e->getMessage());
+            finish($runId, 'failed', $e->getMessage(), $started);
+            $results['failed']++;
+        }
+    }
+
+    return $results;
+}
+
 function jobBaselineGraduation(?int $onlyUser, bool $dryRun): array
 {
     $results = ['graduated' => 0, 'waiting' => 0, 'failed' => 0];
@@ -1205,6 +1292,9 @@ $jobs = [
     'weekly_checkin'      => fn() => jobWeeklyCheckin($onlyUser, $dryRun),
     'checkin_review'      => fn() => jobCheckinReview($onlyUser, $dryRun),
     'weekly_plan'         => fn() => jobWeeklyPlan($onlyUser, $dryRun),
+    // Immediately after weekly_plan: it is what creates the gaps, so a week that lost its food
+    // half at 4am usually has it back before anybody wakes up.
+    'nutrition_backfill'  => fn() => jobNutritionBackfill($onlyUser, $dryRun),
     'drift_sweep'         => fn() => jobDriftSweep($onlyUser, $dryRun),
     'chat_replies'        => fn() => jobChatReplies($onlyUser, $dryRun),
     // After chat_replies: an interjection and a veto can both regenerate the same week, and
