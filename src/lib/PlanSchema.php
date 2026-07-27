@@ -484,18 +484,32 @@ final class PlanSchema
          * With a thousand-row library the difference is a thousand json_decode calls per
          * generation against a few hundred, and this runs on every plan.
          */
-        $sql = 'SELECT slug, name, category, pattern, equipment, load_type FROM exercises';
+        $sql = 'SELECT slug, name, category, pattern, equipment, load_type, primary_muscle
+                FROM exercises';
         $params = [];
         if ($categories !== null && $categories !== []) {
             $in = implode(',', array_fill(0, count($categories), '?'));
             $sql .= " WHERE category IN ({$in})";
             $params = $categories;
         }
-        $sql .= ' ORDER BY category, pattern, slug';
+        /*
+         * SHORTEST NAME FIRST WITHIN A PATTERN, then alphabetical.
+         *
+         * The isolation cap takes the first N per muscle, so the ordering decides which six
+         * survive — and plain alphabetical gave "alternate-incline-dumbbell-curl" and three
+         * consecutive barbell shrugs, because "b" wins.
+         *
+         * Name length is a decent proxy for how basic a movement is. "barbell-curl" is shorter
+         * than "barbell-curls-lying-against-an-incline" because it is the plain version, and the
+         * plain version is what a coach reaches for first and what a user recognises. It also
+         * happens to cost fewer tokens, which is the point of the exercise.
+         */
+        $sql .= ' ORDER BY category, pattern, CHAR_LENGTH(slug), slug';
 
         $rows = DB::all($sql, $params);
 
-        $out = [];
+        $out  = [];
+        $seen = [];   // isolation exercises already offered, per muscle
         foreach ($rows as $r) {
             if ($accessSet !== []) {
                 $ok = false;
@@ -511,6 +525,33 @@ final class PlanSchema
             } elseif ($access !== null && !self::availableAt($r, $access, $homeKit)) {
                 continue;
             }
+
+            /*
+             * ISOLATION IS CAPPED PER MUSCLE.
+             *
+             * It is 241 of the library's 1008 exercises and ~1,642 tokens — over a third of a
+             * gym user's vocabulary — and reading it shows why: 50 bicep curls, 47 tricep
+             * extensions, 46 shoulder raises. Perhaps eight of those 50 curls are meaningfully
+             * different movements; the rest vary the implement, the angle or the grip.
+             *
+             * A compound lift is not capped. There are 58 squats and they are genuinely
+             * different exercises — a front squat and a Bulgarian split squat train different
+             * things. Isolation is the one pattern where the count is mostly redundancy, which
+             * is also why it needed a muscle column to cap along: `isolation` alone says
+             * nothing about what is being isolated.
+             *
+             * Capped at the point of RENDERING rather than by pruning the library, so a
+             * regenerated week can surface a different variant and the exercise stays available
+             * for a user to log by name.
+             */
+            if ($r['pattern'] === 'isolation') {
+                $muscle = (string) ($r['primary_muscle'] ?? '?');
+                $seen[$muscle] = ($seen[$muscle] ?? 0) + 1;
+                if ($seen[$muscle] > self::ISOLATION_PER_MUSCLE) {
+                    continue;
+                }
+            }
+
             $out[$r['category']][$r['pattern']][] = $r['slug'];
         }
         return $out;
@@ -529,6 +570,19 @@ final class PlanSchema
      * three tokens: someone who says they have a barbell and rack has the setup, and asking
      * separately about a trap bar is the granularity this list exists to avoid.
      */
+    /**
+     * How many isolation exercises to offer per muscle.
+     *
+     * Six, because a session uses one or two accessories per muscle and six leaves room to
+     * rotate across a four-week block without repeating. Measured against the library: it takes
+     * isolation from 241 slugs to about 80.
+     *
+     * Not lower, because the access filter cuts this further — a dumbbell-only user might see
+     * two of the six survive — and a cap that leaves one option is not a choice. Not higher,
+     * because past six the additions are grip variations rather than different exercises.
+     */
+    public const ISOLATION_PER_MUSCLE = 6;
+
     public const HOME_KIT = [
         'dumbbell'        => ['dumbbell', 'incline_bench', 'box'],
         'bench'           => ['bench'],

@@ -2083,6 +2083,140 @@ t('a scoped vocabulary still contains real exercises', function () {
         ?: 'a bodyweight week has no core exercises at all';
 });
 
+// ---------------------------------------------------------------------------
+echo "\n6f. muscle groups, and the isolation cap they enable\n";
+
+t('every real exercise knows what it works', function () {
+    /*
+     * `pattern` is a MOVEMENT classification and says nothing about anatomy — a bicep curl and
+     * a lateral raise are both isolation. Without a muscle column there is no way to cap
+     * isolation sensibly, detect a week that hammers quads and ignores hamstrings, or answer
+     * "what does this work?" for a beginner.
+     */
+    $row = DB::one(
+        'SELECT COUNT(*) AS n FROM exercises
+         WHERE primary_muscle IS NULL AND category IN ("strength", "core")'
+    );
+    $n = (int) ($row['n'] ?? 0);
+    return $n === 0 ?: "{$n} strength or core exercises have no primary muscle";
+});
+
+t('activities correctly have NO muscle', function () {
+    /*
+     * Golf, kayaking, walking the dog. Inventing a muscle for them would be worse than NULL —
+     * it would put "Billiards" into a quadriceps balance check.
+     */
+    $row = DB::one(
+        'SELECT COUNT(*) AS n FROM exercises
+         WHERE primary_muscle IS NOT NULL AND category = "activity"'
+    );
+    return (int) ($row['n'] ?? 0) === 0
+        ?: 'an activity was assigned a muscle it does not work';
+});
+
+t('isolation is capped per muscle, and compounds are not', function () {
+    /*
+     * Isolation was 241 of 1008 exercises and ~1,642 tokens, over a third of a gym user's
+     * vocabulary: 50 bicep curls, 47 tricep extensions, 46 shoulder raises. Perhaps eight of
+     * those curls are different movements.
+     *
+     * Squats are NOT capped, and the distinction is the point: a front squat and a Bulgarian
+     * split squat train different things, so 58 of them is depth rather than redundancy.
+     */
+    $v = PlanSchema::vocabulary(null, ['full_gym'], null, ['strength']);
+    $iso = count($v['strength']['isolation'] ?? []);
+    $sq  = count($v['strength']['squat'] ?? []);
+
+    $total = (int) (DB::one(
+        'SELECT COUNT(*) AS n FROM exercises WHERE pattern = "isolation"'
+    )['n'] ?? 0);
+
+    if ($iso >= $total) {
+        return "isolation was not capped: {$iso} of {$total}";
+    }
+    // Roughly 6 per muscle across ~15 muscles. Asserted loosely, since the access filter
+    // and the muscle spread both move the exact figure.
+    if ($iso > 120) {
+        return "the cap barely bit: {$iso} isolation exercises still offered";
+    }
+    $allSquats = (int) (DB::one(
+        'SELECT COUNT(*) AS n FROM exercises WHERE pattern = "squat" AND category = "strength"'
+    )['n'] ?? 0);
+    return $sq === $allSquats
+        ?: "squats were capped too: {$sq} of {$allSquats}";
+});
+
+t('no muscle gets more than the cap', function () {
+    $v = PlanSchema::vocabulary(null, ['full_gym'], null, ['strength']);
+    $byMuscle = [];
+    foreach ($v['strength']['isolation'] ?? [] as $slug) {
+        $r = DB::one('SELECT primary_muscle FROM exercises WHERE slug = ?', [$slug]);
+        $m = (string) ($r['primary_muscle'] ?? '?');
+        $byMuscle[$m] = ($byMuscle[$m] ?? 0) + 1;
+    }
+    foreach ($byMuscle as $m => $n) {
+        if ($n > PlanSchema::ISOLATION_PER_MUSCLE) {
+            return "{$m} has {$n}, over the cap of " . PlanSchema::ISOLATION_PER_MUSCLE;
+        }
+    }
+    return $byMuscle !== [] ?: 'no isolation work reached the vocabulary at all';
+});
+
+t('the cap runs AFTER the access filter, not before', function () {
+    /*
+     * Order matters and getting it backwards is invisible.
+     *
+     * If the cap counted first, a dumbbell-only user could have all six bicep slots taken by
+     * cable curls and then see none of them — capped out, then filtered out, leaving nothing.
+     * Filtering first means the six are six they can actually do.
+     */
+    $v = PlanSchema::vocabulary(
+        null, ['home_gym'], ['dumbbell'], ['strength']
+    );
+    $iso = $v['strength']['isolation'] ?? [];
+    if ($iso === []) {
+        return 'a dumbbell owner was offered no isolation work at all';
+    }
+    // Everything offered must be performable with dumbbells.
+    foreach ($iso as $slug) {
+        $r = DB::one('SELECT equipment FROM exercises WHERE slug = ?', [$slug]);
+        $eq = json_decode((string) $r['equipment'], true) ?: [];
+        foreach ($eq as $token) {
+            if (!in_array($token, ['dumbbell', 'incline_bench', 'box'], true)) {
+                return "a dumbbell-only user was offered {$slug}, which needs {$token}";
+            }
+        }
+    }
+    return true;
+});
+
+t('the cap keeps the plain version of a movement', function () {
+    /*
+     * The cap takes the first N per muscle, so the ORDER decides which six survive. Plain
+     * alphabetical gave "alternate-incline-dumbbell-curl" and three consecutive barbell shrugs,
+     * because "b" wins. Shortest-name-first is a proxy for how basic a movement is:
+     * "barbell-curl" is shorter than "barbell-curls-lying-against-an-incline" because it is the
+     * plain version, which is what a coach reaches for and what a user recognises.
+     */
+    $v = PlanSchema::vocabulary(null, ['full_gym'], null, ['strength']);
+    $iso = $v['strength']['isolation'] ?? [];
+
+    // At least one recognisable basic per major muscle.
+    foreach ([['curl', 'biceps'], ['shrug', 'traps'], ['calf', 'calves']] as [$word, $muscle]) {
+        $found = false;
+        foreach ($iso as $slug) {
+            if (str_contains($slug, $word) && strlen($slug) < 20) {
+                $found = true;
+                break;
+            }
+        }
+        if (!$found) {
+            return "no short, recognisable {$word} survived the cap for {$muscle}";
+        }
+    }
+    return true;
+});
+
 echo "\n7. cost\n";
 $summary = Claude::usageSummary(1);
 foreach ($summary['by_purpose'] as $row) {
