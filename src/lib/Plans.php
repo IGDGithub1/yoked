@@ -361,6 +361,29 @@ final class Plans
         unset($a);
 
         /*
+         * The access levels this user actually has THIS week.
+         *
+         * Drives the exercise vocabulary, so the model is not shown barbell work by somebody
+         * whose whole week is bodyweight. Taken from the EFFECTIVE grid rather than the raw
+         * one, so a shared day contributes the facility the pair agreed on.
+         *
+         * Only trainable days count: the access recorded against a day they cannot train is
+         * not something they have.
+         */
+        $accessSet = [];
+        foreach ($availability as $a) {
+            // 'sometimes' counts: it is a maybe, not a no, and excluding it would strip the
+            // equipment from exactly the chaotic-schedule user who has least of it.
+            if (!in_array($a['can_train'] ?? 'no', ['yes', 'sometimes'], true)) {
+                continue;
+            }
+            if (($a['access'] ?? null) !== null) {
+                $accessSet[(string) $a['access']] = true;
+            }
+        }
+        $accessSet = array_keys($accessSet);
+
+        /*
          * How many committed sessions this user should get, and where the surplus comes from
          * (§10.3b). Unpaired this is simply their stated count.
          */
@@ -381,7 +404,11 @@ final class Plans
             'food'         => DB::one('SELECT * FROM food_preferences WHERE user_id = ?', [$userId]),
             'training'     => DB::one('SELECT * FROM training_preferences WHERE user_id = ?', [$userId]),
             'constraints'  => Safety::promptBlock($userId),
-            'vocabulary'   => PlanSchema::vocabulary(),
+            // Only what they can perform somewhere in this week (see $accessSet above).
+            'vocabulary'   => PlanSchema::vocabulary(null, $accessSet),
+            // Which of those the user is banned from, so the prompt can mark them rather than
+            // hide them. Enforcement stays with Safety::validatePlan.
+            'banned_slugs' => Safety::bannedSlugs($userId),
             'history'      => self::adherenceHistory($userId, $weekStart),
             'loads'        => self::recentLoads($userId),
             'vetoes'       => self::standingVetoes($userId),
@@ -830,13 +857,37 @@ final class Plans
          */
         $out[] = self::rules((int) ($ctx['committed_target']['committed'] ?? $p['committed_days_per_week']));
 
+        /*
+         * The vocabulary, already narrowed to what this user can perform somewhere this week
+         * (see gatherContext's $accessSet), with anything they are banned from MARKED.
+         *
+         * Marked rather than removed, deliberately. A ban is free text — a real one reads
+         * "box jumps", which is not a slug — so subtracting it reliably is not possible:
+         * "squats" should probably take out back-squat, goblet-squat and bulgarian-split-squat,
+         * and a naive match gets that wrong in both directions.
+         *
+         * Showing the exclusion also beats hiding it. A model that cannot see why a movement is
+         * absent may reach for something adjacent and equally forbidden, where one that sees
+         * "back-squat [BANNED]" knows the whole area is closed. Safety::validatePlan still
+         * enforces it either way — this reduces wasted generations, it is not the boundary.
+         */
+        $banned = $ctx['banned_slugs'] ?? [];
+
         $out[] = '';
         $out[] = '=== EXERCISE VOCABULARY ===';
         $out[] = 'Use ONLY these slugs. They are grouped by category and movement pattern.';
+        if ($banned !== []) {
+            $out[] = 'Anything marked [BANNED] is off limits for this user — a plan containing '
+                   . 'one is rejected. It is listed so you can see what is excluded.';
+        }
         foreach ($ctx['vocabulary'] as $category => $patterns) {
             $out[] = strtoupper((string) $category) . ':';
             foreach ($patterns as $pattern => $slugs) {
-                $out[] = "  {$pattern}: " . implode(', ', $slugs);
+                $marked = [];
+                foreach ($slugs as $slug) {
+                    $marked[] = isset($banned[$slug]) ? "{$slug} [BANNED]" : $slug;
+                }
+                $out[] = "  {$pattern}: " . implode(', ', $marked);
             }
         }
 
@@ -869,6 +920,24 @@ final class Plans
             . 'optional one, not cardio, not mobility, not active recovery. If there is not '
             . 'enough room in their available days for everything worth doing, do less. A '
             . 'plan with a session on a closed day is rejected in full.',
+
+            /*
+             * One entry per exercise, per session.
+             *
+             * A live follower produced "Dumbbell Row 3x10-12 @8kg", then again at 9kg, then
+             * again at 10kg — three entries for one movement, which is three sets of one
+             * exercise written as three exercises. It came from substituting a row for a
+             * pull-up it had no bar for and then filling the remaining slots with the same
+             * substitute.
+             *
+             * Nothing in the UI renders a repeat as anything but two separate exercises, so
+             * even a deliberate one reads as a bug. Safety::checkNoRepeats enforces this; the
+             * rule is here so the model gets it right rather than being corrected on a retry.
+             */
+            'ONE ENTRY PER EXERCISE PER SESSION: never list the same slug twice in the same '
+            . 'session. Multiple sets of a movement are ONE entry with a set count, not '
+            . 'repeated entries. If a substitution would duplicate something already in the '
+            . 'session, pick a different exercise.',
 
             'CUT BY GOAL VALUE, NOT CALENDAR POSITION: if the ideal structure '
             . 'wants more sessions than the committed count allows, drop what '

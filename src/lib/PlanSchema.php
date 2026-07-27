@@ -409,7 +409,25 @@ final class PlanSchema
      *                        bodyweight-only Saturday must not be offered a
      *                        barbell.
      */
-    public static function vocabulary(?string $access = null): array
+    /**
+     * The exercise library the model may choose from.
+     *
+     * @param string|null $access      a single access level, or null for everything
+     * @param list<string> $accessSet  the access levels present in the week; the vocabulary is
+     *                                 the UNION of what is performable at any of them
+     *
+     * WHY A UNION AND NOT ONE LEVEL. Access is per DAY, not per user: somebody can have a full
+     * gym on Monday and bodyweight on Saturday. Filtering to one level would either hide the
+     * barbell work they can do midweek or offer machines on the day they are in a park. The
+     * union keeps everything they can do SOMEWHERE that week, and the availability grid — which
+     * states the access per day — is what tells the model where each one belongs.
+     *
+     * This exists because the parameter was written and never passed. Every caller used the
+     * bare form, so a bodyweight-only user was shown all 90 exercises, picked a barbell lift,
+     * and had the whole plan rejected by checkAvailability afterwards. That is a wasted
+     * generation caused by offering a choice that was always going to be refused.
+     */
+    public static function vocabulary(?string $access = null, array $accessSet = []): array
     {
         $rows = DB::all(
             'SELECT slug, name, category, pattern, equipment, load_type
@@ -419,7 +437,18 @@ final class PlanSchema
 
         $out = [];
         foreach ($rows as $r) {
-            if ($access !== null && !self::availableAt($r, $access)) {
+            if ($accessSet !== []) {
+                $ok = false;
+                foreach ($accessSet as $level) {
+                    if (self::availableAt($r, $level)) {
+                        $ok = true;
+                        break;
+                    }
+                }
+                if (!$ok) {
+                    continue;
+                }
+            } elseif ($access !== null && !self::availableAt($r, $access)) {
                 continue;
             }
             $out[$r['category']][$r['pattern']][] = $r['slug'];

@@ -1473,6 +1473,285 @@ t('a trend with too few readings does not break the nutrition prompt', function 
         ?: 'a trend section was written for a user with no readings';
 });
 
+// ---------------------------------------------------------------------------
+echo "\n6c. one exercise, one entry — and a vocabulary worth choosing from\n";
+
+t('the same slug twice in one session is rejected', function () use ($ids) {
+    /*
+     * A live generation produced "Dumbbell Row @8kg", then again at 9kg, then again at 10kg:
+     * three sets of one movement written as three exercises, from a substitution that collided
+     * with something already in the session.
+     *
+     * Rejected outright rather than only when the prescriptions match — the 8/9/10kg case would
+     * have PASSED a narrower rule, and nothing in the UI renders a repeat as anything but two
+     * separate exercises.
+     */
+    $u = $ids['u1'];
+    $v = Safety::validateTraining([
+        'sessions' => [[
+            'date' => date('Y-m-d', strtotime('next monday')),
+            'session_type' => 'strength',
+            'exercises' => [
+                ['slug' => 'dumbbell-row', 'block' => 'main', 'sets' => 3, 'target_reps' => '10'],
+                ['slug' => 'dumbbell-row', 'block' => 'main', 'sets' => 3, 'target_reps' => '12'],
+            ],
+        ]],
+    ], $u);
+
+    foreach ($v as $violation) {
+        if (str_contains($violation, 'more than once in the same session')) {
+            return true;
+        }
+    }
+    return 'a repeated exercise was accepted: ' . implode(' | ', $v);
+});
+
+t('a repeat is caught across blocks, not just within one', function () {
+    /*
+     * Scoped per SESSION rather than per block. The same movement in the warm-up and the main
+     * block is still two rows on one screen, which is the thing that reads as broken.
+     */
+    $m = new ReflectionMethod(Safety::class, 'checkNoRepeats');
+    $m->setAccessible(true);
+    $v = $m->invoke(null, [
+        'sessions' => [[
+            'date' => '2026-08-03',
+            'exercises' => [
+                ['slug' => 'plank', 'block' => 'warmup'],
+                ['slug' => 'plank', 'block' => 'core'],
+            ],
+        ]],
+    ]);
+    return $v !== [] ?: 'the same movement in two blocks was accepted';
+});
+
+t('an alias does not smuggle a duplicate past the check', function () {
+    /*
+     * Compared on the RESOLVED slug. An alias pair is exactly the shape a duplicate hides in:
+     * two spellings of one movement look different to a string comparison and identical to the
+     * person doing them.
+     */
+    $alias = DB::one(
+        'SELECT a.alias, e.slug FROM exercise_aliases a
+         JOIN exercises e ON e.id = a.exercise_id LIMIT 1'
+    );
+    if ($alias === null) {
+        return null;   // no aliases seeded; nothing this test can say
+    }
+
+    $m = new ReflectionMethod(Safety::class, 'checkNoRepeats');
+    $m->setAccessible(true);
+    $v = $m->invoke(null, [
+        'sessions' => [[
+            'date' => '2026-08-03',
+            'exercises' => [
+                ['slug' => (string) $alias['slug'],  'block' => 'main'],
+                ['slug' => (string) $alias['alias'], 'block' => 'main'],
+            ],
+        ]],
+    ]);
+    return $v !== []
+        ?: "'{$alias['alias']}' and '{$alias['slug']}' were treated as different exercises";
+});
+
+t('two different exercises in one session are fine', function () {
+    // The check must not fire on the normal case.
+    $m = new ReflectionMethod(Safety::class, 'checkNoRepeats');
+    $m->setAccessible(true);
+    $v = $m->invoke(null, [
+        'sessions' => [[
+            'date' => '2026-08-03',
+            'exercises' => [
+                ['slug' => 'plank', 'block' => 'core'],
+                ['slug' => 'dead-bug', 'block' => 'core'],
+            ],
+        ]],
+    ]);
+    return $v === [] ?: 'a clean session was rejected: ' . implode(' | ', $v);
+});
+
+t('the same slug on DIFFERENT days is fine', function () {
+    // Squatting Monday and Thursday is a programme, not a duplicate.
+    $m = new ReflectionMethod(Safety::class, 'checkNoRepeats');
+    $m->setAccessible(true);
+    $v = $m->invoke(null, [
+        'sessions' => [
+            ['date' => '2026-08-03', 'exercises' => [['slug' => 'plank', 'block' => 'core']]],
+            ['date' => '2026-08-06', 'exercises' => [['slug' => 'plank', 'block' => 'core']]],
+        ],
+    ]);
+    return $v === [] ?: 'the same movement on two days was rejected';
+});
+
+t('the prompt asks for one entry per exercise', function () use ($ids) {
+    // Belt and braces: the check catches it, the rule stops it happening.
+    $u    = $ids['u1'];
+    $week = date('Y-m-d', strtotime('next monday'));
+
+    $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+    $gather->setAccessible(true);
+    $ctx = $gather->invoke(null, $u, $week);
+
+    $sys = new ReflectionMethod(Plans::class, 'systemPrompt');
+    $sys->setAccessible(true);
+    return str_contains((string) $sys->invoke(null, $ctx), 'ONE ENTRY PER EXERCISE PER SESSION')
+        ?: 'the rule is not in the prompt';
+});
+
+t('the vocabulary is narrowed to what the user can actually perform', function () {
+    /*
+     * vocabulary() took an $access parameter that was never passed, so a bodyweight-only user
+     * was shown all 90 exercises, picked a barbell lift, and had the plan rejected by
+     * checkAvailability afterwards — a wasted generation caused by offering a choice that was
+     * always going to be refused.
+     */
+    $all  = PlanSchema::vocabulary();
+    $body = PlanSchema::vocabulary(null, ['bodyweight']);
+
+    $count = static function (array $v): int {
+        $n = 0;
+        foreach ($v as $patterns) {
+            foreach ($patterns as $slugs) {
+                $n += count($slugs);
+            }
+        }
+        return $n;
+    };
+
+    $nAll  = $count($all);
+    $nBody = $count($body);
+
+    if ($nBody === 0) {
+        return 'a bodyweight user gets an EMPTY vocabulary';
+    }
+    return $nBody < $nAll
+        ?: "bodyweight sees {$nBody} of {$nAll} exercises, which is no filtering at all";
+});
+
+t('a mixed week gets the UNION, not the most restrictive day', function () {
+    /*
+     * Access is per DAY. Somebody with a full gym on Monday and a park on Saturday can still
+     * squat on Monday, so filtering to the worst day of the week would hide most of their
+     * library. The availability grid says which day is which.
+     */
+    $mixed = PlanSchema::vocabulary(null, ['full_gym', 'bodyweight']);
+    $body  = PlanSchema::vocabulary(null, ['bodyweight']);
+
+    $count = static function (array $v): int {
+        $n = 0;
+        foreach ($v as $patterns) {
+            foreach ($patterns as $slugs) {
+                $n += count($slugs);
+            }
+        }
+        return $n;
+    };
+    return $count($mixed) > $count($body)
+        ?: 'a mixed week was narrowed to its most restrictive day';
+});
+
+t('a banned movement is MARKED in the vocabulary, not hidden', function () use ($ids) {
+    /*
+     * Marked rather than removed. A ban is free text — a real one reads "box jumps", which is
+     * not a slug — so subtracting reliably is not possible, and a model that cannot see why
+     * something is absent may reach for an adjacent movement that is equally forbidden.
+     *
+     * Safety::validatePlan still enforces it. This only saves a generation.
+     */
+    $u = $ids['u1'];
+
+    // A ban recorded as a display name, which is the awkward case.
+    $ex = DB::one('SELECT slug, name FROM exercises WHERE slug = "back-squat"')
+        ?? DB::one('SELECT slug, name FROM exercises WHERE pattern = "squat" LIMIT 1');
+    if ($ex === null) {
+        return null;
+    }
+    DB::run(
+        'INSERT INTO user_constraints (user_id, kind, tier, subject, reason, source)
+         VALUES (?, "movement", "hard", ?, "probe", "onboarding")',
+        [$u, (string) $ex['name']]
+    );
+
+    try {
+        $banned = Safety::bannedSlugs($u);
+        if (!isset($banned[(string) $ex['slug']])) {
+            return "the ban on '{$ex['name']}' does not cover its own slug";
+        }
+
+        $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+        $gather->setAccessible(true);
+        $ctx = $gather->invoke(null, $u, date('Y-m-d', strtotime('next monday')));
+
+        $sys = new ReflectionMethod(Plans::class, 'systemPrompt');
+        $sys->setAccessible(true);
+        $text = (string) $sys->invoke(null, $ctx);
+
+        if (!str_contains($text, "{$ex['slug']} [BANNED]")) {
+            return 'the banned exercise is not marked in the vocabulary';
+        }
+        // Still listed, so the model can see the exclusion rather than guessing at a gap.
+        return str_contains($text, '[BANNED] is off limits')
+            ?: 'nothing explains what the marking means';
+    } finally {
+        DB::run(
+            'DELETE FROM user_constraints WHERE user_id = ? AND reason = "probe"', [$u]
+        );
+    }
+});
+
+t('the annotation agrees with the validator', function () use ($ids) {
+    /*
+     * The property that makes marking safe. If the two disagreed, the prompt would either mark
+     * something the validator allows — narrowing the options for no reason — or fail to mark
+     * something it rejects, which is the wasted generation this exists to prevent.
+     *
+     * They share one matching function; this asserts the outcome rather than the mechanism.
+     */
+    $u = $ids['u1'];
+    $ex = DB::one('SELECT slug, name FROM exercises WHERE pattern = "squat" LIMIT 1');
+    if ($ex === null) {
+        return null;
+    }
+    DB::run(
+        'INSERT INTO user_constraints (user_id, kind, tier, subject, reason, source)
+         VALUES (?, "movement", "hard", ?, "probe", "onboarding")',
+        [$u, (string) $ex['name']]
+    );
+
+    try {
+        $marked = isset(Safety::bannedSlugs($u)[(string) $ex['slug']]);
+
+        // What the validator says about a plan that uses it.
+        $v = Safety::validateTraining([
+            'sessions' => [[
+                'date' => date('Y-m-d', strtotime('next monday')),
+                'session_type' => 'strength',
+                'exercises' => [
+                    ['slug' => (string) $ex['slug'], 'block' => 'main',
+                     'sets' => 3, 'target_reps' => '8'],
+                ],
+            ]],
+        ], $u);
+        $rejected = false;
+        foreach ($v as $violation) {
+            if (str_contains($violation, 'hard constraint')) {
+                $rejected = true;
+            }
+        }
+
+        return $marked === $rejected
+            ?: sprintf(
+                'marked=%s but validator rejects=%s',
+                $marked ? 'yes' : 'no',
+                $rejected ? 'yes' : 'no'
+            );
+    } finally {
+        DB::run(
+            'DELETE FROM user_constraints WHERE user_id = ? AND reason = "probe"', [$u]
+        );
+    }
+});
+
 echo "\n7. cost\n";
 $summary = Claude::usageSummary(1);
 foreach ($summary['by_purpose'] as $row) {

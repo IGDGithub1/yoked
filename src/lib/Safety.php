@@ -182,6 +182,7 @@ final class Safety
             self::checkAvailability($plan, $userId),
             self::checkCommittedCount($plan, $userId),
             self::checkExerciseLibrary($plan),
+            self::checkNoRepeats($plan),
             self::checkCoreBlocks($plan)
         )));
     }
@@ -204,6 +205,45 @@ final class Safety
             self::checkMealCompleteness($plan),
             self::checkFloors($plan, $bans['floors'])
         )));
+    }
+
+    /**
+     * Which library slugs this user's hard bans actually cover.
+     *
+     * Used to MARK the exercise vocabulary in the prompt, so the model can see what is excluded
+     * instead of picking something forbidden and having the plan rejected afterwards.
+     *
+     * LIVES HERE, NEXT TO checkExercises, AND USES ITS MATCHING RULE. If the annotation and the
+     * check disagreed, the prompt would either mark something the validator allows — narrowing
+     * the model's options for no reason — or fail to mark something it rejects, which is the
+     * wasted generation this is meant to prevent. Two copies of a fuzzy text match would drift
+     * within a month; one function cannot.
+     *
+     * @return array<string,true> keyed by slug, for isset() lookups
+     */
+    public static function bannedSlugs(int $userId): array
+    {
+        $bans = self::hardBans($userId);
+        $all  = $bans['movement'] + $bans['cardio'];
+        if ($all === []) {
+            return [];
+        }
+
+        $out = [];
+        foreach (DB::all('SELECT slug, name FROM exercises') as $e) {
+            $slug = (string) $e['slug'];
+            $name = (string) $e['name'];
+            foreach ($all as $banned => $_c) {
+                // The same two-way comparison checkExercises makes: a ban is recorded as
+                // either a slug-ish string or a display name.
+                if (stripos($slug, str_replace(' ', '-', (string) $banned)) !== false
+                    || stripos($name, (string) $banned) !== false) {
+                    $out[$slug] = true;
+                    break;
+                }
+            }
+        }
+        return $out;
     }
 
     /**
@@ -693,6 +733,62 @@ final class Safety
      * Core on every strength day (§3.3b) — on by default, so its absence is a
      * spec violation rather than a stylistic choice.
      */
+    /**
+     * No exercise twice in the same session.
+     *
+     * A live generation produced "Dumbbell Row @8kg", then again at 9kg, then again at 10kg:
+     * three sets of one movement written as three exercises. It arose from a substitution — the
+     * follower had no pull-up bar, swapped in a row, and the next slot already held one.
+     *
+     * WHY "NEVER" RATHER THAN A NARROWER RULE. The obvious softer version is to allow a repeat
+     * when the prescriptions differ, which would let a deliberate cluster set or a
+     * two-rep-scheme prescription through. It would also have PASSED the case above, since
+     * 8/9/10kg differ. And nothing in the UI renders a repeated slug as anything but two
+     * separate exercises, so even an intentional one reads as a bug to the person following it.
+     *
+     * The edge case this rejects is a hyper-focused session on one muscle group with limited
+     * equipment, where duplication is arguably the only way to fill the time. Judged not worth
+     * it: even bodyweight access leaves 19 exercises, and the hinge, squat and lunge patterns
+     * cover a glute-focused hour without repeating anything.
+     *
+     * Scoped PER SESSION, not per block. The same movement in the warm-up and the main block
+     * would still be two rows on one screen, which is the thing that reads as broken.
+     */
+    private static function checkNoRepeats(array $plan): array
+    {
+        $violations = [];
+
+        foreach ($plan['sessions'] ?? [] as $session) {
+            $date  = (string) ($session['date'] ?? '?');
+            $seen  = [];
+            $dupes = [];
+
+            foreach ($session['exercises'] ?? [] as $ex) {
+                $slug = trim((string) ($ex['slug'] ?? ''));
+                if ($slug === '') {
+                    continue;   // checkExerciseLibrary reports the missing slug
+                }
+                /*
+                 * Compared on the RESOLVED slug, so "DB Bench" and "db-bench-press" count as
+                 * the same movement. An alias pair is exactly the shape a duplicate hides in.
+                 */
+                $canonical = PlanSchema::resolveSlug($slug) ?? strtolower($slug);
+                if (isset($seen[$canonical])) {
+                    $dupes[$canonical] = true;
+                }
+                $seen[$canonical] = true;
+            }
+
+            foreach (array_keys($dupes) as $slug) {
+                $violations[] = "{$date} lists '{$slug}' more than once in the same session. "
+                    . 'Multiple sets are ONE entry with a set count, not repeated entries. '
+                    . 'Replace the duplicate with a different exercise or remove it.';
+            }
+        }
+
+        return $violations;
+    }
+
     private static function checkCoreBlocks(array $plan): array
     {
         $violations = [];
