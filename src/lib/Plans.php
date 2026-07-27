@@ -310,6 +310,9 @@ final class Plans
              * first looks like.
              */
             'skeleton'     => BuddySkeleton::toFollow($userId, $weekStart),
+            // §10.4. Whether the pairing is doing what §10.0 bet it would. Null when unpaired
+            // or when no shared session has come round yet.
+            'buddy_adherence' => self::buddyAdherence($userId, $weekStart),
         ];
     }
 
@@ -327,6 +330,90 @@ final class Plans
              ORDER BY ld.log_date DESC',
             [$userId, $weekStart, $weekStart]
         );
+    }
+
+    /**
+     * Is the pairing actually working? (§10.4)
+     *
+     * §10.0 bets that pairing improves adherence — that somebody beholden to a friend keeps
+     * going where a solo user quits. Nothing measured whether that bet pays off, for a given
+     * pair or at all, and a coach cannot adjust something it cannot see.
+     *
+     * NOT A NUDGE. The obvious reading of §10.4 is "tell them their buddy trained and they did
+     * not", and that is worth nothing: if the two of them meet on Wednesday and one does not
+     * show, the other learns it by standing in the gym alone. An app narrating that afterwards
+     * is telling somebody what they already lived through.
+     *
+     * What the app cannot see from the gym floor is the PATTERN: shared days quietly being
+     * skipped while solo days get done, or a pair who log the same days and never actually
+     * meet. That is what this reports, and it goes to the coach rather than to the buddy.
+     *
+     * Returns null when unpaired, so the prompt says nothing at all.
+     */
+    private static function buddyAdherence(int $userId, string $weekStart): ?array
+    {
+        $pair = BuddySchedule::activePair($userId);
+        if ($pair === null) {
+            return null;
+        }
+
+        /*
+         * Shared sessions in the last four weeks: prescribed, completed, and how many were
+         * actually done together.
+         *
+         * Keyed off shared_skeleton_key rather than the weekday, because the agreed days can
+         * change mid-window and a session's own row is the only record of what it was when it
+         * was prescribed.
+         */
+        $row = DB::one(
+            'SELECT
+                COUNT(*) AS shared_prescribed,
+                SUM(ls.id IS NOT NULL AND ls.status = "completed") AS shared_completed,
+                SUM(ls.trained_with_buddy = 1) AS shared_together
+             FROM prescribed_sessions ps
+             JOIN plan_versions pv ON pv.id = ps.plan_version_id
+             LEFT JOIN logged_sessions ls ON ls.prescribed_session_id = ps.id
+             WHERE pv.user_id = ?
+               AND pv.superseded_at IS NULL
+               AND ps.shared_skeleton_key IS NOT NULL
+               AND ps.is_committed = 1
+               AND ps.session_date >= DATE_SUB(?, INTERVAL 28 DAY)
+               AND ps.session_date < ?',
+            [$userId, $weekStart, $weekStart]
+        );
+
+        // The same question for the days they train alone, which is the comparison that makes
+        // the shared figure mean anything.
+        $solo = DB::one(
+            'SELECT
+                COUNT(*) AS solo_prescribed,
+                SUM(ls.id IS NOT NULL AND ls.status = "completed") AS solo_completed
+             FROM prescribed_sessions ps
+             JOIN plan_versions pv ON pv.id = ps.plan_version_id
+             LEFT JOIN logged_sessions ls ON ls.prescribed_session_id = ps.id
+             WHERE pv.user_id = ?
+               AND pv.superseded_at IS NULL
+               AND ps.shared_skeleton_key IS NULL
+               AND ps.is_committed = 1
+               AND ps.session_date >= DATE_SUB(?, INTERVAL 28 DAY)
+               AND ps.session_date < ?',
+            [$userId, $weekStart, $weekStart]
+        );
+
+        $sharedPrescribed = (int) ($row['shared_prescribed'] ?? 0);
+        if ($sharedPrescribed === 0) {
+            // Paired, but no shared sessions have come round yet. Nothing to report and
+            // nothing to infer from silence.
+            return null;
+        }
+
+        return [
+            'shared_prescribed' => $sharedPrescribed,
+            'shared_completed'  => (int) ($row['shared_completed'] ?? 0),
+            'shared_together'   => (int) ($row['shared_together'] ?? 0),
+            'solo_prescribed'   => (int) ($solo['solo_prescribed'] ?? 0),
+            'solo_completed'    => (int) ($solo['solo_completed'] ?? 0),
+        ];
     }
 
     /**
@@ -946,6 +1033,40 @@ final class Plans
                         . 'Do not add extra training days beyond them.',
                     default           => '',
                 };
+            }
+
+            /*
+             * Is the pairing earning its keep? (§10.4)
+             *
+             * §10.0 trades training precision for adherence, on the bet that somebody beholden
+             * to a friend sticks with it. This is the only place the app can check whether that
+             * bet is paying off for THIS pair, and the coach is the only thing that can act on
+             * the answer.
+             *
+             * Given as counts rather than a verdict. "3 of 4 shared, 1 of 4 solo" is a fact the
+             * model can weigh against everything else it knows; "the pairing is working" is a
+             * judgement made here with none of that context.
+             */
+            $ba = $ctx['buddy_adherence'] ?? null;
+            if ($ba !== null) {
+                $out[] = '';
+                $out[] = sprintf(
+                    'Over the last 4 weeks: %d of %d SHARED sessions done, %d of those actually '
+                    . 'trained together.',
+                    $ba['shared_completed'], $ba['shared_prescribed'], $ba['shared_together']
+                );
+                if ($ba['solo_prescribed'] > 0) {
+                    $out[] = sprintf(
+                        'On their own days: %d of %d done.',
+                        $ba['solo_completed'], $ba['solo_prescribed']
+                    );
+                }
+                $out[] = 'Use this to judge whether the pairing is helping them. If the shared '
+                       . 'days are the ones getting done, lean further into them. If the shared '
+                       . 'days are being skipped, or they are logged as done but not TOGETHER, '
+                       . 'the pairing is not doing its job and the week should not depend on it.';
+                $out[] = 'Do not comment on what their buddy did or did not do, and do not use '
+                       . 'their buddy to shame them into training.';
             }
         }
 

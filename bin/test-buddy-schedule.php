@@ -39,6 +39,7 @@ require YK_SRC . '/lib/Settings.php';
 require YK_SRC . '/lib/Drift.php';         // BuddyAbsence reads lastLoggedDate
 require YK_SRC . '/lib/BuddyAbsence.php';  // Plans::gatherContext reads it
 require YK_SRC . '/lib/BuddySkeleton.php';  // Plans::gatherContext and Plans::persist read it
+require YK_SRC . '/lib/Training.php';       // §10.4 asserts on the day payload's is_shared
 
 $keep = in_array('--keep', array_slice($argv, 1), true);
 
@@ -2065,6 +2066,308 @@ t('divergence on a hard constraint is explicitly allowed', function () {
     }
     return str_contains($text, 'hard constraints forbid')
         ?: 'nothing tells the model it may diverge for a hard constraint';
+});
+
+// ---------------------------------------------------------------------------
+echo "\n12. is the pairing actually working? (§10.4)\n";
+
+/**
+ * Log a session against a prescribed one.
+ *
+ * $together is the answer to "did you train with your buddy", which is the whole datum §10.4
+ * turns on.
+ */
+function logAgainst(int $userId, int $prescribedId, string $date,
+                    string $status, bool $together): void
+{
+    $dayId = DB::one(
+        'SELECT id FROM logged_days WHERE user_id = ? AND log_date = ?', [$userId, $date]
+    );
+    $dayId = $dayId === null
+        ? (int) DB::insert(
+            'INSERT INTO logged_days (user_id, log_date) VALUES (?, ?)', [$userId, $date]
+        )
+        : (int) $dayId['id'];
+
+    DB::run(
+        'INSERT INTO logged_sessions
+            (logged_day_id, user_id, prescribed_session_id, session_type, status,
+             actual_minutes, trained_with_buddy)
+         VALUES (?, ?, ?, "strength", ?, 45, ?)',
+        [$dayId, $userId, $prescribedId, $status, $together ? 1 : 0]
+    );
+}
+
+/** The §10.4 signal for a user, via reflection since it is private. */
+function adherenceFor(int $userId, string $week): ?array
+{
+    $m = new ReflectionMethod(Plans::class, 'buddyAdherence');
+    $m->setAccessible(true);
+    return $m->invoke(null, $userId, $week);
+}
+
+t('an unpaired user has no pairing signal at all', function () {
+    // Not zeroes: silence. A solo user's prompt must not carry a buddy section saying 0 of 0.
+    $solo = seedUser('ba_solo', 3);
+    grid($solo, [1 => [60, 'full_gym']]);
+    return adherenceFor($solo, nextWeek()) === null
+        ?: 'an unpaired user was given a pairing signal';
+});
+
+t('a pair with no shared sessions yet reports nothing', function () {
+    /*
+     * Paired on Monday but the week has not come round. Reporting "0 of 0 done" would read as
+     * a failure to the coach when nothing has happened yet, and §10.5 is clear that a pairing
+     * must never make somebody look behind.
+     */
+    $a = seedUser('ba_new_a', 3);
+    $b = seedUser('ba_new_b', 3);
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    return adherenceFor($a, nextWeek()) === null
+        ?: 'a pairing with no history reported a score';
+});
+
+t('shared and solo days are counted separately', function () {
+    /*
+     * The comparison is the point. "3 of 4 shared done" means nothing on its own; "3 of 4
+     * shared and 1 of 4 solo" says the pairing is carrying them, and the reverse says it is
+     * not. §10.0 traded precision for adherence, and this is the only place the app can check
+     * whether that trade paid.
+     */
+    $a = seedUser('ba_mix_a', 4);
+    $b = seedUser('ba_mix_b', 4);
+    grid($a, [1 => [60, 'full_gym'], 2 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    $pairId = pairUp($a, $b);
+
+    // A week in the PAST, since the signal looks back 28 days from the given week start.
+    $past = date('Y-m-d', strtotime('monday -2 weeks'));
+    $week = date('Y-m-d', strtotime('next monday'));
+
+    $planId = (int) DB::insert(
+        'INSERT INTO plan_versions (user_id, week_start, version, reason)
+         VALUES (?, ?, 1, "initial")',
+        [$a, $past]
+    );
+
+    // Mon and Wed are shared; Tue is A's own.
+    $ids = [];
+    foreach ([1 => true, 2 => false, 3 => true] as $wd => $shared) {
+        $date = date('Y-m-d', strtotime($past . ' +' . ($wd - 1) . ' days'));
+        $ids[$wd] = [(int) DB::insert(
+            'INSERT INTO prescribed_sessions
+                (plan_version_id, session_date, session_type, focus, is_committed,
+                 target_minutes, shared_skeleton_key, sort_order)
+             VALUES (?, ?, "strength", "lower", 1, 60, ?, ?)',
+            [$planId, $date, $shared ? BuddySkeleton::keyFor($pairId, $date) : null, $wd]
+        ), $date];
+    }
+
+    // Both shared days done, and both actually together. The solo Tuesday skipped.
+    logAgainst($a, $ids[1][0], $ids[1][1], 'completed', true);
+    logAgainst($a, $ids[3][0], $ids[3][1], 'completed', true);
+    logAgainst($a, $ids[2][0], $ids[2][1], 'skipped', false);
+
+    $r = adherenceFor($a, $week);
+    if ($r === null) {
+        return 'no signal despite two shared sessions';
+    }
+    if ($r['shared_prescribed'] !== 2 || $r['shared_completed'] !== 2) {
+        return "shared: {$r['shared_completed']} of {$r['shared_prescribed']}, expected 2 of 2";
+    }
+    if ($r['shared_together'] !== 2) {
+        return "only {$r['shared_together']} of the shared sessions were together";
+    }
+    return ($r['solo_prescribed'] === 1 && $r['solo_completed'] === 0)
+        ?: "solo: {$r['solo_completed']} of {$r['solo_prescribed']}, expected 0 of 1";
+});
+
+t('a session done ALONE on a shared day is counted, but not as together', function () {
+    /*
+     * The distinction the checkbox exists for. Somebody who trains on the agreed day without
+     * their buddy has still trained — that is adherence — but the PAIRING did not happen, and
+     * a coach reading "shared days all done" would draw the wrong conclusion about why.
+     */
+    $a = seedUser('ba_alone_a', 3);
+    $b = seedUser('ba_alone_b', 3);
+    grid($a, [1 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    $pairId = pairUp($a, $b);
+
+    $past = date('Y-m-d', strtotime('monday -2 weeks'));
+    $week = date('Y-m-d', strtotime('next monday'));
+
+    $planId = (int) DB::insert(
+        'INSERT INTO plan_versions (user_id, week_start, version, reason)
+         VALUES (?, ?, 1, "initial")',
+        [$a, $past]
+    );
+    $sid = (int) DB::insert(
+        'INSERT INTO prescribed_sessions
+            (plan_version_id, session_date, session_type, focus, is_committed,
+             target_minutes, shared_skeleton_key, sort_order)
+         VALUES (?, ?, "strength", "lower", 1, 60, ?, 0)',
+        [$planId, $past, BuddySkeleton::keyFor($pairId, $past)]
+    );
+    logAgainst($a, $sid, $past, 'completed', false);
+
+    $r = adherenceFor($a, $week);
+    if ($r === null) {
+        return 'no signal';
+    }
+    if ($r['shared_completed'] !== 1) {
+        return 'the session was not counted as done';
+    }
+    return $r['shared_together'] === 0
+        ?: 'a solo session on a shared day was counted as trained together';
+});
+
+t('the prompt reports counts, and refuses to shame them with it', function () {
+    /*
+     * §10.4: buddy pressure is gentle regardless of tone. Somebody who picked sarcastic hardass
+     * chose that for the app's voice, not for having a friend's attendance held over them —
+     * "your buddy showed up and you did not" is the app doing something a real friend would
+     * not.
+     *
+     * The numbers go to the COACH so it can adjust the week. They are not a stick.
+     */
+    $a = seedUser('ba_prm_a', 3);
+    $b = seedUser('ba_prm_b', 3);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    DB::run(
+        'INSERT INTO goals (user_id, primary_goal, success_statement, requested_timeline,
+                            horizon_weeks, scale_vs_feel, status)
+         VALUES (?, "lose_fat", "x", "16_weeks", 16, "both", "active")', [$a]
+    );
+    $pairId = pairUp($a, $b);
+
+    $past = date('Y-m-d', strtotime('monday -2 weeks'));
+    $week = date('Y-m-d', strtotime('next monday'));
+    $planId = (int) DB::insert(
+        'INSERT INTO plan_versions (user_id, week_start, version, reason)
+         VALUES (?, ?, 1, "initial")',
+        [$a, $past]
+    );
+    $sid = (int) DB::insert(
+        'INSERT INTO prescribed_sessions
+            (plan_version_id, session_date, session_type, focus, is_committed,
+             target_minutes, shared_skeleton_key, sort_order)
+         VALUES (?, ?, "strength", "lower", 1, 60, ?, 0)',
+        [$planId, $past, BuddySkeleton::keyFor($pairId, $past)]
+    );
+    logAgainst($a, $sid, $past, 'completed', true);
+
+    $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+    $gather->setAccessible(true);
+    $ctx = $gather->invoke(null, $a, $week);
+    if (($ctx['buddy_adherence'] ?? null) === null) {
+        return 'gatherContext did not pick up the signal';
+    }
+
+    $prompt = new ReflectionMethod(Plans::class, 'userPrompt');
+    $prompt->setAccessible(true);
+    $text = (string) $prompt->invoke(null, $ctx, $week, []);
+
+    if (!str_contains($text, 'SHARED sessions done')) {
+        return 'the counts are not in the prompt';
+    }
+    if (!str_contains($text, 'trained together')) {
+        return 'the together count is not in the prompt';
+    }
+    /*
+     * The instruction that keeps this a coaching signal rather than a stick.
+     *
+     * Asserted on both halves of it, because they fail differently: without the first the model
+     * narrates the buddy's attendance back at the user, and without the second it can use
+     * "your buddy showed up" as leverage. Either turns a measurement into a nudge, which is the
+     * thing this deliberately is not.
+     */
+    if (!preg_match('/do not comment on what their buddy did/i', $text)) {
+        return 'nothing stops the coach reporting on the buddy';
+    }
+    return preg_match('/shame them into training/i', $text) === 1
+        ?: 'nothing stops the coach using the buddy as leverage';
+});
+
+t('an unpaired user prompt says nothing about pairing adherence', function () {
+    $solo = seedUser('ba_qui', 3);
+    grid($solo, [1 => [60, 'full_gym']]);
+    DB::run(
+        'INSERT INTO goals (user_id, primary_goal, success_statement, requested_timeline,
+                            horizon_weeks, scale_vs_feel, status)
+         VALUES (?, "lose_fat", "x", "16_weeks", 16, "both", "active")', [$solo]
+    );
+
+    $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+    $gather->setAccessible(true);
+    $ctx = $gather->invoke(null, $solo, nextWeek());
+
+    $prompt = new ReflectionMethod(Plans::class, 'userPrompt');
+    $prompt->setAccessible(true);
+    $text = (string) $prompt->invoke(null, $ctx, nextWeek(), []);
+
+    return !str_contains($text, 'SHARED sessions done')
+        ?: 'a solo user prompt talks about shared sessions';
+});
+
+t('a shared session is flagged to the client, and a solo one is not', function () {
+    /*
+     * What decides whether the "trained with your buddy?" question appears at all. Asking it on
+     * a solo Tuesday, or of somebody with no buddy, is the noise that teaches people to ignore
+     * a checkbox.
+     */
+    $a = seedUser('ba_ui_a', 3);
+    $b = seedUser('ba_ui_b', 3);
+    grid($a, [1 => [60, 'full_gym'], 2 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym']]);
+    $pairId = pairUp($a, $b);
+
+    $week   = date('Y-m-d', strtotime('next monday'));
+    $mon    = $week;
+    $tue    = date('Y-m-d', strtotime($week . ' +1 days'));
+    $planId = (int) DB::insert(
+        'INSERT INTO plan_versions (user_id, week_start, version, reason)
+         VALUES (?, ?, 1, "initial")',
+        [$a, $week]
+    );
+    DB::run(
+        'INSERT INTO prescribed_sessions
+            (plan_version_id, session_date, session_type, focus, is_committed,
+             target_minutes, shared_skeleton_key, sort_order)
+         VALUES (?, ?, "strength", "lower", 1, 60, ?, 0)',
+        [$planId, $mon, BuddySkeleton::keyFor($pairId, $mon)]
+    );
+    DB::run(
+        'INSERT INTO prescribed_sessions
+            (plan_version_id, session_date, session_type, focus, is_committed,
+             target_minutes, shared_skeleton_key, sort_order)
+         VALUES (?, ?, "strength", "upper", 1, 60, NULL, 1)',
+        [$planId, $tue]
+    );
+
+    $shared = Training::day($a, $mon);
+    $solo   = Training::day($a, $tue);
+
+    if (($shared['sessions'][0]['is_shared'] ?? null) !== true) {
+        return 'the shared Monday is not flagged';
+    }
+    if (($solo['sessions'][0]['is_shared'] ?? null) !== false) {
+        return 'the solo Tuesday is flagged as shared';
+    }
+    // And the pairing flag, which is what lets a free-form log ask the question at all.
+    return ($shared['paired'] ?? null) === true
+        ?: 'the day payload does not say the user is paired';
+});
+
+t('an unpaired user day payload says so', function () {
+    $solo = seedUser('ba_ui_solo', 3);
+    grid($solo, [1 => [60, 'full_gym']]);
+    return (Training::day($solo, date('Y-m-d', strtotime('next monday')))['paired'] ?? null) === false
+        ?: 'an unpaired user is reported as paired';
 });
 
 // ---------------------------------------------------------------------------

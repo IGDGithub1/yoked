@@ -390,6 +390,44 @@ await check('the prescribed target is visible while typing', async () => {
   return /Asked for:.*3 × 10/.test(txt) ? true : `no target line: ${txt.replace(/\n/g, ' | ')}`
 })
 
+await check('a shared session asks about the buddy, already ticked', async () => {
+  /*
+   * 10.4. Showing up together is what agreeing to a shared day MEANT, so the expected answer is
+   * yes and it costs nothing to confirm. Defaulting to unchecked would quietly under-report
+   * every session logged in a hurry, which is the measurement this exists to get right.
+   */
+  const card = page.locator('.card', { hasText: 'Full body' }).first()
+  const box = card.getByRole('checkbox', { name: /trained with my buddy/i })
+  if ((await box.count()) === 0) {
+    return 'a shared session does not ask about the buddy'
+  }
+  return (await box.first().isChecked())
+    ? true
+    : 'the question is there but starts unticked'
+})
+
+await check('the question is not asked on a session nobody shares', async () => {
+  /*
+   * The conditioning session carries no skeleton key, so there is nobody to have trained it
+   * with. Asking anyway is the noise that teaches people to ignore the box — and it used to be
+   * asked of everybody, including users with no buddy at all.
+   */
+  const card = page.locator('.card', { hasText: 'Conditioning' }).first()
+  const open = card.getByRole('button', { name: /log this session/i })
+  if ((await open.count()) === 0) return 'the optional session cannot be logged'
+  await open.first().click()
+
+  const box = card.getByRole('checkbox', { name: /trained with my buddy/i })
+  await page.waitForTimeout(400)
+  const asked = (await box.count()) > 0
+
+  // Leave the form as it was found.
+  const cancel = card.getByRole('button', { name: /cancel/i })
+  if (await cancel.count()) await cancel.first().click()
+
+  return asked ? 'a solo session asks about a buddy' : true
+})
+
 await check('logging the session saves it', async () => {
   const card = page.locator('.card', { hasText: 'Full body' }).first()
   // Fill an RPE on the first exercise so there is something beyond the defaults.
@@ -397,6 +435,28 @@ await check('logging the session saves it', async () => {
   await inputs.nth(3).fill('8')
   await card.getByRole('button', { name: /^done$/i }).click()
   await card.getByRole('button', { name: /remove/i }).waitFor({ timeout: 20000 })
+})
+
+await check('the answer reaches the server, not just the form', async () => {
+  // The checkbox was left ticked above, so the saved session must say so. A default that never
+  // gets sent is the same as no default.
+  const saved = await page.evaluate(async () => {
+    const d = new Date()
+    const date = [
+      d.getFullYear(),
+      String(d.getMonth() + 1).padStart(2, '0'),
+      String(d.getDate()).padStart(2, '0'),
+    ].join('-')
+    const r = await fetch(`/api/training/day/${date}`, { credentials: 'same-origin' })
+    const body = await r.json()
+    return (body.sessions ?? [])
+      .filter((s) => s.logged)
+      .map((s) => s.logged.trained_with_buddy)
+  })
+  if (saved.length === 0) return 'no logged session came back'
+  return saved.includes(true)
+    ? true
+    : `the buddy answer was not saved: ${JSON.stringify(saved)}`
 })
 
 await check('adherence counts the committed session', async () => {
@@ -1131,9 +1191,18 @@ await check('an open check-in is surfaced with its week', async () => {
   const card = page.locator('.checkin-weekly')
   await card.waitFor({ timeout: 20000 })
   const txt = await card.innerText()
-  // Which week, spelled out: the form opens on Saturday so "this week" is
-  // ambiguous without the dates.
-  return /\d+ to \d+ \w+/.test(txt) ? true : `card read: ${txt.replace(/\n/g, ' | ')}`
+  /*
+   * Which week, spelled out: the form opens on Saturday so "this week" is ambiguous without
+   * the dates.
+   *
+   * Both shapes are legal. A week inside one month reads "20 to 26 July"; a week that crosses
+   * one reads "27 July to 2 August". The old pattern only matched the first, so this failed for
+   * the first time on 26 July with nothing wrong — a date-dependent test that passes 11 months
+   * of the year is worse than no test, because the failure looks like a regression.
+   */
+  return /\d+ (\w+ )?to \d+ \w+/.test(txt)
+    ? true
+    : `card read: ${txt.replace(/\n/g, ' | ')}`
 })
 
 await check('the profile is reachable from the Dashboard, not the nav', async () => {

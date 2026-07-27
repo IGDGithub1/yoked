@@ -284,15 +284,28 @@ $seed = DB::tx(function () use ($prescribe, $monday): array {
     // name at all. Use the enum values, not prose.
     // Sessions on all three days too, for the same timezone reason as the meals.
     foreach ($prescribe as $date) {
+        /*
+         * The committed session is a SHARED one (§10.4).
+         *
+         * shared_skeleton_key is what makes the "trained with my buddy?" question appear, and
+         * it is set here rather than left to the pairing flow because the training section runs
+         * before the buddy section accepts the invitation. A key on a session whose pair is
+         * still pending is exactly the state a real user is in the week after they pair up.
+         *
+         * The cardio session below deliberately has none, so the suite can assert the question
+         * is absent on a solo session in the same day.
+         */
         $committed = DB::insert(
             'INSERT INTO prescribed_sessions
                 (plan_version_id, session_date, session_type, focus, focus_detail,
                  is_committed, target_minutes, location, warmup_minutes,
-                 warmup_detail, rationale)
-             VALUES (?, ?, "strength", "full", ?, 1, 55, "full_gym", 10, ?, ?)',
+                 warmup_detail, rationale, shared_skeleton_key)
+             VALUES (?, ?, "strength", "full", ?, 1, 55, "full_gym", 10, ?, ?, ?)',
             [$planId, $date, 'Compound lifts, moderate volume.',
              'Bike five minutes, then ramp.',
-             'Week one is about establishing load, not chasing it.']
+             'Week one is about establishing load, not chasing it.',
+             // Stable and fixture-local; the real value comes from BuddySkeleton::keyFor.
+             substr(hash('sha256', "uitest:{$date}"), 0, 8) . '-uite-st00-0000-000000000000']
         );
         DB::run(
             'INSERT INTO prescribed_sessions

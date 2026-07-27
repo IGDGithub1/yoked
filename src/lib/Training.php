@@ -32,7 +32,7 @@ final class Training
         $prescribed = DB::all(
             'SELECT ps.id, ps.session_type, ps.focus, ps.focus_detail, ps.is_committed,
                     ps.target_minutes, ps.location, ps.warmup_minutes, ps.warmup_detail,
-                    ps.warmup_required, ps.rationale
+                    ps.warmup_required, ps.rationale, ps.shared_skeleton_key
              FROM prescribed_sessions ps
              JOIN plan_versions pv ON pv.id = ps.plan_version_id
              WHERE pv.user_id = ? AND pv.superseded_at IS NULL AND ps.session_date = ?
@@ -56,6 +56,18 @@ final class Training
                 // The coach's "why" for this session. Shown to the user: a
                 // substitution without a reason reads as arbitrary (§3.3).
                 'rationale'       => $p['rationale'],
+                /*
+                 * Is this one of the days the pair trains together? (§10.4)
+                 *
+                 * Drives the "trained with your buddy?" question, which is only meaningful on a
+                 * shared day — asking it on a solo Tuesday, or of somebody with no buddy at
+                 * all, is noise that trains people to ignore the checkbox.
+                 *
+                 * The key itself is not exposed. It is an internal join between two users'
+                 * sessions and the client has no use for the value, only for whether there is
+                 * one.
+                 */
+                'is_shared'       => $p['shared_skeleton_key'] !== null,
                 'exercises'       => self::prescribedExercises((int) $p['id']),
                 'logged'          => null,
             ];
@@ -95,6 +107,9 @@ final class Training
                         'warmup_required' => false,
                         'focus_detail'   => null,
                         'rationale'      => null,
+                        // An unprescribed session was never part of the pair's agreed schedule,
+                        // so it is not a shared one however it was logged.
+                        'is_shared'      => false,
                         'exercises'      => [],
                         'logged'         => $log,
                     ];
@@ -102,7 +117,20 @@ final class Training
             }
         }
 
-        return ['date' => $date, 'sessions' => $sessions];
+        /*
+         * Does this user have a buddy at all? (§10.4)
+         *
+         * Needed separately from is_shared because the free-session form has no prescription to
+         * read: somebody logging an extra Tuesday walk may still have trained it with their
+         * buddy, and the app should let them say so. Without this the question would either be
+         * hidden from paired users or shown to everybody, and showing it to people with no
+         * buddy is the thing that teaches them to ignore it.
+         */
+        return [
+            'date'     => $date,
+            'sessions' => $sessions,
+            'paired'   => BuddySchedule::activePair($userId) !== null,
+        ];
     }
 
     /**

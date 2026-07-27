@@ -79,6 +79,10 @@ export default function Training({ day, date, onDay, vetoes = [], onVeto }) {
           <h3 className="subheading">What did you do?</h3>
           <FreeSessionForm
             date={date}
+            // A session logged outside the plan can still have been trained together, so a
+            // paired user gets asked. Unchecked by default here, unlike a shared day: nobody
+            // agreed in advance to train this one together (§10.4).
+            paired={!!day.paired}
             onCancel={() => setFreeLogging(false)}
             onLogged={(payload) => {
               onDay(payload)
@@ -275,7 +279,15 @@ function SessionForm({ session, date, onCancel, onLogged }) {
   const [minutes, setMinutes] = useState(session.target_minutes ? String(session.target_minutes) : '')
   const [rpe, setRpe] = useState('')
   const [notes, setNotes] = useState('')
-  const [buddy, setBuddy] = useState(false)
+  /*
+   * Checked by default on a shared day (§10.4).
+   *
+   * Showing up together is the expected outcome on a day the pair agreed to — that is what
+   * agreeing to it meant. Defaulting to unchecked would make the normal case cost a tap and
+   * quietly under-report every session somebody logged in a hurry, which is exactly the
+   * measurement this exists to get right.
+   */
+  const [buddy, setBuddy] = useState(!!session.is_shared)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
@@ -354,6 +366,8 @@ function SessionForm({ session, date, onCancel, onLogged }) {
         rpe={rpe} setRpe={setRpe}
         buddy={buddy} setBuddy={setBuddy}
         notes={notes} setNotes={setNotes}
+        // Only on a day the pair agreed to train together.
+        askBuddy={!!session.is_shared}
       />
 
       {error && <p className="error">{error}</p>}
@@ -379,7 +393,7 @@ function SessionForm({ session, date, onCancel, onLogged }) {
  * log, and demanding an exercise list would mean the walk goes unrecorded — which
  * during the baseline fortnight means the first plan never learns it happened.
  */
-function FreeSessionForm({ date, onCancel, onLogged }) {
+function FreeSessionForm({ date, paired = false, onCancel, onLogged }) {
   const [type, setType] = useState('strength')
   const [minutes, setMinutes] = useState('')
   const [rpe, setRpe] = useState('')
@@ -478,6 +492,7 @@ function FreeSessionForm({ date, onCancel, onLogged }) {
         rpe={rpe} setRpe={setRpe}
         buddy={buddy} setBuddy={setBuddy}
         notes={notes} setNotes={setNotes}
+        askBuddy={paired}
       />
 
       {error && <p className="error">{error}</p>}
@@ -565,6 +580,7 @@ function ExercisePicker({ onPick }) {
 
 function SessionMeta({
   idPrefix, minutes, setMinutes, rpe, setRpe, buddy, setBuddy, notes, setNotes,
+  askBuddy = false,
 }) {
   return (
     <>
@@ -593,10 +609,24 @@ function SessionMeta({
         </div>
       </div>
 
-      <label className="row" style={{ gap: 8 }}>
-        <input type="checkbox" checked={buddy} onChange={(e) => setBuddy(e.target.checked)} />
-        <span className="small">Trained with my buddy</span>
-      </label>
+      {/*
+        Only asked when the answer means something (§10.4).
+
+        This used to render for everybody, including users with no buddy at all, where it is a
+        question with no possible yes. On a shared day it arrives already checked, because
+        showing up together is what agreeing to that day meant — so the normal case costs
+        nothing and only the exception needs a tap.
+
+        Nothing follows an unchecked box. If their buddy did not turn up, that is not the
+        user's to explain, and asking would make the app demand an account of somebody else's
+        absence.
+      */}
+      {askBuddy && (
+        <label className="row" style={{ gap: 8 }}>
+          <input type="checkbox" checked={buddy} onChange={(e) => setBuddy(e.target.checked)} />
+          <span className="small">Trained with my buddy</span>
+        </label>
+      )}
 
       <input className="input" placeholder="Anything worth noting?" aria-label="Session notes"
         value={notes} onChange={(e) => setNotes(e.target.value)} />
