@@ -326,7 +326,7 @@ function blockOf(int $sessionId, string $block): array
 {
     return DB::all(
         'SELECT e.name, e.slug, e.pattern, pe.sets, pe.target_reps, pe.target_seconds,
-                pe.target_weight_kg
+                pe.target_weight_kg, pe.target_distance_m
          FROM prescribed_exercises pe
          JOIN exercises e ON e.id = pe.exercise_id
          WHERE pe.session_id = ? AND pe.block = ?
@@ -512,14 +512,27 @@ t('the core block is identical', function () use ($sesA, $sesB, $sharedDates) {
             '',
             $s
         );
-        return trim(preg_replace('/\s+/', ' ', (string) $s));
+        $s = trim(preg_replace('/\s+/', ' ', (string) $s));
+        /*
+         * A duration or distance that is ALSO in a structured column is not a second fact.
+         *
+         * A plank with target_seconds = 45 may carry "45s" in target_reps or may carry nothing,
+         * and both say the same thing. Comparing the text made those two look like a
+         * divergence, which is a test bug — the structured columns are compared separately and
+         * exactly, so dropping the duplicate here loses nothing.
+         */
+        $s = trim(preg_replace('/^\d+\s*(s|sec|secs|seconds|m|metres|meters)$/', '', $s) ?? $s);
+        return $s;
     };
 
     $off = [];
     foreach ($sharedDates as $d) {
         $shape = fn(array $rows): array => array_map(
             fn($e) => [$e['slug'], (int) $e['sets'],
-                       $norm($e['target_reps']), (string) $e['target_seconds']],
+                       $norm($e['target_reps']), (string) $e['target_seconds'],
+                       // The carry distance, which the skeleton now passes on. Compared
+                       // exactly: a 30m carry and a 60m carry are different prescriptions.
+                       (string) ($e['target_distance_m'] ?? '')],
             $rows
         );
         $x = $shape(blockOf((int) $sesA[$d]['id'], 'core'));

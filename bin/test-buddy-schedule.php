@@ -1790,9 +1790,68 @@ t('the core block is presented as a list that must not be shortened', function (
     if (!str_contains($text, 'Do not shorten the list')) {
         return 'nothing forbids dropping a core exercise';
     }
+    /*
+     * The COUNT, stated explicitly.
+     *
+     * "Give every one of these" was already present when a live follower returned one core
+     * exercise where the leader had two. A number gives the model something to check its answer
+     * against, which a quantifier does not.
+     */
+    if (!preg_match('/That is \d+ core exercise/', $text)) {
+        return 'the number of core exercises is not stated';
+    }
     // And the main block must forbid the duplicate substitution a live run produced.
     return str_contains($text, 'never list the same')
         ?: 'nothing forbids listing one movement twice after a substitution';
+});
+
+t('a loaded carry keeps its distance', function () {
+    /*
+     * blockShape did not select target_distance_m, so a Farmer Carry reached the follower with
+     * no distance at all — and a follower cannot reproduce a dose it was never told. The live
+     * run showed the leader on "3x30m" and the follower on a carry with nothing.
+     *
+     * §10.2a says the core block is identical, and a carry with no distance is not the same
+     * prescription as a 30-metre one.
+     */
+    $a = seedUser('skel_dist_a', 2);
+    $b = seedUser('skel_dist_b', 2);
+    grid($a, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    grid($b, [1 => [60, 'full_gym'], 3 => [60, 'full_gym']]);
+    pairUp($a, $b);
+
+    $week   = nextWeek();
+    $planId = leaderPlan($a, $week, [1, 3]);
+
+    // Turn the seeded core work into a loaded carry, which is where distance matters.
+    $carry = DB::one('SELECT id FROM exercises WHERE pattern = "carry" AND is_system = 1 LIMIT 1');
+    if ($carry === null) {
+        return null;   // no carry in the catalogue; nothing this test can say
+    }
+    DB::run(
+        'UPDATE prescribed_exercises pe
+         JOIN prescribed_sessions ps ON ps.id = pe.session_id
+         SET pe.exercise_id = ?, pe.target_seconds = NULL, pe.target_reps = NULL,
+             pe.target_distance_m = 30
+         WHERE ps.plan_version_id = ? AND pe.block = "core"',
+        [(int) $carry['id'], $planId]
+    );
+
+    $skel = BuddySkeleton::toFollow($b, $week);
+    if ($skel === null) {
+        return 'no skeleton';
+    }
+    $mon = date('Y-m-d', strtotime($week));
+    $core = $skel['days'][$mon]['core'][0] ?? null;
+    if ($core === null) {
+        return 'the core block is empty';
+    }
+    if (($core['distance_m'] ?? null) !== 30) {
+        return 'the skeleton lost the carry distance: '
+             . var_export($core['distance_m'] ?? null, true);
+    }
+    return str_contains(BuddySkeleton::promptBlock($skel), '30 metres')
+        ?: 'the prompt does not state the carry distance';
 });
 
 t('a solo day of the leader is NOT in the skeleton', function () {

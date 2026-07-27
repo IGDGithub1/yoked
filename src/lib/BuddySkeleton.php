@@ -208,7 +208,8 @@ final class BuddySkeleton
     {
         $in = implode(',', array_fill(0, count($blocks), '?'));
         $rows = DB::all(
-            "SELECT e.name, e.slug, e.pattern, pe.sets, pe.target_reps, pe.target_seconds
+            "SELECT e.name, e.slug, e.pattern, pe.sets, pe.target_reps, pe.target_seconds,
+                    pe.target_distance_m
              FROM prescribed_exercises pe
              JOIN exercises e ON e.id = pe.exercise_id
              WHERE pe.session_id = ? AND pe.block IN ({$in})
@@ -225,6 +226,14 @@ final class BuddySkeleton
                 'sets'    => $r['sets'] === null ? null : (int) $r['sets'],
                 'reps'    => $r['target_reps'],
                 'seconds' => $r['target_seconds'] === null ? null : (int) $r['target_seconds'],
+                /*
+                 * Loaded carries are measured in METRES, and leaving this out meant a Farmer
+                 * Carry reached the follower with no distance at all — so it could not
+                 * reproduce a dose it was never told. §10.2a says the core block is identical,
+                 * and a carry with no distance is not the same prescription.
+                 */
+                'distance_m' => $r['target_distance_m'] === null
+                    ? null : (int) $r['target_distance_m'],
             ];
         }
         return $out;
@@ -332,7 +341,13 @@ final class BuddySkeleton
                     $sets = $ex['sets'];
                     $spec = $ex['name'];
 
-                    if ($ex['seconds'] !== null) {
+                    if (($ex['distance_m'] ?? null) !== null) {
+                        // Carries first: a loaded carry has a distance and often a duration
+                        // too, and the distance is the prescription.
+                        $spec .= $sets === null
+                            ? " {$ex['distance_m']} metres"
+                            : " {$sets} sets of {$ex['distance_m']} metres";
+                    } elseif ($ex['seconds'] !== null) {
                         $spec .= $sets === null
                             ? " {$ex['seconds']} seconds"
                             : " {$sets} sets of {$ex['seconds']} seconds";
@@ -357,8 +372,23 @@ final class BuddySkeleton
                 }
                 $out[] = '    core, IDENTICAL — same exercises, same sets, same dose: '
                        . implode('; ', $core);
-                $out[] = '      Give every one of these. Do not shorten the list, and do not '
-                       . 'merge two of them into one.';
+                /*
+                 * The COUNT, said out loud.
+                 *
+                 * "Give every one of these" was already here and a measured run still returned
+                 * one core exercise where the leader had two. A number is harder to skip past
+                 * than a quantifier, and it gives the model something to check its own answer
+                 * against before returning it.
+                 */
+                $n = count($core);
+                $out[] = sprintf(
+                    '      That is %d core %s. Return all %d, in that order. Do not shorten the '
+                    . 'list, do not merge two into one, and do not substitute here — the core '
+                    . 'block is floor work, so there is no equipment reason to change it.',
+                    $n,
+                    $n === 1 ? 'exercise' : 'exercises',
+                    $n
+                );
             }
         }
 
