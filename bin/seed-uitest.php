@@ -44,13 +44,23 @@ const UI_BASE_USER = 'uitest_baseline';
  */
 const UI_REVIEW_USER = 'uitest_review';
 
+/**
+ * An admin, so the admin screen can be driven without the real owner's password.
+ *
+ * Deliberately a FIXTURE admin rather than promoting one of the others: the members list and
+ * the last-admin guards need at least two admins to be exercisable at all, and a suite that
+ * suspends or demotes a real account would be one bug away from locking somebody out of their
+ * own app.
+ */
+const UI_ADMIN_USER = 'uitest_admin';
+
 $drop = in_array('--drop', array_slice($argv, 1), true);
 
-$allUsers = [UI_USER, UI_BASE_USER, UI_REVIEW_USER];
+$allUsers = [UI_USER, UI_BASE_USER, UI_REVIEW_USER, UI_ADMIN_USER];
 
 // ON DELETE CASCADE from users carries the plan, the logged days and the rest.
 DB::run(
-    'DELETE FROM users WHERE username IN (?, ?, ?)',
+    'DELETE FROM users WHERE username IN (?, ?, ?, ?)',
     $allUsers
 );
 /*
@@ -669,4 +679,52 @@ DB::run(
 printf(
     "seeded a buddy invite from %s (they share Wednesday and Friday)\n",
     UI_BASE_USER
+);
+
+/*
+ * An admin, plus one invite of each state, so the admin screen has something to show.
+ *
+ * ROLE 'admin' AND onboarding_state 'active': the screen is reachable from the profile, and a
+ * user still in onboarding is redirected to the quiz before they get there.
+ *
+ * The invites are seeded rather than minted through the API because a fixture has to be the
+ * same on every run — a used one and an expired one cannot be produced by calling POST twice.
+ */
+$adminId = (int) DB::insert(
+    'INSERT INTO users (username, display_name, email, password_hash, role, onboarding_state)
+     VALUES (?, ?, ?, ?, "admin", "active")',
+    [
+        UI_ADMIN_USER,
+        'Admin Fixture',
+        UI_ADMIN_USER . '@example.test',
+        password_hash(UI_PASS, PASSWORD_DEFAULT),
+    ]
+);
+DB::run(
+    'INSERT INTO profiles (user_id, timezone, committed_days_per_week, coaching_paused)
+     VALUES (?, "UTC", 3, 1)',
+    [$adminId]
+);
+
+// Codes prefixed so the suite can find its own and a human can tell them from real ones.
+DB::run('DELETE FROM invites WHERE code LIKE "UITEST%"');
+DB::run(
+    'INSERT INTO invites (code, created_by, expires_at)
+     VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 30 DAY))',
+    ['UITESTOPEN000000', $adminId]
+);
+DB::run(
+    'INSERT INTO invites (code, created_by, expires_at)
+     VALUES (?, ?, DATE_SUB(NOW(), INTERVAL 1 DAY))',
+    ['UITESTEXPIRED000', $adminId]
+);
+DB::run(
+    'INSERT INTO invites (code, created_by, used_by, used_at, expires_at)
+     VALUES (?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 30 DAY))',
+    ['UITESTUSED000000', $adminId, $seed['user_id']]
+);
+
+printf(
+    "seeded %s (admin) and three invites: one open, one expired, one used\n",
+    UI_ADMIN_USER
 );

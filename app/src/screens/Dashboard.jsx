@@ -3,7 +3,7 @@ import { api, today as todayDate, shiftDate } from '../api'
 import Notifications from '../components/Notifications'
 import WeeklyCheckIn from '../components/WeeklyCheckIn'
 import NextDay from '../components/NextDay'
-import { MessageIcon, UserIcon } from '../components/Icons'
+import { MessageIcon, ShieldIcon, UserIcon } from '../components/Icons'
 import Yolk from '../components/Yolk'
 
 /**
@@ -127,6 +127,23 @@ export default function Dashboard({ user, baseline, onNavigate }) {
           <span className="tiny muted">What your coach knows about you</span>
         </span>
       </button>
+
+      {/*
+        Admin, below the profile and only for admins.
+
+        Same treatment as the profile and for the same reason: a screen visited occasionally
+        does not belong in the nav next to the two used daily. The server enforces the
+        permission; this only decides whether the door is visible.
+      */}
+      {user?.role === 'admin' && (
+        <button type="button" className="profilelink" onClick={() => onNavigate('admin')}>
+          <ShieldIcon />
+          <span className="stack-tight">
+            <span className="small" style={{ fontWeight: 600 }}>Admin</span>
+            <span className="tiny muted">Members and invite codes</span>
+          </span>
+        </button>
+      )}
     </div>
   )
 }

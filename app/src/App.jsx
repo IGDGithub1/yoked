@@ -9,6 +9,7 @@ import Journal from './screens/Journal'
 import Coach from './screens/Coach'
 import Friends from './components/Friends'
 import Profile from './screens/Profile'
+import Admin from './components/Admin'
 import Shell from './components/Shell'
 import Yolk from './components/Yolk'
 
@@ -213,6 +214,19 @@ export default function App() {
           }}
         />
       )}
+      {/*
+        Admin, gated on the role the server already reports in /api/me.
+
+        The gate here is convenience, not control: every admin route calls Auth::requireAdmin()
+        and 403s regardless. A member who types the hash gets sent back to the dashboard rather
+        than a screen full of failed requests.
+      */}
+      {route === 'admin' &&
+        (state.user?.role === 'admin' ? (
+          <Admin onClose={() => navigate('dashboard')} />
+        ) : (
+          <p className="muted">Not found.</p>
+        ))}
       {route === 'dashboard' && (
         <Dashboard user={state.user} baseline={state.baseline} onNavigate={navigate} />
       )}

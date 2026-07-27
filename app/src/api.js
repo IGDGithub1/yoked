@@ -318,6 +318,20 @@ export const api = {
     },
     removePhoto: (id, angle) => del(`checkin/weekly/${id}/photo?angle=${angle}`),
   },
+
+  /*
+   * Admin. Every one of these 403s for a member, which is enforced server-side — the client
+   * hides the screen as a convenience, not as the control.
+   */
+  admin: {
+    members: () => get('admin/members'),
+    setRole: (username, role) => put(`admin/members/${username}/role`, { role }),
+    setStatus: (username, status) => put(`admin/members/${username}/status`, { status }),
+
+    invites: () => get('admin/invites'),
+    mintInvite: (expiresDays) => post('admin/invites', { expires_days: expiresDays }),
+    revokeInvite: (code) => del(`admin/invites/${code}`),
+  },
 }
 
 /**

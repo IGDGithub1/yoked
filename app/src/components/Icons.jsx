@@ -23,6 +23,7 @@ import {
   MessageSquare,
   Moon,
   ScrollText,
+  ShieldCheck,
   Sun,
   UserCog,
   Users,
@@ -70,3 +71,4 @@ export const MessageIcon = wrap(MessageSquare)
 
 /** Friends. In the nav, because a request waiting on you needs somewhere to show a badge. */
 export const UsersIcon = wrap(Users)
+export const ShieldIcon = wrap(ShieldCheck)

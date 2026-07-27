@@ -36,8 +36,13 @@ import { useEffect, useState } from 'react'
  * Dashboard card: the profile is visited rarely once the quiz is answered, and the coach
  * is entered when there is something to say rather than browsed. Being routes anyway is
  * what makes them linkable and gives them a working back button.
+ *
+ * `admin` is listed here for everyone, and that is not a leak. Routing decides where a hash
+ * can point, never what the server will answer: every admin endpoint calls
+ * Auth::requireAdmin() and 403s regardless, and App.jsx renders "Not found" for a member who
+ * types it. Gating the route table by role would put the permission in two places.
  */
-export const ROUTES = ['dashboard', 'journal', 'friends', 'coach', 'profile']
+export const ROUTES = ['dashboard', 'journal', 'friends', 'coach', 'profile', 'admin']
 
 const DEFAULT = 'dashboard'
 
