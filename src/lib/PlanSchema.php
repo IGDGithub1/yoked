@@ -427,16 +427,73 @@ final class PlanSchema
      * and had the whole plan rejected by checkAvailability afterwards. That is a wasted
      * generation caused by offering a choice that was always going to be refused.
      */
+    /**
+     * Categories worth sending for a given week.
+     *
+     * The library is about to grow from 90 exercises to over a thousand, which takes the
+     * vocabulary from ~400 tokens to ~4,400 — in the CACHED SYSTEM PREFIX, on every generation.
+     * Most of that is waste for most users, and the waste is identifiable:
+     *
+     *   ACTIVITY is reportable-only. Golf, kayaking, walking the dog. They exist so a user can
+     *   log "I went hiking" and so the calorie side can price it. The coach never prescribes
+     *   one, so it has no business in the vocabulary the coach picks from — unless the user has
+     *   an outdoors day, where an activity is genuinely the session.
+     *
+     *   MOBILITY is warm-up detail. Warm-ups are prescribed as warmup_detail PROSE, not as
+     *   library slugs, so 139 stretches sit in the prompt being unusable.
+     *
+     *   CARDIO only matters if they will do any. §6.8 records what they are willing to do and
+     *   §6.9 what they refuse; somebody who refuses all of it does not need the list.
+     *
+     * Strength and core always go: they are the substance of every training week.
+     *
+     * @param list<string> $accessSet  the access levels present in the week
+     * @param bool         $wantsCardio whether the user does any cardio at all
+     */
+    public static function categoriesFor(array $accessSet, bool $wantsCardio = true): array
+    {
+        $out = ['strength', 'core'];
+
+        if ($wantsCardio) {
+            $out[] = 'cardio';
+        }
+
+        /*
+         * Activities ride on an outdoors day.
+         *
+         * A hike or a bike ride IS the session on a day with no equipment and no roof, and
+         * §3.3 treats that as legitimate training rather than a gap. Any other day, the coach
+         * is choosing exercises and an activity is not one.
+         */
+        if (in_array('outdoors', $accessSet, true)) {
+            $out[] = 'activity';
+        }
+
+        return $out;
+    }
+
     public static function vocabulary(
         ?string $access = null,
         array $accessSet = [],
-        ?array $homeKit = null
+        ?array $homeKit = null,
+        ?array $categories = null
     ): array {
-        $rows = DB::all(
-            'SELECT slug, name, category, pattern, equipment, load_type
-             FROM exercises
-             ORDER BY category, pattern, slug'
-        );
+        /*
+         * Category filtering happens in SQL rather than in the loop below.
+         *
+         * With a thousand-row library the difference is a thousand json_decode calls per
+         * generation against a few hundred, and this runs on every plan.
+         */
+        $sql = 'SELECT slug, name, category, pattern, equipment, load_type FROM exercises';
+        $params = [];
+        if ($categories !== null && $categories !== []) {
+            $in = implode(',', array_fill(0, count($categories), '?'));
+            $sql .= " WHERE category IN ({$in})";
+            $params = $categories;
+        }
+        $sql .= ' ORDER BY category, pattern, slug';
+
+        $rows = DB::all($sql, $params);
 
         $out = [];
         foreach ($rows as $r) {

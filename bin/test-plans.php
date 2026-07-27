@@ -1960,6 +1960,129 @@ t('the kit is editable, and rejects anything not on the list', function () use (
     }
 });
 
+// ---------------------------------------------------------------------------
+echo "\n6e. the vocabulary is scoped to what the week could use\n";
+
+t('activities are reportable-only unless there is an outdoors day', function () {
+    /*
+     * Golf, kayaking, walking the dog. They exist so a user can LOG "I went hiking" and so the
+     * calorie side can price it — the coach never prescribes one. On an outdoors day they are
+     * the exception: a hike IS the session when there is no equipment and no roof (§3.3).
+     */
+    $indoor  = PlanSchema::categoriesFor(['full_gym']);
+    $outdoor = PlanSchema::categoriesFor(['full_gym', 'outdoors']);
+
+    if (in_array('activity', $indoor, true)) {
+        return 'activities were offered to a gym-only week';
+    }
+    return in_array('activity', $outdoor, true)
+        ?: 'activities were withheld from a week with an outdoors day';
+});
+
+t('mobility never reaches the vocabulary', function () {
+    /*
+     * Warm-ups are prescribed as warmup_detail PROSE, not as library slugs — the rules say
+     * "set warmup_minutes and warmup_detail on every training session". So 139 stretches would
+     * sit in the cached prefix being unusable.
+     */
+    foreach ([['full_gym'], ['outdoors'], ['bodyweight'], ['home_gym']] as $set) {
+        if (in_array('mobility', PlanSchema::categoriesFor($set), true)) {
+            return 'mobility was sent for access ' . implode('+', $set);
+        }
+    }
+    return true;
+});
+
+t('strength and core always go', function () {
+    // The substance of every training week, whatever else is true.
+    foreach ([['bodyweight'], ['outdoors'], ['full_gym']] as $set) {
+        $c = PlanSchema::categoriesFor($set, false);
+        if (!in_array('strength', $c, true) || !in_array('core', $c, true)) {
+            return 'strength or core was withheld for ' . implode('+', $set);
+        }
+    }
+    return true;
+});
+
+t('somebody who does no cardio is not sent the cardio list', function () {
+    $with    = PlanSchema::categoriesFor(['full_gym'], true);
+    $without = PlanSchema::categoriesFor(['full_gym'], false);
+    if (!in_array('cardio', $with, true)) {
+        return 'cardio was withheld from somebody willing to do it';
+    }
+    return !in_array('cardio', $without, true)
+        ?: 'cardio was sent to somebody who refuses all of it';
+});
+
+t('an unanswered cardio preference still gets cardio', function () use ($ids) {
+    /*
+     * An empty list from a user who was never asked is not a refusal. Silently withholding
+     * cardio from them is a worse error than a slightly longer prompt, so the default is to
+     * send it.
+     */
+    $u = $ids['u1'];
+    $before = DB::one(
+        'SELECT cardio_willing FROM training_preferences WHERE user_id = ?', [$u]
+    );
+
+    DB::run(
+        'UPDATE training_preferences SET cardio_willing = NULL WHERE user_id = ?', [$u]
+    );
+    try {
+        $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+        $gather->setAccessible(true);
+        $ctx = $gather->invoke(null, $u, date('Y-m-d', strtotime('next monday')));
+        return isset($ctx['vocabulary']['cardio'])
+            ?: 'a user who was never asked lost their cardio vocabulary';
+    } finally {
+        DB::run(
+            'UPDATE training_preferences SET cardio_willing = ? WHERE user_id = ?',
+            [$before['cardio_willing'] ?? null, $u]
+        );
+    }
+});
+
+t('scoping actually shrinks the prompt', function () {
+    /*
+     * The point of the exercise. Measured rather than assumed: the library is about to grow
+     * from 90 to over a thousand, which takes the vocabulary from ~400 tokens to ~4,400 in the
+     * CACHED PREFIX of every generation.
+     */
+    $render = static function (array $v): int {
+        $n = 0;
+        foreach ($v as $cat => $pats) {
+            $n += strlen((string) $cat) + 2;
+            foreach ($pats as $p => $slugs) {
+                $n += strlen((string) $p) + strlen(implode(', ', $slugs)) + 4;
+            }
+        }
+        return $n;
+    };
+
+    $everything = $render(PlanSchema::vocabulary());
+    $scoped     = $render(PlanSchema::vocabulary(
+        null, ['full_gym'], null, PlanSchema::categoriesFor(['full_gym'])
+    ));
+
+    return $scoped < $everything
+        ?: "scoping saved nothing: {$scoped} against {$everything} chars";
+});
+
+t('a scoped vocabulary still contains real exercises', function () {
+    /*
+     * The failure mode of a filter is emptiness, and an empty vocabulary produces a plan with
+     * no exercises rather than an error anybody notices.
+     */
+    $v = PlanSchema::vocabulary(
+        null, ['bodyweight'], null, PlanSchema::categoriesFor(['bodyweight'], true)
+    );
+    if (!isset($v['strength']) || $v['strength'] === []) {
+        return 'a bodyweight week has no strength exercises at all';
+    }
+    return isset($v['core']) && $v['core'] !== []
+        ?: 'a bodyweight week has no core exercises at all';
+});
+
 echo "\n7. cost\n";
 $summary = Claude::usageSummary(1);
 foreach ($summary['by_purpose'] as $row) {

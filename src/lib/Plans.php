@@ -390,13 +390,33 @@ final class Plans
          * who was never asked and keeps the permissive old behaviour, [] is a user who said
          * they have nothing and gets bodyweight work.
          */
-        $kitRow  = DB::one(
-            'SELECT home_equipment FROM training_preferences WHERE user_id = ?', [$userId]
+        $trainingPrefs = DB::one(
+            'SELECT * FROM training_preferences WHERE user_id = ?', [$userId]
         );
+
         $homeKit = null;
-        if ($kitRow !== null && $kitRow['home_equipment'] !== null) {
-            $decoded = json_decode((string) $kitRow['home_equipment'], true);
+        if ($trainingPrefs !== null && $trainingPrefs['home_equipment'] !== null) {
+            $decoded = json_decode((string) $trainingPrefs['home_equipment'], true);
             $homeKit = is_array($decoded) ? $decoded : null;
+        }
+
+        /*
+         * Does this user do any cardio at all? (§6.8, §6.9)
+         *
+         * Decides whether the cardio half of the library is worth sending. Somebody who listed
+         * nothing they are willing to do gets no cardio prescribed, so the ~240 tokens of cardio
+         * slugs are pure waste in their cached prefix.
+         *
+         * Defaults to TRUE when unanswered: an empty list from a user who was never asked is
+         * not a refusal, and silently withholding cardio from them would be a worse error than
+         * a slightly longer prompt.
+         */
+        $wantsCardio = true;
+        if ($trainingPrefs !== null && $trainingPrefs['cardio_willing'] !== null) {
+            $willing = json_decode((string) $trainingPrefs['cardio_willing'], true);
+            if (is_array($willing)) {
+                $wantsCardio = $willing !== [];
+            }
         }
 
         /*
@@ -418,7 +438,8 @@ final class Plans
             'goal'         => $goal,
             'availability' => $availability,
             'food'         => DB::one('SELECT * FROM food_preferences WHERE user_id = ?', [$userId]),
-            'training'     => DB::one('SELECT * FROM training_preferences WHERE user_id = ?', [$userId]),
+            // Already read above, for the home kit and the cardio-willingness check.
+            'training'     => $trainingPrefs,
             'constraints'  => Safety::promptBlock($userId),
             /*
              * Only what they can perform somewhere in this week (see $accessSet above), with a
@@ -428,7 +449,15 @@ final class Plans
              * behaviour for users who onboarded before the question existed rather than
              * silently taking away equipment we have no answer about.
              */
-            'vocabulary'   => PlanSchema::vocabulary(null, $accessSet, $homeKit),
+            'vocabulary'   => PlanSchema::vocabulary(
+                null,
+                $accessSet,
+                $homeKit,
+                // Scoped by category as well as access: activities are reportable-only unless
+                // there is an outdoors day, mobility is warm-up prose rather than slugs, and
+                // cardio only matters to somebody who does any.
+                PlanSchema::categoriesFor($accessSet, $wantsCardio)
+            ),
             // Which of those the user is banned from, so the prompt can mark them rather than
             // hide them. Enforcement stays with Safety::validatePlan.
             'banned_slugs' => Safety::bannedSlugs($userId),
