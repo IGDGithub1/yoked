@@ -118,7 +118,33 @@ final class Settings
             'nudge_after_days'  => (int) $p['nudge_after_days'],
             'hide_photos'       => (bool) $p['hide_photos'],
             'hide_measurements' => (bool) $p['hide_measurements'],
+
+            /*
+             * What is in the home gym, editable because it changes.
+             *
+             * People buy a bench, or move house and lose the garage rack. Onboarding asks once;
+             * this is where it gets corrected without re-running the quiz.
+             *
+             * NULL when never asked, which the client shows differently from an empty list —
+             * "we have not asked" against "you told us nothing". The distinction drives whether
+             * the plan narrows to bodyweight on home days.
+             */
+            'home_equipment'    => self::homeEquipment($userId),
+            'home_kit_options'  => array_keys(PlanSchema::HOME_KIT),
         ];
+    }
+
+    /** The user's home gym kit, or null if the question has never been answered. */
+    public static function homeEquipment(int $userId): ?array
+    {
+        $row = DB::one(
+            'SELECT home_equipment FROM training_preferences WHERE user_id = ?', [$userId]
+        );
+        if ($row === null || $row['home_equipment'] === null) {
+            return null;
+        }
+        $decoded = json_decode((string) $row['home_equipment'], true);
+        return is_array($decoded) ? array_values($decoded) : null;
     }
 
     /**
@@ -231,7 +257,43 @@ final class Settings
             }
         }
 
+        /*
+         * The home gym kit, written separately because it lives on training_preferences.
+         *
+         * $put builds an UPDATE against profiles, so this cannot go through it. Handled before
+         * the "nothing to change" guard below, since a request that changes ONLY the kit is a
+         * real request — someone who just bought a bench.
+         */
+        $kitChanged = false;
+        if (array_key_exists('home_equipment', $body)) {
+            $kit = $body['home_equipment'];
+            if (!is_array($kit)) {
+                return self::fail('Tell us what you have as a list, even an empty one.');
+            }
+            $clean = [];
+            foreach ($kit as $item) {
+                $item = trim((string) $item);
+                // Only the six we offer. Anything else is a client bug or someone poking the
+                // API, and storing it would quietly widen the vocabulary filter.
+                if (!isset(PlanSchema::HOME_KIT[$item])) {
+                    return self::fail('That is not one of the equipment choices.');
+                }
+                $clean[$item] = true;
+            }
+
+            DB::run(
+                'INSERT INTO training_preferences (user_id, home_equipment)
+                 VALUES (?, ?)
+                 ON DUPLICATE KEY UPDATE home_equipment = VALUES(home_equipment)',
+                [$userId, json_encode(array_keys($clean))]
+            );
+            $kitChanged = true;
+        }
+
         if ($sets === []) {
+            if ($kitChanged) {
+                return ['ok' => true, 'error' => null, 'changed' => ['home_equipment']];
+            }
             return ['ok' => false, 'error' => 'Nothing to change.', 'changed' => []];
         }
 
@@ -263,6 +325,9 @@ final class Settings
             [...$params, $userId]
         );
 
+        if ($kitChanged) {
+            $changed[] = 'home_equipment';
+        }
         return ['ok' => true, 'error' => null, 'changed' => $changed];
     }
 

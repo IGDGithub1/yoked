@@ -34,6 +34,8 @@ require YK_SRC . '/lib/Plans.php';
 require YK_SRC . '/lib/Drift.php';         // BuddyAbsence reads lastLoggedDate
 require YK_SRC . '/lib/BuddyAbsence.php';  // Plans::gatherContext reads it
 require YK_SRC . '/lib/BuddySkeleton.php';  // gatherContext and persist read it
+require YK_SRC . '/lib/ConstraintLabel.php';  // Settings reads it
+require YK_SRC . '/lib/Settings.php';         // the home gym kit is editable there
 
 $args     = array_slice($argv, 1);
 $seedOnly = in_array('--seed-only', $args, true);
@@ -1748,6 +1750,212 @@ t('the annotation agrees with the validator', function () use ($ids) {
     } finally {
         DB::run(
             'DELETE FROM user_constraints WHERE user_id = ? AND reason = "probe"', [$u]
+        );
+    }
+});
+
+// ---------------------------------------------------------------------------
+echo "\n6d. a home gym is whatever the user says it is\n";
+
+/** Total slugs in a vocabulary. */
+function vocabSize(array $v): int
+{
+    $n = 0;
+    foreach ($v as $patterns) {
+        foreach ($patterns as $slugs) {
+            $n += count($slugs);
+        }
+    }
+    return $n;
+}
+
+t('home_gym was a synonym for full_gym, and is not any more', function () {
+    /*
+     * The defect. availableAt returned true for every exercise on a home_gym day, so somebody
+     * with two dumbbells in a spare room was offered a cable tower, a hack squat and a pool.
+     *
+     * Nothing caught it: checkAvailability compares the SESSION location against the day
+     * access, not exercises against equipment. The user just got a plan they could not perform.
+     */
+    $all  = vocabSize(PlanSchema::vocabulary(null, ['full_gym']));
+    $home = vocabSize(PlanSchema::vocabulary(null, ['home_gym'], ['dumbbell']));
+
+    return $home < $all
+        ?: "a dumbbell-only home gym still sees all {$all} exercises";
+});
+
+t('an unanswered kit stays permissive', function () {
+    /*
+     * NULL and [] mean different things, and the difference is load-bearing.
+     *
+     * NULL is a user who onboarded before the question existed. Silently taking away their
+     * barbell because we never asked would be worse than the bug this fixes. [] is a real
+     * answer — "I have nothing" — and narrows to bodyweight.
+     */
+    $never = vocabSize(PlanSchema::vocabulary(null, ['home_gym'], null));
+    $none  = vocabSize(PlanSchema::vocabulary(null, ['home_gym'], []));
+
+    if ($never <= $none) {
+        return 'an unasked user was narrowed as if they owned nothing';
+    }
+    return $none > 0
+        ?: 'a user with no equipment gets an empty vocabulary';
+});
+
+t('each item unlocks more, and only what it should', function () {
+    $none = vocabSize(PlanSchema::vocabulary(null, ['home_gym'], []));
+    $db   = vocabSize(PlanSchema::vocabulary(null, ['home_gym'], ['dumbbell']));
+    $both = vocabSize(PlanSchema::vocabulary(null, ['home_gym'], ['dumbbell', 'bench']));
+
+    if (!($none < $db && $db < $both)) {
+        return "not monotonic: none={$none} db={$db} db+bench={$both}";
+    }
+
+    // A dumbbell owner does not get machine work.
+    $v = PlanSchema::vocabulary(null, ['home_gym'], ['dumbbell']);
+    $flat = [];
+    foreach ($v as $patterns) {
+        foreach ($patterns as $slugs) {
+            foreach ($slugs as $s) {
+                $flat[$s] = true;
+            }
+        }
+    }
+    foreach (['leg-press', 'hack-squat', 'back-squat', 'seated-cable-row'] as $gymOnly) {
+        if (isset($flat[$gymOnly])) {
+            return "a dumbbell-only home gym was offered {$gymOnly}";
+        }
+    }
+    // And it DOES get the dumbbell work.
+    return isset($flat['goblet-squat']) && isset($flat['db-curl'])
+        ?: 'a dumbbell owner was not offered dumbbell exercises';
+});
+
+t('an exercise needing two items needs BOTH', function () {
+    /*
+     * db-row is ["dumbbell", "bench"]. Owning the dumbbells is not enough, and a filter that
+     * matched on any single token rather than all of them would offer it.
+     */
+    $dbOnly = PlanSchema::vocabulary(null, ['home_gym'], ['dumbbell']);
+    $flat = [];
+    foreach ($dbOnly as $patterns) {
+        foreach ($patterns as $slugs) {
+            foreach ($slugs as $s) {
+                $flat[$s] = true;
+            }
+        }
+    }
+    if (isset($flat['db-row'])) {
+        return 'db-row was offered to somebody with no bench';
+    }
+
+    $withBench = PlanSchema::vocabulary(null, ['home_gym'], ['dumbbell', 'bench']);
+    $flat2 = [];
+    foreach ($withBench as $patterns) {
+        foreach ($patterns as $slugs) {
+            foreach ($slugs as $s) {
+                $flat2[$s] = true;
+            }
+        }
+    }
+    return isset($flat2['db-row'])
+        ?: 'db-row was withheld from somebody with dumbbells and a bench';
+});
+
+t('a full gym day ignores the home kit entirely', function () {
+    // The kit describes a home gym. It must not narrow the day they go to a real one.
+    $a = vocabSize(PlanSchema::vocabulary(null, ['full_gym'], []));
+    $b = vocabSize(PlanSchema::vocabulary(null, ['full_gym'], ['dumbbell']));
+    $c = vocabSize(PlanSchema::vocabulary(null, ['full_gym'], null));
+    return ($a === $b && $b === $c)
+        ?: "full gym varies with the home kit: {$a}/{$b}/{$c}";
+});
+
+t('a mixed week keeps the gym day whole', function () {
+    /*
+     * Someone training at home Monday and at a gym Saturday can still squat on Saturday. The
+     * union is what the vocabulary offers; the availability grid says which day is which.
+     */
+    $mixed = vocabSize(PlanSchema::vocabulary(null, ['home_gym', 'full_gym'], ['dumbbell']));
+    $full  = vocabSize(PlanSchema::vocabulary(null, ['full_gym']));
+    return $mixed === $full
+        ?: "a mixed week sees {$mixed} where the gym day alone sees {$full}";
+});
+
+t('the kit reaches generation from the profile', function () use ($ids) {
+    // The whole chain: training_preferences → gatherContext → the rendered vocabulary.
+    $u = $ids['u1'];
+
+    $before = DB::one(
+        'SELECT home_equipment FROM training_preferences WHERE user_id = ?', [$u]
+    );
+
+    // Make every day a home gym day, with dumbbells only.
+    DB::run('UPDATE availability SET access = "home_gym" WHERE user_id = ?', [$u]);
+    DB::run(
+        'INSERT INTO training_preferences (user_id, home_equipment) VALUES (?, ?)
+         ON DUPLICATE KEY UPDATE home_equipment = VALUES(home_equipment)',
+        [$u, json_encode(['dumbbell'])]
+    );
+
+    try {
+        $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+        $gather->setAccessible(true);
+        $ctx = $gather->invoke(null, $u, date('Y-m-d', strtotime('next monday')));
+        if (($ctx['error'] ?? null) !== null) {
+            return 'context failed: ' . (string) $ctx['error'];
+        }
+
+        $sys = new ReflectionMethod(Plans::class, 'systemPrompt');
+        $sys->setAccessible(true);
+        $text = (string) $sys->invoke(null, $ctx);
+
+        if (str_contains($text, 'hack-squat') || str_contains($text, 'leg-press')) {
+            return 'machine work reached the prompt for a dumbbell-only home gym';
+        }
+        return str_contains($text, 'goblet-squat')
+            ?: 'the dumbbell work did not reach the prompt';
+    } finally {
+        DB::run('UPDATE availability SET access = "full_gym" WHERE user_id = ?', [$u]);
+        DB::run(
+            'UPDATE training_preferences SET home_equipment = ? WHERE user_id = ?',
+            [$before['home_equipment'] ?? null, $u]
+        );
+    }
+});
+
+t('the kit is editable, and rejects anything not on the list', function () use ($ids) {
+    /*
+     * People buy a bench, or move house and lose the garage rack. Onboarding asks once; the
+     * profile is where it gets corrected without re-running the quiz.
+     */
+    $u = $ids['u1'];
+    $before = Settings::homeEquipment($u);
+
+    try {
+        $r = Settings::save($u, ['home_equipment' => ['dumbbell', 'bench']]);
+        if (!$r['ok']) {
+            return 'a valid kit was rejected: ' . (string) $r['error'];
+        }
+        if (Settings::homeEquipment($u) !== ['dumbbell', 'bench']) {
+            return 'the kit did not persist';
+        }
+
+        // Empty is a real answer, not a no-op.
+        $r = Settings::save($u, ['home_equipment' => []]);
+        if (!$r['ok'] || Settings::homeEquipment($u) !== []) {
+            return 'clearing the kit did not work';
+        }
+
+        // Anything outside the six is a client bug or someone poking the API; storing it would
+        // quietly widen the filter.
+        $bad = Settings::save($u, ['home_equipment' => ['leg_press']]);
+        return $bad['ok'] === false
+            ?: 'an equipment token outside the offered list was accepted';
+    } finally {
+        DB::run(
+            'UPDATE training_preferences SET home_equipment = ? WHERE user_id = ?',
+            [$before === null ? null : json_encode($before), $u]
         );
     }
 });

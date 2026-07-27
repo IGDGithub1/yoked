@@ -2055,6 +2055,63 @@ await check('there is still a way out of the profile', async () => {
   return done > 0 ? true : 'no way to leave the profile'
 })
 
+await check('the home gym kit is editable, and says what it affects', async () => {
+  /*
+   * home_gym used to be a synonym for full_gym: someone with two dumbbells in a spare room was
+   * offered a cable tower and a hack squat, and nothing caught it, because the validator
+   * compares the SESSION location against the day rather than exercises against equipment.
+   *
+   * The kit is asked at onboarding and corrected here, because it changes — people buy a bench,
+   * or move house and lose the garage rack.
+   */
+  const card = prof.locator('.card', { hasText: /your home gym/i }).first()
+  if ((await card.count()) === 0) return 'no home gym card on the profile'
+
+  const text = (await card.innerText()).toLowerCase()
+  // It has to say the scope, or a gym-goer will wonder why they are being asked.
+  if (!/home/.test(text)) return `the card does not say when this applies: ${text}`
+
+  const bench = card.getByRole('button', { name: /^bench$/i })
+  if ((await bench.count()) === 0) return 'the kit options are not shown'
+
+  const before = await prof.evaluate(async () => {
+    const r = await fetch('/api/settings', { credentials: 'same-origin' })
+    return (await r.json()).settings?.home_equipment
+  })
+
+  await bench.first().click()
+  await prof.waitForFunction(async (had) => {
+    const r = await fetch('/api/settings', { credentials: 'same-origin' })
+    const kit = (await r.json()).settings?.home_equipment ?? []
+    const has = kit.includes('bench')
+    return has !== (had ?? []).includes('bench')
+  }, before, { timeout: 20000 })
+
+  /*
+   * Put it back.
+   *
+   * This test MUTATES a stored setting, and the suite runs against a long-lived fixture rather
+   * than a fresh database. Leaving the bench toggled made the next run start from a different
+   * state — which is how two unrelated assertions failed on the second run and passed on the
+   * third, costing a full run to work out.
+   */
+  await prof.evaluate(async (had) => {
+    const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
+    await fetch('/api/settings', {
+      method: 'PUT',
+      headers: {
+        'content-type': 'application/json',
+        'x-csrf-token': me.csrf,
+        accept: 'application/json',
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({ home_equipment: had ?? [] }),
+    })
+  }, before)
+
+  return true
+})
+
 await check('both constraint tiers are listed', async () => {
   /*
    * The heading renders before the list does: Preferences fetches its own rows, so the

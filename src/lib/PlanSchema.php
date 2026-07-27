@@ -427,8 +427,11 @@ final class PlanSchema
      * and had the whole plan rejected by checkAvailability afterwards. That is a wasted
      * generation caused by offering a choice that was always going to be refused.
      */
-    public static function vocabulary(?string $access = null, array $accessSet = []): array
-    {
+    public static function vocabulary(
+        ?string $access = null,
+        array $accessSet = [],
+        ?array $homeKit = null
+    ): array {
         $rows = DB::all(
             'SELECT slug, name, category, pattern, equipment, load_type
              FROM exercises
@@ -440,7 +443,7 @@ final class PlanSchema
             if ($accessSet !== []) {
                 $ok = false;
                 foreach ($accessSet as $level) {
-                    if (self::availableAt($r, $level)) {
+                    if (self::availableAt($r, $level, $homeKit)) {
                         $ok = true;
                         break;
                     }
@@ -448,7 +451,7 @@ final class PlanSchema
                 if (!$ok) {
                     continue;
                 }
-            } elseif ($access !== null && !self::availableAt($r, $access)) {
+            } elseif ($access !== null && !self::availableAt($r, $access, $homeKit)) {
                 continue;
             }
             $out[$r['category']][$r['pattern']][] = $r['slug'];
@@ -456,9 +459,41 @@ final class PlanSchema
         return $out;
     }
 
-    /** Is this exercise performable at the given access level? */
-    private static function availableAt(array $exercise, string $access): bool
-    {
+    /**
+     * The kit a home-gym question offers, and what each item covers in the library.
+     *
+     * Six items rather than the library's 32 equipment tokens. Twenty of those unlock exactly
+     * one exercise each — pool, battle ropes, dowel, foam roller — so asking about them is a
+     * chore that buys nothing, and a long checklist is where people tick everything without
+     * reading. Measured against the seeded library: bodyweight alone is 19 exercises, adding
+     * dumbbells reaches 29, and all six reach 38 of 90.
+     *
+     * A 'rack' implies the bench and bar work that goes with it, which is why barbell brings
+     * three tokens: someone who says they have a barbell and rack has the setup, and asking
+     * separately about a trap bar is the granularity this list exists to avoid.
+     */
+    public const HOME_KIT = [
+        'dumbbell'        => ['dumbbell', 'incline_bench', 'box'],
+        'bench'           => ['bench'],
+        'resistance_band' => ['resistance_band'],
+        'pull_up_bar'     => ['pull_up_bar'],
+        'kettlebell'      => ['kettlebell'],
+        'barbell'         => ['barbell', 'rack', 'trap_bar', 'plate'],
+    ];
+
+    /**
+     * Is this exercise performable at the given access level?
+     *
+     * @param list<string>|null $homeKit  what the user has at home, from
+     *                                    training_preferences.home_equipment. NULL means they
+     *                                    were never asked, which is NOT the same as owning
+     *                                    nothing — see below.
+     */
+    private static function availableAt(
+        array $exercise,
+        string $access,
+        ?array $homeKit = null
+    ): bool {
         $equipment = json_decode((string) ($exercise['equipment'] ?? '[]'), true);
         if (!is_array($equipment) || $equipment === []) {
             return true;   // needs nothing
@@ -468,11 +503,39 @@ final class PlanSchema
             'full_gym'   => true,
             'bodyweight' => false,
             'outdoors'   => false,
-            // Home gyms vary per user; the availability grid carries the real
-            // equipment list, so the caller filters. Permissive here.
-            'home_gym'   => true,
+            /*
+             * A home gym is whatever the user says it is.
+             *
+             * This used to return true unconditionally, making home_gym a synonym for full_gym:
+             * somebody with two dumbbells in a spare room was offered a cable tower, a hack
+             * squat and a pool. Nothing caught it, because checkAvailability compares the
+             * SESSION location against the day, not exercises against equipment — so the user
+             * simply got a plan they could not perform.
+             *
+             * NULL is deliberately permissive. It means the question predates them, and
+             * silently taking away their barbell because we never asked would be worse than the
+             * bug this fixes. An empty ARRAY is a real answer: nothing, bodyweight only.
+             */
+            'home_gym'   => $homeKit === null || self::kitCovers($equipment, $homeKit),
             default      => true,
         };
+    }
+
+    /** Does this kit satisfy everything the exercise needs? */
+    private static function kitCovers(array $needs, array $kit): bool
+    {
+        $have = [];
+        foreach ($kit as $item) {
+            foreach (self::HOME_KIT[$item] ?? [$item] as $token) {
+                $have[$token] = true;
+            }
+        }
+        foreach ($needs as $token) {
+            if (!isset($have[$token])) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** Canonical slug for a name or alias, or null if unknown to the library. */

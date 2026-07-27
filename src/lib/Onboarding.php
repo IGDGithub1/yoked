@@ -779,18 +779,33 @@ final class Onboarding
 
     private static function projectTraining(int $userId): ?array
     {
+        /*
+         * 6.12 — the home gym kit. NULL when unanswered, which is NOT the same as [].
+         *
+         * An empty array means "I have nothing, bodyweight only" and narrows the exercise
+         * vocabulary accordingly. NULL means nobody asked — true of every user who onboarded
+         * before this question existed — and keeps the permissive old behaviour rather than
+         * silently taking away a barbell we have no answer about.
+         *
+         * Read before the INSERT because answer()'s default has to be null rather than [] to
+         * preserve that difference.
+         */
+        $homeKit = self::answer($userId, '6.12', null);
+
         DB::run(
             'INSERT INTO training_preferences
              (user_id, experience, currently_training, past_success, self_strength,
-              self_cardio, known_lifts, cardio_willing, cardio_refused,
+              self_cardio, known_lifts, home_equipment, cardio_willing, cardio_refused,
               preferred_split, cardio_feeling)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                experience = VALUES(experience),
                currently_training = VALUES(currently_training),
                past_success = VALUES(past_success),
                self_strength = VALUES(self_strength), self_cardio = VALUES(self_cardio),
-               known_lifts = VALUES(known_lifts), cardio_willing = VALUES(cardio_willing),
+               known_lifts = VALUES(known_lifts),
+               home_equipment = VALUES(home_equipment),
+               cardio_willing = VALUES(cardio_willing),
                cardio_refused = VALUES(cardio_refused),
                preferred_split = VALUES(preferred_split),
                cardio_feeling = VALUES(cardio_feeling)',
@@ -810,6 +825,18 @@ final class Onboarding
                     'poor', 'below_average', 'average', 'good', 'excellent',
                 ]),
                 json_encode(self::asItemList(self::answer($userId, '6.6', []))),
+                /*
+                 * 6.12 — the home gym kit. NULL when unanswered, which is NOT [].
+                 *
+                 * An empty array means "I have nothing, bodyweight only" and narrows the
+                 * vocabulary accordingly. NULL means nobody asked — which is true of every user
+                 * who onboarded before this question existed — and keeps the old permissive
+                 * behaviour rather than silently taking away a barbell we have no answer about.
+                 *
+                 * self::answer returns the default for a skipped question, so the default here
+                 * is null rather than [] to preserve that difference.
+                 */
+                $homeKit === null ? null : json_encode(self::asItemList($homeKit)),
                 json_encode(self::asItemList(self::answer($userId, '6.8', []))),
                 json_encode(self::asItemList(self::answer($userId, '6.9', []))),
                 Validate::enum(self::answer($userId, '6.10'), [

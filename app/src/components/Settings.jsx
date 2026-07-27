@@ -56,6 +56,22 @@ const HOURS = Array.from({ length: 24 }, (_, h) => ({
   label: h === 0 ? '12am' : h < 12 ? `${h}am` : h === 12 ? '12pm' : `${h - 12}pm`,
 }))
 
+/*
+ * Plain English for the equipment tokens the API offers.
+ *
+ * Keyed off what the server sends in home_kit_options rather than hardcoding the list, so
+ * adding a seventh item is a server change and this only supplies the wording. An unknown key
+ * falls back to the token itself, which is ugly but visible — better than an empty button.
+ */
+const HOME_KIT_LABELS = {
+  dumbbell: 'Dumbbells',
+  bench: 'Bench',
+  resistance_band: 'Resistance bands',
+  pull_up_bar: 'Pull-up bar',
+  kettlebell: 'Kettlebell',
+  barbell: 'Barbell and rack',
+}
+
 export default function Settings() {
   const [s, setS] = useState(null)
   const [error, setError] = useState(null)
@@ -234,6 +250,56 @@ export default function Settings() {
             ))}
           </select>
         </label>
+      </div>
+
+      {/*
+        What is in the home gym.
+
+        Only affects days marked "Home gym" in the availability grid — a full gym day is
+        unchanged by it. Editable here because kit changes: people buy a bench, or move house
+        and lose the garage rack, and neither should mean re-running onboarding.
+
+        NULL and empty are different states and the copy says which one you are in. Never
+        answered keeps the old permissive behaviour; answered-with-nothing means bodyweight
+        work at home.
+      */}
+      <div className="card stack-sm">
+        <h3 className="subheading">Your home gym</h3>
+        <p className="tiny muted prose" style={{ margin: 0 }}>
+          {s.home_equipment === null
+            ? 'We have never asked, so we assume you have everything on the days you train at '
+              + 'home. Tell us what is actually there and your plan will stick to it.'
+            : 'Used on the days your schedule says "Home gym". Your gym days are unaffected.'}
+        </p>
+        <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+          {(s.home_kit_options ?? []).map((item) => {
+            const owned = (s.home_equipment ?? []).includes(item)
+            return (
+              <button
+                key={item}
+                type="button"
+                className={owned ? 'btn btn--primary btn--small' : 'btn btn--quiet btn--small'}
+                aria-pressed={owned}
+                disabled={busy}
+                onClick={() => {
+                  const now = s.home_equipment ?? []
+                  save({
+                    home_equipment: owned
+                      ? now.filter((x) => x !== item)
+                      : [...now, item],
+                  })
+                }}
+              >
+                {HOME_KIT_LABELS[item] ?? item}
+              </button>
+            )
+          })}
+        </div>
+        {s.home_equipment !== null && s.home_equipment.length === 0 && (
+          <p className="tiny muted prose" style={{ margin: 0 }}>
+            Nothing selected, so home days will be bodyweight work.
+          </p>
+        )}
       </div>
 
       <div className="card stack-sm">

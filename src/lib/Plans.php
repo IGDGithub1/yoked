@@ -384,6 +384,22 @@ final class Plans
         $accessSet = array_keys($accessSet);
 
         /*
+         * What they have at home, for the days marked home_gym.
+         *
+         * NULL and [] mean different things and the distinction is load-bearing: NULL is a user
+         * who was never asked and keeps the permissive old behaviour, [] is a user who said
+         * they have nothing and gets bodyweight work.
+         */
+        $kitRow  = DB::one(
+            'SELECT home_equipment FROM training_preferences WHERE user_id = ?', [$userId]
+        );
+        $homeKit = null;
+        if ($kitRow !== null && $kitRow['home_equipment'] !== null) {
+            $decoded = json_decode((string) $kitRow['home_equipment'], true);
+            $homeKit = is_array($decoded) ? $decoded : null;
+        }
+
+        /*
          * How many committed sessions this user should get, and where the surplus comes from
          * (§10.3b). Unpaired this is simply their stated count.
          */
@@ -404,8 +420,15 @@ final class Plans
             'food'         => DB::one('SELECT * FROM food_preferences WHERE user_id = ?', [$userId]),
             'training'     => DB::one('SELECT * FROM training_preferences WHERE user_id = ?', [$userId]),
             'constraints'  => Safety::promptBlock($userId),
-            // Only what they can perform somewhere in this week (see $accessSet above).
-            'vocabulary'   => PlanSchema::vocabulary(null, $accessSet),
+            /*
+             * Only what they can perform somewhere in this week (see $accessSet above), with a
+             * home_gym day narrowed to the kit they actually own.
+             *
+             * $homeKit is null when they were never asked, which keeps the old permissive
+             * behaviour for users who onboarded before the question existed rather than
+             * silently taking away equipment we have no answer about.
+             */
+            'vocabulary'   => PlanSchema::vocabulary(null, $accessSet, $homeKit),
             // Which of those the user is banned from, so the prompt can mark them rather than
             // hide them. Enforcement stays with Safety::validatePlan.
             'banned_slugs' => Safety::bannedSlugs($userId),

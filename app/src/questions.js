@@ -407,6 +407,31 @@ export const SECTIONS = [
         ],
       },
       {
+        /*
+         * What is actually in the home gym.
+         *
+         * Only matters if a day is marked "Home gym" in the availability grid — but asked of
+         * everyone, because the grid comes later in onboarding and a conditional question that
+         * depends on a later answer is worse than one extra tap.
+         *
+         * Six items rather than the library's 32 equipment tokens: twenty of those unlock one
+         * exercise each, and a long checklist is where people tick everything without reading.
+         * Ticking nothing is a real answer — bodyweight work at home — not a skipped question.
+         */
+        key: '6.12', type: 'multi',
+        label: 'If you train at home, what have you got?',
+        help: 'Leave it empty if the answer is nothing. Your plan will use bodyweight work '
+            + 'on those days rather than asking you for a squat rack you do not own.',
+        options: [
+          { value: 'dumbbell', label: 'Dumbbells' },
+          { value: 'bench', label: 'Bench' },
+          { value: 'resistance_band', label: 'Resistance bands' },
+          { value: 'pull_up_bar', label: 'Pull-up bar' },
+          { value: 'kettlebell', label: 'Kettlebell' },
+          { value: 'barbell', label: 'Barbell and rack' },
+        ],
+      },
+      {
         key: '6.10', type: 'choice',
         label: 'Any preference for how the week is split?',
         options: [
