@@ -1137,18 +1137,46 @@ final class Plans
             }
 
             $surplus = $ctx['committed_target'] ?? [];
-            if (($surplus['surplus'] ?? 0) > 0 && ($surplus['mode'] ?? null) !== null) {
+            if (($surplus['surplus'] ?? 0) > 0) {
                 $out[] = '';
-                $out[] = match ((string) $surplus['mode']) {
-                    // §10.3b, in the model's terms rather than the schema's.
-                    'keep_commitment' => 'Beyond the shared days they still want their full '
-                        . 'committed count, so fill the rest from their own available days.',
-                    'extras_optional' => 'Beyond the shared days, any further sessions are '
-                        . 'OPTIONAL: is_committed false, no adherence cost.',
-                    'match_buddy'     => 'They want their week to match the shared days only. '
-                        . 'Do not add extra training days beyond them.',
-                    default           => '',
-                };
+                if (($surplus['mode'] ?? null) !== null) {
+                    $out[] = match ((string) $surplus['mode']) {
+                        // §10.3b, in the model's terms rather than the schema's.
+                        'keep_commitment' => 'Beyond the shared days they still want their full '
+                            . 'committed count, so fill the rest from their own available days.',
+                        'extras_optional' => 'Beyond the shared days, any further sessions are '
+                            . 'OPTIONAL: is_committed false, no adherence cost.',
+                        'match_buddy'     => 'They want their week to match the shared days only. '
+                            . 'Do not add extra training days beyond them.',
+                        default           => '',
+                    };
+                } else {
+                    /*
+                     * The surplus question is outstanding, and the SILENCE was the bug.
+                     *
+                     * With 5 committed days and 3 shared, this block used to render nothing at
+                     * all unless the user had answered §10.3b. So the model was told to commit
+                     * to exactly 5, shown 3 shared days, and left to work out where the other
+                     * two went — and a live leader answered by putting a session on a Thursday
+                     * the grid had closed, running a shared Friday to 60 minutes against a
+                     * 45-minute window, and committing 7 sessions instead of 5.
+                     *
+                     * The default until they answer is their stated count filled from their own
+                     * available days (committedTarget returns exactly that), so say so rather
+                     * than leaving a gap the model has to fill by guessing.
+                     */
+                    $out[] = sprintf(
+                        'They train %d days a week and %d of those are shared. The other %d '
+                        . 'come from their OWN available days — the ones not marked SHARED. '
+                        . 'They have not yet said whether they want it that way, so assume '
+                        . 'they do.',
+                        (int) $surplus['committed'],
+                        (int) $surplus['committed'] - (int) $surplus['surplus'],
+                        (int) $surplus['surplus']
+                    );
+                    $out[] = 'Do not invent a day to fit them on. If the available days cannot '
+                           . 'hold the full count, commit to fewer.';
+                }
             }
 
             /*

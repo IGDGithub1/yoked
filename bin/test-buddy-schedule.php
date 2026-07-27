@@ -568,6 +568,56 @@ t('a surplus asks, and does NOT silently shrink the week', function () {
         ?: 'the week shrank to ' . $tgt['committed'] . ' before they answered';
 });
 
+t('an unanswered surplus is EXPLAINED to the model, not left blank', function () {
+    /*
+     * The silence was the bug, and a live leader generation paid for it.
+     *
+     * The surplus block only rendered once the user had answered §10.3b. Until then the model
+     * was told "commit to exactly 5", shown 3 shared days, and left to work out where the other
+     * two went. It answered by scheduling a session on a day the grid had closed, running a
+     * shared day past its window, and committing 7 sessions instead of 5 — three violations of
+     * rules the prompt states plainly, from one gap it does not.
+     *
+     * committedTarget already returns the honest default (their stated count, filled from their
+     * own days). This just says it out loud.
+     */
+    $a = seedUser('surpq_a', 5);
+    $b = seedUser('surpq_b', 3);
+    grid($a, [1 => [75, 'full_gym'], 2 => [75, 'full_gym'], 3 => [75, 'full_gym'],
+              5 => [75, 'full_gym'], 6 => [60, 'full_gym']]);
+    grid($b, [1 => [45, 'home_gym'], 3 => [45, 'home_gym'], 5 => [45, 'home_gym']]);
+    DB::run(
+        'INSERT INTO goals (user_id, primary_goal, success_statement, requested_timeline,
+                            horizon_weeks, scale_vs_feel, status)
+         VALUES (?, "build_muscle", "x", "16_weeks", 16, "both", "active")', [$a]
+    );
+    $pairId = pairUp($a, $b);
+
+    // Precondition: the question really is outstanding, or this proves nothing.
+    $tgt = BuddySchedule::committedTarget($a, $pairId);
+    if (($tgt['needs_choice'] ?? false) !== true) {
+        return 'the fixture has already answered the surplus question';
+    }
+
+    $gather = new ReflectionMethod(Plans::class, 'gatherContext');
+    $gather->setAccessible(true);
+    $ctx = $gather->invoke(null, $a, nextWeek());
+
+    $prompt = new ReflectionMethod(Plans::class, 'userPrompt');
+    $prompt->setAccessible(true);
+    $text = (string) $prompt->invoke(null, $ctx, nextWeek(), []);
+
+    if (!preg_match('/They train 5 days a week and 3 of those are shared/', $text)) {
+        return 'the split between shared and own days is not stated';
+    }
+    if (!str_contains($text, 'not marked SHARED')) {
+        return 'the prompt does not say where the extra days come from';
+    }
+    // And the guard against the exact failure: inventing a day to fit them on.
+    return str_contains($text, 'Do not invent a day')
+        ?: 'nothing stops the model adding a day to reach the count';
+});
+
 t('keep_commitment keeps the stated count', function () {
     $a = (int) DB::one('SELECT id FROM users WHERE username = "bsch_surp_a"')['id'];
     $pairId = (int) BuddySchedule::activePair($a)['id'];
