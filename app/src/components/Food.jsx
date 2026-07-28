@@ -514,6 +514,7 @@ function Meal({ meal, date, prescribed, primary, favorites, onFavorites, onDay,
  */
 function Entry({ entry, busy, run, favorites, onFavorites }) {
   const [starring, setStarring] = useState(false)
+  const [editing, setEditing] = useState(false)
 
   // Case-insensitive, matching the server's uk_fav_user_name collation — so the
   // star reflects what a POST would actually do rather than disagreeing with it.
@@ -561,31 +562,134 @@ function Entry({ entry, busy, run, favorites, onFavorites }) {
   }
 
   return (
-    <div className="row entry">
-      <span className="small">
-        {entry.name}
-        {entry.serving_g ? <span className="muted num"> {entry.serving_g}g</span> : null}
-      </span>
-      <span className="tiny muted num push">{Math.round(entry.calories)} kcal</span>
-      <button
-        type="button"
-        className="star"
-        aria-pressed={!!fav}
-        aria-label={fav ? `Remove ${entry.name} from favorites` : `Save ${entry.name} to favorites`}
-        disabled={starring}
-        onClick={toggleStar}
-      >
-        {fav ? '★' : '☆'}
-      </button>
-      <button
-        type="button"
-        className="btn btn--quiet"
-        aria-label={`Remove ${entry.name}`}
-        disabled={busy}
-        onClick={() => run(() => api.nutrition.deleteEntry(entry.id))}
-      >
-        ×
-      </button>
+    <div className="stack-tight entry-wrap">
+      <div className="row entry">
+        <span className="small">
+          {entry.name}
+          {/*
+            The serving is a BUTTON when there is one to change, and plain text when there
+            is not. An entry logged from a prescribed meal has no serving recorded, and an
+            amount control with nothing to scale from would either do nothing or invent a
+            baseline. Offering it only where the maths is possible is what keeps rescaling
+            all-or-nothing from the user's side.
+          */}
+          {entry.serving_g ? (
+            <button
+              type="button"
+              className="servingbtn num"
+              aria-expanded={editing}
+              aria-label={`Change the amount of ${entry.name}, currently ${entry.serving_g} grams`}
+              onClick={() => setEditing((v) => !v)}
+            >
+              {entry.serving_g}g
+            </button>
+          ) : null}
+        </span>
+        <span className="tiny muted num push">{Math.round(entry.calories)} kcal</span>
+        <button
+          type="button"
+          className="star"
+          aria-pressed={!!fav}
+          aria-label={fav ? `Remove ${entry.name} from favorites` : `Save ${entry.name} to favorites`}
+          disabled={starring}
+          onClick={toggleStar}
+        >
+          {fav ? '★' : '☆'}
+        </button>
+        <button
+          type="button"
+          className="btn btn--quiet"
+          aria-label={`Remove ${entry.name}`}
+          disabled={busy}
+          onClick={() => run(() => api.nutrition.deleteEntry(entry.id))}
+        >
+          ×
+        </button>
+      </div>
+
+      {editing && (
+        <Amount
+          entry={entry}
+          busy={busy}
+          run={run}
+          onDone={() => setEditing(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * Correcting how much of something was actually eaten.
+ *
+ * The server rescales every macro from the ratio, so this sends ONE number. That is the
+ * whole reason it can be a single field rather than a form: nobody knows what 5g of yellow
+ * mustard is in grams of fat, and asking is how the numbers stay wrong.
+ *
+ * The preview is computed here purely to show what will happen before it happens. It is
+ * never sent — the server does its own maths from the stored row, so a rounding difference
+ * between the two shows up as a slightly different figure after saving, not as a wrong
+ * figure saved.
+ */
+function Amount({ entry, busy, run, onDone }) {
+  const [grams, setGrams] = useState(String(entry.serving_g ?? ''))
+
+  const next = Number(grams)
+  const valid = Number.isFinite(next) && next > 0 && next <= 5000
+  const scale = valid && entry.serving_g > 0 ? next / entry.serving_g : 1
+  const changed = valid && next !== entry.serving_g
+
+  return (
+    <div className="amount">
+      <label className="tiny muted" htmlFor={`amt-${entry.id}`}>
+        How much did you actually eat?
+      </label>
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+        <input
+          id={`amt-${entry.id}`}
+          className="input num"
+          type="number"
+          inputMode="decimal"
+          min="1"
+          max="5000"
+          step="1"
+          style={{ maxWidth: '6.5em' }}
+          value={grams}
+          disabled={busy}
+          onChange={(e) => setGrams(e.target.value)}
+        />
+        <span className="tiny muted">grams</span>
+
+        {/* What it becomes. Shown before saving, because the point of scaling is that the
+            other three numbers move and you should see that they will. */}
+        {changed && (
+          <span className="tiny muted num push">
+            → {Math.round(entry.calories * scale)} kcal · P{' '}
+            {Math.round(entry.protein * scale * 10) / 10} · F{' '}
+            {Math.round(entry.fat * scale * 10) / 10} · net C{' '}
+            {Math.round(entry.carbs * scale * 10) / 10}
+          </span>
+        )}
+      </div>
+      <div className="row" style={{ gap: 6 }}>
+        <button
+          type="button"
+          className="btn btn--primary btn--small"
+          disabled={busy || !changed}
+          /* Closed only on success. `run` swallows the error into the meal's banner and
+             resolves null, so an unconditional close would hide the failure behind a panel
+             that looks like it saved. */
+          onClick={() =>
+            run(() => api.nutrition.updateEntry(entry.id, { serving_g: next }))
+              .then((r) => { if (r) onDone() })
+          }
+        >
+          Save
+        </button>
+        <button type="button" className="btn btn--quiet btn--small" onClick={onDone}>
+          Cancel
+        </button>
+      </div>
     </div>
   )
 }

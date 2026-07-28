@@ -502,11 +502,50 @@
  * One food or one exercise. Hairline separated rather than carded: these are
  * items in a list, and a card each turns a meal into a stack of boxes.
  */
-.entry {
+/*
+ * The separator moved to the WRAPPER when entries grew an amount panel.
+ *
+ * It used to sit on .entry, which was the whole row. Now .entry is only the top line and
+ * the panel is its sibling, so a rule on .entry would draw a line between a food and its
+ * own amount editor.
+ */
+.entry-wrap {
   padding: 7px 0;
   border-top: 1px solid var(--hairline);
 }
-.entry:first-of-type { border-top: 0; }
+.entry-wrap:first-of-type { border-top: 0; }
+
+/*
+ * The serving, as a control.
+ *
+ * Styled as text with a dotted underline rather than as a button: it sits inside a line of
+ * prose next to the food name, and a bordered button there reads as a second action
+ * competing with the star and the ×. The dotted rule is the convention for "this word does
+ * something", and it survives a theme change because it inherits the muted colour.
+ */
+.servingbtn {
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  margin-left: 4px;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 1px dotted currentColor;
+}
+.servingbtn:hover { color: var(--ink); }
+.servingbtn[aria-expanded='true'] { color: var(--yolk-deep); }
+
+/* The panel itself, indented under the food it belongs to so it reads as part of that row
+   rather than as a new entry. */
+.amount {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 2px;
+  padding: 8px 0 4px 10px;
+  border-left: 2px solid var(--hairline);
+}
 
 /* ---- the exercise row -------------------------------------------------- */
 

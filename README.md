@@ -12,16 +12,17 @@ baseline, and report their week back to the coach that plans the next one.
 
 | | |
 |---|---|
-| Schema | ✅ 39 tables, 57 FKs, live on SiteGround |
-| Seed data | ✅ 90 exercises, 53 aliases, 8 goal presets |
+| Schema | ✅ 44 tables, 73 FKs, 22 migrations, live on SiteGround |
+| Seed data | ✅ 1002 exercises, 943 aliases, 8 goal presets |
 | Deploy | ✅ one command (`bin/deploy.ps1`) |
 | `Goals.php` | ✅ pluggable evaluator; reproduces the original keto rule exactly |
 | `Claude.php` | ✅ API client, prompt caching, constraint-retry loop |
 | `Plans.php` | ✅ week generation, validation, versioned persistence |
 | API tier | ✅ `api/index.php`, global CSRF, session auth |
 | Onboarding UI | ✅ the quiz, tier confirmation, answer review |
-| Journal (logging) | ✅ food (search, barcode, favorites), training incl. free-logging, check-in |
+| Journal (logging) | ⚠️ works, but the food half needs the rework below |
 | Dashboard | ✅ landing page: nudges, coach reviews, week-at-a-glance |
+| Admin | ✅ members, roles, suspension, invite codes. No delete: suspension is reversible, a cascade is not |
 | Baseline lifecycle | ✅ two weeks, Monday-aligned, per-user local time, graduates to active |
 | Weekly check-in | ✅ Sat 18:00 local, shapes Sunday's plan, late answers reviewed |
 | Drift and nudges | ✅ §4.2 escalation, pure SQL on track; §9 absence ladder, tone-matched |
@@ -29,13 +30,52 @@ baseline, and report their week back to the coach that plans the next one.
 | Chat | ✅ §6 evaluate-and-revise at `#/coach`; the write path cannot touch a plan |
 | Vetoes | ✅ §5 reason required, replace not delete, standing promotes to a SOFT constraint |
 | Profile | ✅ quiz sections, the settings the quiz never asked, and an off switch for soft preferences only |
+| Progress photos | ✅ owner-only, EXIF stripped, stored outside the web root, never sent to Claude |
 | Visibility | ✅ one authority for who sees what; the privacy flags finally bite (§10.4) |
 | Friends | ✅ §10.1 the social graph: search, request, block. Prefix on handles, full email only |
 | Buddy pairing | ✅ §10.1 handshake, §10.5 either side unpairs |
 | Buddy schedules | ✅ §10.1a two schedules, §10.3a compromise, §10.3b the surplus choice. Generation puts both in the gym on the same days |
-| Synced sessions | ⬜ §10.6 one shared skeleton per pair. A shared day means both training, not the same workout |
+| Synced sessions | ✅ §10.6 one shared skeleton per pair. A shared day means both training, not the same workout |
 | Inherited limits | ✅ §10.2b a buddy's training avoids arrive SOFT; food and conditions never transfer |
 | Buddy absence | ✅ §10.5 declared travel, mid-week illness, silent fallback. The partner keeps a complete week |
+| Exercise selection | ✅ vocabulary scoped by access, home kit, category and level; isolation capped per muscle; no movement more than 3× a week |
+| Menu variety | ⬜ nothing tracks recent meals, so the same week can repeat |
+| Password reset | ⬜ blocked: no mail delivery decided. Invites are issued by hand today |
+
+## What is being worked on
+
+**The food logging screen.** The intelligence behind Yoked beats what it was built from;
+the screen you touch every day for fourteen straight days does not, and that stretch comes
+first and gives nothing back. Someone bails during baseline and never sees the coaching.
+
+Established by comparing the live screen against `source-projects/keto-extract`:
+
+1. **A logged entry cannot be corrected.** If search returns 100g of mustard and you ate a
+   teaspoon, every number downstream is wrong — the day, the drift detection, the check-in,
+   and the menu Claude writes off the back of it. `PATCH /api/nutrition/entries/{id}`,
+   `Nutrition::updateEntry()` and `api.nutrition.updateEntry()` all exist and **nothing in
+   the UI calls them**. The gap is a control and the rescale maths, not a feature.
+2. **No servings field before adding** a search or scan result. The barcode flow is the only
+   place that ever asks, and search is the commoner path.
+3. **The delta row renders with no plan.** "Cooked in oil? Nudge it." is a correction against
+   a *prescribed* meal; during baseline there is nothing prescribed, so it is a prompt for a
+   case the user is not in. It is also calories-only, and cannot say "and 3g of fat".
+4. **No macro rings.** The day's four numbers are a text line that reads as data rather than
+   progress. The information is already on the day payload.
+5. **Search, scan and favourites are nested inside every meal**, because they are the
+   DEVIATION path — the answer to "I ate something other than the plan". During baseline
+   deviation is the only path, so a control shaped like a second choice is the only choice,
+   repeated five times with its sub-tabs resetting each time.
+
+Rescaling is automatic and server-side: if the maths can be done it gets done, and it is all
+or nothing rather than some foods scaling and others asking. Item 5 gets a spec document
+before any code, because it changes the shape of the screen and interacts with the planned
+meal model in ways 1-4 do not.
+
+Not adopted from Keto: editing the four meal totals to compensate for a wrong entry. It
+makes the day's number right while leaving the record a lie, and Claude reads the record.
+
+**Next after that: training logging.** Untouched so far and the larger of the two halves.
 
 ### Running the tests
 
@@ -123,6 +163,17 @@ php bin/test-buddy-schedule.php  # the grid is never rewritten; a conceded day i
 php bin/test-claude.php       # API client; --offline for shape checks only
 php bin/test-logging.php      # over real HTTP: food, training, check-in
 php bin/test-plans.php        # generation; --live to actually generate
+php bin/test-admin.php        # the guards; asserts no member-delete route exists
+php bin/test-skeleton-live.php   # §10.6 the shared skeleton both buddies derive
+```
+
+The exercise library has its own tooling, all dry-run first:
+
+```sh
+php bin/import-exercises.php --report   # what would change, nothing written
+php bin/import-exercises.php --audit    # rule-based checks on the mapping
+php bin/import-exercises.php --commit   # actually write
+php bin/aicalls.php                     # last 20 API calls: tokens, retries, cost
 ```
 
 The logging UI is driven in a real browser, because the client/server contract is
@@ -137,13 +188,18 @@ the plan week has to contain it. `npm run drive` handles that. The suite mutates
 what it seeds, so running `drive:logging` twice without re-seeding will refuse to
 start rather than produce a screenful of misleading failures.
 
-Three fixtures, all `coaching_paused` so cron never spends money on them:
+Four fixtures, all `coaching_paused` so cron never spends money on them:
 
 ```
 uitest_logging   active, plan for today, constraints of every facet
 uitest_baseline  day 3 of 14, no plan
 uitest_review    a real evening review_hour, in a timezone picked to be inside it
+uitest_admin     an admin, plus three invites: one open, one expired, one used
 ```
+
+`uitest_admin` is a fixture rather than a promoted real account for two reasons: the
+last-admin guards need two admins to be exercisable at all, and a suite that suspends or
+demotes a real account is one bug away from locking somebody out of their own app.
 
 The browser suite also guards three things a unit test cannot see: that the page
 never scrolls sideways at 360px, that the accent stays spent once per view, and that
@@ -186,6 +242,20 @@ nothing change.
   Sunday 18:00, so the user's own account of their week can shape it. Answer late
   and the plan is already built; the coach reads the check-in anyway and changes the
   plan only if something in it needs changing.
+- **The log is a record, not a running total.** A correction fixes the entry that is wrong,
+  never a total that compensates for it. The source app edits meal totals instead, which
+  makes the day's number right while leaving the record a lie — and Claude reads the record
+  to write next week's menu, so a lie there is a lie in the plan.
+- **Repetition is a within-week problem.** The same movement on the same weekday for two
+  months is a programme; six times in one week is a defect. The ceiling is three, and a
+  session never repeats a movement at all.
+- **Existing exercise rows are canonical.** `logged_exercises` and `prescribed_exercises`
+  reference them with `ON DELETE RESTRICT`, so a new name that means an existing movement
+  becomes an alias. Deleting or renaming detaches load history silently.
+- **Suspension, never deletion.** The cascade from a user reaches plans, logged days,
+  photos, buddy pairs and check-ins with no undo, and "stop this account working" is the
+  real requirement. A used invite is not revocable either: it is the only record of who let
+  a given person in.
 
 ## Lineage
 

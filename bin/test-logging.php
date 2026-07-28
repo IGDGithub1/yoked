@@ -111,6 +111,19 @@ function slot(array $day, string $name): ?array
     return null;
 }
 
+/** One logged entry, by id, from anywhere in a day payload. */
+function findEntry(array $day, int $id): ?array
+{
+    foreach ($day['meals'] ?? [] as $m) {
+        foreach ($m['entries'] ?? [] as $e) {
+            if ((int) ($e['id'] ?? 0) === $id) {
+                return $e;
+            }
+        }
+    }
+    return null;
+}
+
 echo "Logging tests against {$base}\n\n";
 
 // ---- clean slate -----------------------------------------------------------
@@ -512,6 +525,123 @@ t('protein hit with calories short reads as short-but-ok, not a failure', functi
     $v = $r['body']['day']['verdict'] ?? null;
     return ($v['short_but_ok'] ?? null) === true
         ?: 'expected short_but_ok: ' . json_encode($v);
+});
+
+// ---- correcting an entry ---------------------------------------------------
+
+echo "\n6b. the serving correction\n";
+
+/*
+ * The correction the app shipped without.
+ *
+ * Search returns 100g of yellow mustard, nobody eats 100g of yellow mustard, and every
+ * number downstream was wrong: the day, the drift detection, the check-in, and the menu
+ * Claude writes off the back of it. PATCH existed; nothing called it, and it did not
+ * rescale.
+ */
+$mustardId = null;
+
+t('an entry can be logged with a serving', function () use ($today, &$mustardId) {
+    $r = req('POST', 'nutrition/entries', [
+        'date' => $today, 'slot' => 'lunch', 'name' => 'Yellow mustard',
+        'serving_g' => 100, 'calories' => 60, 'protein' => 3.7, 'fat' => 3.4,
+        'total_carbs' => 6.0, 'fiber' => 4.0,
+    ]);
+    if ($r['status'] !== 201) {
+        return "status {$r['status']}: {$r['raw']}";
+    }
+    $mustardId = $r['body']['entry_id'] ?? null;
+    return $mustardId !== null ?: 'no entry_id returned';
+});
+
+t('changing the serving rescales every macro', function () use (&$mustardId) {
+    // 100g -> 5g is a factor of 0.05. A teaspoon of mustard, which is the real case.
+    $r = req('PATCH', "nutrition/entries/{$mustardId}", ['serving_g' => 5]);
+    if ($r['status'] !== 200) {
+        return "status {$r['status']}: {$r['raw']}";
+    }
+    $e = findEntry($r['body']['day'] ?? [], (int) $mustardId);
+    if ($e === null) {
+        return 'the entry vanished from the day';
+    }
+    // calories round to whole, macros to 1dp. 60*.05 = 3, 3.7*.05 = 0.185 -> 0.2.
+    $want = ['serving_g' => 5, 'calories' => 3.0, 'protein' => 0.2, 'fat' => 0.2];
+    foreach ($want as $k => $v) {
+        if (abs((float) $e[$k] - $v) > 0.051) {
+            return "$k was {$e[$k]}, wanted $v: " . json_encode($e);
+        }
+    }
+    return true;
+});
+
+t('net carbs stay derived after a rescale', function () use ($today, &$mustardId) {
+    // 6.0 total - 4.0 fiber = 2.0 net at 100g, so 0.1 net at 5g. Scaling total and
+    // fiber separately and re-deriving must not drift from scaling net directly.
+    $r = req('GET', "nutrition/day/{$today}");
+    $e = findEntry($r['body'] ?? [], (int) $mustardId);
+    if ($e === null) {
+        return 'the entry vanished';
+    }
+    return abs((float) $e['carbs'] - 0.1) < 0.051
+        ?: "net carbs were {$e['carbs']}, wanted 0.1: " . json_encode($e);
+});
+
+t('an explicit macro wins over the rescale', function () use (&$mustardId) {
+    /*
+     * "34g, and I already know the real calories."
+     *
+     * The ratio would say 3 * (34/5) = 20.4. Sending calories explicitly must record
+     * the serving without recomputing the figure from a ratio that no longer applies —
+     * otherwise correcting a serving on an already-corrected entry is impossible.
+     */
+    $r = req('PATCH', "nutrition/entries/{$mustardId}", ['serving_g' => 34, 'calories' => 99]);
+    if ($r['status'] !== 200) {
+        return "status {$r['status']}: {$r['raw']}";
+    }
+    $e = findEntry($r['body']['day'] ?? [], (int) $mustardId);
+    if ((int) $e['serving_g'] !== 34) {
+        return "serving was {$e['serving_g']}, wanted 34";
+    }
+    if (abs((float) $e['calories'] - 99.0) > 0.51) {
+        return "calories were {$e['calories']}, wanted the explicit 99";
+    }
+    // The macros NOT sent still scale, by 34/5.
+    return abs((float) $e['protein'] - 1.4) < 0.11
+        ?: "protein was {$e['protein']}, wanted ~1.4 (0.2 * 6.8)";
+});
+
+t('a rename does not touch the serving or the macros', function () use (&$mustardId) {
+    $r = req('PATCH', "nutrition/entries/{$mustardId}", ['name' => 'Mustard, yellow']);
+    $e = findEntry($r['body']['day'] ?? [], (int) $mustardId);
+    return $e['name'] === 'Mustard, yellow'
+        && (int) $e['serving_g'] === 34
+        && abs((float) $e['calories'] - 99.0) < 0.51
+        ?: 'a rename changed something else: ' . json_encode($e);
+});
+
+t('an entry with no serving is left alone by a rescale', function () use ($today) {
+    /*
+     * A prescribed meal logged as-planned has no serving recorded, so there is no ratio
+     * to scale FROM. The server must not invent one — and the UI does not offer the
+     * control at all in that case, which is what keeps rescaling all-or-nothing.
+     */
+    $r = req('POST', 'nutrition/entries', [
+        'date' => $today, 'slot' => 'lunch', 'name' => 'No serving recorded',
+        'calories' => 200, 'protein' => 10, 'fat' => 5, 'total_carbs' => 20,
+    ]);
+    $id = $r['body']['entry_id'] ?? null;
+    $r2 = req('PATCH', "nutrition/entries/{$id}", ['serving_g' => 50]);
+    $e  = findEntry($r2['body']['day'] ?? [], (int) $id);
+    // The serving is now recorded, but nothing was scaled from nothing.
+    return (int) $e['serving_g'] === 50 && abs((float) $e['calories'] - 200.0) < 0.51
+        ?: 'macros moved with no ratio to scale from: ' . json_encode($e);
+});
+
+t('an entry that is not mine cannot be corrected', function () {
+    // Ownership is enforced by ownedEntry()'s join through logged_days.user_id, so a bad
+    // id and someone else's id fail identically. This asserts the join is still there.
+    $r = req('PATCH', 'nutrition/entries/99999999', ['serving_g' => 1]);
+    return $r['status'] === 404 ?: "expected 404, got {$r['status']}: {$r['raw']}";
 });
 
 // ---- favorites -------------------------------------------------------------

@@ -425,6 +425,44 @@ final class Nutrition
             return ['ok' => false, 'error' => 'No such entry.'];
         }
 
+        /*
+         * A serving change RESCALES the macros, unless the caller sent its own.
+         *
+         * This is the correction the app existed without: search returns 100g of mustard,
+         * you ate a teaspoon, and every number downstream is wrong — the day, the drift
+         * detection, the weekly check-in, and the menu Claude writes off the back of it.
+         * Asking someone to retype four macros to fix one number is how that stays wrong.
+         *
+         * ALL OR NOTHING, deliberately. Either the maths is done for every food or it is
+         * done for none: a screen where some entries rescale and others want four numbers
+         * typed is worse than one that never rescales, because you cannot tell which you
+         * are looking at without checking. The only case that cannot scale is an entry
+         * with no serving recorded, and that is handled by not offering the control at all
+         * rather than by falling back to manual entry (see Food.jsx).
+         *
+         * An explicitly-sent macro always wins. That is what makes "34g, and I already know
+         * the real numbers" expressible: send both and the serving is recorded without the
+         * figures being recomputed from a ratio that no longer applies.
+         */
+        $from = self::intOrNull($existing['serving_g']);
+        $to   = array_key_exists('serving_g', $food)
+            ? self::intOrNull($food['serving_g'])
+            : null;
+
+        if ($to !== null && $from !== null && $from > 0 && $to !== $from) {
+            $scale = $to / $from;
+            // Every macro is per-serving, so they all move together. Rounding happens once,
+            // in normaliseMacros, so scaling twice does not compound a rounding error.
+            foreach (['calories' => 'calories', 'protein' => 'protein_g', 'fat' => 'fat_g',
+                      'carbs' => 'carbs_g', 'fiber' => 'fiber_g',
+                      'total_carbs' => 'total_carbs_g'] as $key => $col) {
+                if (array_key_exists($key, $food) || $existing[$col] === null) {
+                    continue;
+                }
+                $food[$key] = (float) $existing[$col] * $scale;
+            }
+        }
+
         // A PATCH that omits macros must not zero them. The original app had
         // exactly this bug — `parseFloat(undefined) ?? f.calories` yields NaN,
         // and ?? does not catch NaN, so a rename-only PUT wiped all four macros
