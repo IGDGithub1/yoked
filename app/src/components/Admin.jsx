@@ -11,9 +11,8 @@ import { api } from '../api'
  * logged days, photos, buddy pairs and check-ins, with no undo. Suspension is reversible and
  * covers the real case, which is "stop this account working" rather than "erase the person".
  *
- * The destructive-adjacent controls are disabled rather than hidden when they would fail — a
- * greyed button with a reason teaches what the rule is, where a missing one just looks like a
- * bug.
+ * The controls that would fail are DISABLED with the reason in the title rather than hidden. A
+ * greyed button teaches what the rule is; a missing one looks like a bug.
  */
 export default function Admin({ onClose }) {
   const [data, setData] = useState(null)
@@ -46,13 +45,21 @@ export default function Admin({ onClose }) {
     }
   }
 
-  if (error && data === null) return <p className="error">{error}</p>
+  // `.wrap` is what every other screen uses and what keeps the content off the left edge on a
+  // desktop. Shell renders children bare, so a screen that forgets it spans the whole viewport.
+  if (error && data === null) {
+    return (
+      <div className="wrap stack-lg">
+        <p className="error">{error}</p>
+      </div>
+    )
+  }
   if (data === null) return null
 
   const { members, admin_count: adminCount, me } = data
 
   return (
-    <div className="stack">
+    <div className="wrap stack-lg">
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
         <h2 className="heading">Admin</h2>
         <button type="button" className="btn btn--quiet btn--small" onClick={onClose}>
@@ -63,8 +70,10 @@ export default function Admin({ onClose }) {
       {error && <p className="error">{error}</p>}
 
       <div className="card stack-sm">
-        <h3 className="subheading">Members</h3>
-        <div className="stack-tight">
+        <h3 className="subheading">
+          Members <span className="sectioncount">· {members.length}</span>
+        </h3>
+        <div className="memberlist">
           {members.map((m) => (
             <Member
               key={m.id}
@@ -86,15 +95,23 @@ export default function Admin({ onClose }) {
 /** How long ago, in the roughest useful terms. */
 function ago(iso) {
   if (!iso) return 'never'
+  // Stored UTC; the T and Z make the string parse the same in every browser.
   const days = Math.floor((Date.now() - new Date(iso.replace(' ', 'T') + 'Z')) / 86400000)
   if (days <= 0) return 'today'
   if (days === 1) return 'yesterday'
-  if (days < 30) return `${days} days ago`
-  return `${Math.floor(days / 30)} months ago`
+  if (days < 30) return `${days}d ago`
+  return `${Math.floor(days / 30)}mo ago`
+}
+
+/** Joined: a date rather than a duration, because it does not change. */
+function joined(iso) {
+  if (!iso) return null
+  const d = new Date(iso.replace(' ', 'T') + 'Z')
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 }
 
 const STATE_LABEL = {
-  pending: 'has not started the quiz',
+  pending: 'quiz not started',
   in_progress: 'part-way through the quiz',
   baseline: 'in the baseline fortnight',
   active: 'active',
@@ -102,84 +119,77 @@ const STATE_LABEL = {
 
 function Member({ m, isMe, lastAdmin, busy, run }) {
   const suspended = m.status === 'suspended'
+  const initial = (m.display_name || m.username || '?').trim().charAt(0)
 
-  /*
-   * Stacked, not a prefrow.
-   *
-   * prefrow puts its body and controls on one line, which works for a label plus one switch.
-   * Two buttons beside a three-line description overflowed a 390px viewport and clipped
-   * "Suspend" off the right edge — the sideways scroll the browser suite exists to catch.
-   */
   return (
-    <div className="stack-tight" style={{ paddingBlock: 8 }}>
-      {/* gap rather than whitespace between the name and its tags: JSX collapses the
-          space before an element, so "@OO7Ian" ran straight into "admin". */}
-      <span
-        className="small row"
-        style={{ fontWeight: 600, gap: 6, flexWrap: 'wrap', alignItems: 'baseline' }}
-      >
-        <span>
-          {m.display_name} <span className="muted">@{m.username}</span>
-        </span>
-        {m.role === 'admin' && <span className="tag">admin</span>}
-        {suspended && <span className="tag">suspended</span>}
-      </span>
+    <div className="memberrow" data-suspended={suspended} data-role={m.role}>
       {/*
-        onboarding_state is the most useful column here: it answers "why has this person done
-        nothing" without a database session. Someone at 'pending' never answered the quiz.
+        The avatar is the anchor that makes this a list rather than a run of text.
+        Yoked stores no profile photos, so it is always an initial — but the column exists
+        either way, and the eye tracks down it.
       */}
-      <span className="tiny muted">
-        {STATE_LABEL[m.onboarding_state] ?? m.onboarding_state}
-        {' · '}last seen {ago(m.last_seen_at)}
-        {' · '}
-        {m.plans} {m.plans === 1 ? 'plan' : 'plans'}, {m.logged_days} logged
-        {m.coaching_paused && ' · coaching paused'}
+      <span className="memberavatar" aria-hidden="true">{initial}</span>
+
+      <span className="memberwho">
+        <span className="membername">
+          <span className="small" style={{ fontWeight: 700 }}>{m.display_name}</span>
+          <span className="tiny muted">@{m.username}</span>
+          {m.role === 'admin' && <span className="tag">admin</span>}
+          {isMe && <span className="tag">you</span>}
+          {suspended && <span className="tag">suspended</span>}
+        </span>
+        {/*
+          onboarding_state leads, because it answers the question an admin actually has:
+          "why has this person done nothing" is usually "they never finished the quiz", and
+          that used to need a database session.
+        */}
+        <span className="membermeta">
+          {STATE_LABEL[m.onboarding_state] ?? m.onboarding_state}
+          {joined(m.created_at) && ` · joined ${joined(m.created_at)}`}
+          {' · '}seen {ago(m.last_seen_at)}
+          {' · '}
+          {m.plans} {m.plans === 1 ? 'plan' : 'plans'}
+          {m.coaching_paused && ' · paused'}
+        </span>
       </span>
 
-      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-        <button
-          type="button"
-          className="btn btn--quiet btn--small"
-          /*
-           * Disabled rather than hidden, with the reason in the title.
-           *
-           * Demoting yourself breaks the screen you are standing on, and demoting the last
-           * admin leaves the app with no way back in short of SQL. The server refuses both;
-           * this stops the click happening at all.
-           */
-          disabled={busy || (m.role === 'admin' && (isMe || lastAdmin))}
-          title={
-            m.role === 'admin' && isMe
-              ? 'You cannot remove your own admin access'
-              : m.role === 'admin' && lastAdmin
-                ? 'The only admin left'
-                : undefined
-          }
-          onClick={() =>
-            run(() => api.admin.setRole(m.username, m.role === 'admin' ? 'member' : 'admin'))
-          }
-        >
-          {m.role === 'admin' ? 'Make member' : 'Make admin'}
-        </button>
+      {/*
+        Nothing to act on for yourself, so nothing is rendered.
 
-        <button
-          type="button"
-          className="btn btn--quiet btn--small"
-          disabled={busy || (!suspended && (isMe || lastAdmin))}
-          title={
-            !suspended && isMe
-              ? 'You cannot suspend yourself'
-              : !suspended && lastAdmin
-                ? 'The only admin left'
-                : undefined
-          }
-          onClick={() =>
-            run(() => api.admin.setStatus(m.username, suspended ? 'active' : 'suspended'))
-          }
-        >
-          {suspended ? 'Reactivate' : 'Suspend'}
-        </button>
-      </div>
+        The disabled-with-a-reason treatment is right for a rule somebody might not know
+        ("that is the last admin"); it is noise for the row that is obviously you.
+      */}
+      {!isMe && (
+        <span className="memberacts">
+          <button
+            type="button"
+            className="btn btn--quiet btn--small"
+            /*
+             * Demoting the last admin leaves the app with no administrator and no way back
+             * short of SQL. The server refuses; this stops the click.
+             */
+            disabled={busy || (m.role === 'admin' && lastAdmin)}
+            title={m.role === 'admin' && lastAdmin ? 'The only admin left' : undefined}
+            onClick={() =>
+              run(() => api.admin.setRole(m.username, m.role === 'admin' ? 'member' : 'admin'))
+            }
+          >
+            {m.role === 'admin' ? 'demote' : 'make admin'}
+          </button>
+
+          <button
+            type="button"
+            className="btn btn--quiet btn--small"
+            disabled={busy || (!suspended && lastAdmin)}
+            title={!suspended && lastAdmin ? 'The only admin left' : undefined}
+            onClick={() =>
+              run(() => api.admin.setStatus(m.username, suspended ? 'active' : 'suspended'))
+            }
+          >
+            {suspended ? 'reactivate' : 'suspend'}
+          </button>
+        </span>
+      )}
     </div>
   )
 }
@@ -194,7 +204,9 @@ function Invites({ list, busy, run }) {
 
   return (
     <div className="card stack-sm">
-      <h3 className="subheading">Invites</h3>
+      <h3 className="subheading">
+        Invites <span className="sectioncount">· {open.length} open</span>
+      </h3>
       <p className="tiny muted prose" style={{ margin: 0 }}>
         There is no self-serve sign-up, so a code is the only way in. Send it however you like —
         the app does not email.
@@ -202,7 +214,9 @@ function Invites({ list, busy, run }) {
 
       <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
         <label className="field" style={{ maxWidth: '9em' }}>
-          <span className="tiny muted">Valid for</span>
+          {/* `.label` and not `.tiny`: .field styles its label as a block, and an inline
+              span sits beside the select instead of above it. */}
+          <span className="label">Valid for</span>
           <select
             className="input"
             value={days}
@@ -233,52 +247,61 @@ function Invites({ list, busy, run }) {
       </div>
 
       {/*
-        The new code is shown large and copyable rather than dropped into the list below.
+        The new code is shown large and copyable rather than left to be found in the list.
         It is the one thing the admin came here for, and hunting for it among the others is
         exactly the moment a code gets mis-transcribed.
       */}
       {minted && (
         <div className="veto stack-tight">
           <span className="tiny muted">New code</span>
-          <span className="num" style={{ fontSize: '1.3rem', letterSpacing: '0.08em' }}>
-            {minted}
-          </span>
-          <button
-            type="button"
-            className="btn btn--quiet btn--small"
-            onClick={() => {
-              navigator.clipboard?.writeText(minted)
-              setCopied(true)
-            }}
-          >
-            {copied ? 'Copied' : 'Copy'}
-          </button>
+          <span className="codeout">{minted}</span>
+          <div className="row" style={{ gap: 6 }}>
+            <button
+              type="button"
+              className="btn btn--quiet btn--small"
+              onClick={() => {
+                navigator.clipboard?.writeText(minted)
+                setCopied(true)
+              }}
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+            <button
+              type="button"
+              className="btn btn--quiet btn--small"
+              onClick={() => setMinted(null)}
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 
-      <div className="stack-tight">
+      <div className="memberlist">
         {open.length === 0 && (
           <p className="tiny muted" style={{ margin: 0 }}>
             No unused codes.
           </p>
         )}
         {open.map((i) => (
-          <div className="prefrow" key={i.code}>
-            <span className="prefrow-body">
-              <span className="small num">{i.code}</span>
-              <span className="tiny muted">
+          <div className="memberrow memberrow--code" key={i.code}>
+            <span className="memberwho">
+              <span className="small num" style={{ fontWeight: 600 }}>{i.code}</span>
+              <span className="membermeta">
                 {i.expires_at ? `expires ${i.expires_at.slice(0, 10)}` : 'no expiry'}
                 {i.created_by && ` · from ${i.created_by}`}
               </span>
             </span>
-            <button
-              type="button"
-              className="btn btn--quiet btn--small"
-              disabled={busy}
-              onClick={() => run(() => api.admin.revokeInvite(i.code))}
-            >
-              Revoke
-            </button>
+            <span className="memberacts">
+              <button
+                type="button"
+                className="btn btn--quiet btn--small"
+                disabled={busy}
+                onClick={() => run(() => api.admin.revokeInvite(i.code))}
+              >
+                revoke
+              </button>
+            </span>
           </div>
         ))}
       </div>
@@ -289,15 +312,13 @@ function Invites({ list, busy, run }) {
       */}
       {rest.length > 0 && (
         <details>
-          <summary className="tiny muted">
-            {rest.length} used or expired
-          </summary>
-          <div className="stack-tight" style={{ marginTop: 8 }}>
+          <summary className="tiny muted">{rest.length} used or expired</summary>
+          <div className="memberlist" style={{ marginTop: 8 }}>
             {rest.map((i) => (
-              <div className="prefrow" key={i.code}>
-                <span className="prefrow-body">
+              <div className="memberrow memberrow--code" key={i.code}>
+                <span className="memberwho">
                   <span className="small num muted">{i.code}</span>
-                  <span className="tiny muted">
+                  <span className="membermeta">
                     {i.state === 'used'
                       ? `used by ${i.used_by ?? 'someone'}${
                           i.used_at ? ` on ${i.used_at.slice(0, 10)}` : ''

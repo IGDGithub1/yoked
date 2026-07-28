@@ -3398,6 +3398,180 @@ await check('after unpairing, a free friend is offered again', async () => {
 await fr.screenshot({ path: shot('logging-friends.png'), fullPage: true })
 await fr.close()
 
+// ---- admin -------------------------------------------------------------------
+//
+// EVERY ASSERTION HERE EXISTS BECAUSE A SCREENSHOT CAUGHT SOMETHING innerText DID NOT.
+// The first version of this screen shipped with "Suspend" clipped off the right edge at
+// 390px and a handle running into its tag, and both read as perfectly fine in the text
+// output. Geometry is checked as geometry: measured boxes, not rendered strings.
+
+const adm = await ctx.newPage()
+await signInVia(adm, 'uitest_admin')
+
+await check('an admin gets an Admin icon in the nav', async () => {
+  const btn = adm.getByRole('button', { name: /^Admin$/i })
+  await btn.waitFor({ timeout: 10000 })
+  // In the header, not on the Dashboard. It was a card at the bottom of the Dashboard,
+  // which cost two taps to answer "has anyone used that code".
+  return await btn.evaluate((el) => !!el.closest('header.appbar'))
+    ? true
+    : 'the Admin control is not in the header'
+})
+
+await goto('Admin', adm)
+
+await check('the members list separates one person from the next', async () => {
+  const rows = adm.locator('.memberrow')
+  await rows.first().waitFor({ timeout: 10000 })
+  const n = await rows.count()
+  if (n < 2) return `only ${n} member row(s); the fixture should seed several`
+
+  /*
+   * A hairline between rows AND an avatar column. The complaint that produced this rework
+   * was that the list "doesn't show very good separation" — a run of stacked text with
+   * nothing anchoring the left edge. Asserting only the border would pass on exactly the
+   * version that was rejected.
+   */
+  const second = await rows.nth(1).evaluate((el) => {
+    const cs = getComputedStyle(el)
+    const av = el.querySelector('.memberavatar')
+    return {
+      borderTop: cs.borderTopWidth,
+      avatarWidth: av ? av.getBoundingClientRect().width : 0,
+    }
+  })
+  if (parseFloat(second.borderTop) < 1) return 'no separator between rows'
+  if (second.avatarWidth < 30) return `avatar column is ${second.avatarWidth}px wide`
+  return true
+})
+
+await check('the avatar stays beside the name at every row height', async () => {
+  /*
+   * Flex-wrap put the avatar on its own line above the name on a phone, which defeats the
+   * only reason it is there. And centring it made it drift to the middle of any row whose
+   * tags wrapped. Both are invisible to innerText and obvious in an image, so both are
+   * measured: same line as the name, and top-aligned with it.
+   */
+  const bad = await adm.locator('.memberrow').evaluateAll((rows) =>
+    rows.flatMap((row) => {
+      const av = row.querySelector('.memberavatar')
+      const name = row.querySelector('.membername')
+      if (!av || !name) return []
+      const a = av.getBoundingClientRect()
+      const n = name.getBoundingClientRect()
+      if (a.right > n.left) return ['the avatar is not to the left of the name']
+      // Within half an avatar of the name's own top: enough slack for the optical centring
+      // of a 40px disc against a 20px line, tight enough to catch a drift to mid-row.
+      return Math.abs(a.top - n.top) > 22
+        ? [`the avatar sits ${Math.round(a.top - n.top)}px off the name`]
+        : []
+    })
+  )
+  return bad.length === 0 ? true : bad.join('; ')
+})
+
+await check('the member controls look pressable', async () => {
+  /*
+   * btn--quiet is borderless, which is right for a control that ends a card and wrong at the
+   * right-hand edge of a list row: "demote" and "suspend" read as two more words of metadata.
+   * These change somebody's access.
+   */
+  const flat = await adm.locator('.memberacts .btn').evaluateAll((btns) =>
+    btns.filter((b) => {
+      const cs = getComputedStyle(b)
+      return parseFloat(cs.borderTopWidth) < 1 && cs.backgroundColor === 'rgba(0, 0, 0, 0)'
+    }).length
+  )
+  return flat === 0 ? true : `${flat} control(s) render with no border and no fill`
+})
+
+await check('nothing in a member row is clipped at 390px', async () => {
+  /*
+   * The exact defect a screenshot caught last time: prefrow put a three-line description
+   * and two buttons on one line, and "Suspend" fell off the right edge. Measured against
+   * the row box rather than the viewport, so it catches overflow inside a scrolled card
+   * as well.
+   */
+  const bad = await adm.locator('.memberrow').evaluateAll((rows) =>
+    rows.flatMap((row) => {
+      const r = row.getBoundingClientRect()
+      return [...row.querySelectorAll('button, .tag, .membername > span')]
+        .filter((el) => el.getBoundingClientRect().right > r.right + 1)
+        .map((el) => `${el.textContent.trim()} overflows its row`)
+    })
+  )
+  return bad.length === 0 ? true : bad.join('; ')
+})
+
+await check('a handle does not run into the tag beside it', async () => {
+  // JSX collapses the whitespace before an element, so "@OO7Ian" and "admin" rendered
+  // touching. A gap is the fix; this measures that the gap survives.
+  const gaps = await adm.locator('.membername').evaluateAll((names) =>
+    names.flatMap((n) => {
+      const kids = [...n.children]
+      return kids.slice(1).map((el, i) => {
+        const prev = kids[i].getBoundingClientRect()
+        const cur = el.getBoundingClientRect()
+        // Only compare things on the same line: a wrapped tag has no horizontal gap to check.
+        return Math.abs(cur.top - prev.top) > 4 ? 99 : cur.left - prev.right
+      })
+    })
+  )
+  const tight = gaps.filter((g) => g < 4)
+  return tight.length === 0 ? true : `${tight.length} element pair(s) with under 4px between them`
+})
+
+await check('open and used invites are told apart', async () => {
+  // The state is worked out SERVER-side. A client comparing timestamps uses its own clock,
+  // and a browser in the wrong timezone would show a dead code as usable.
+  const txt = await adm.locator('.card', { hasText: /Invites/ }).first().innerText()
+  if (!/\bopen\b/i.test(txt)) return 'no open count in the Invites heading'
+  return /used or expired/i.test(txt) ? true : 'used and expired codes are not separated out'
+})
+
+await adm.screenshot({ path: shot('admin-phone.png'), fullPage: true })
+
+// ---- and the same screen on a desktop ----------------------------------------
+
+await adm.setViewportSize({ width: 1440, height: 900 })
+// A resize is not a re-render of the layout in every case; a tick lets flex settle.
+await adm.locator('.memberrow').first().waitFor({ timeout: 10000 })
+
+await check('the admin screen is contained and centred on a desktop', async () => {
+  /*
+   * THE BUG THIS REWORK STARTED FROM: "the layout on a full screen desktop is bad. Like
+   * fully left side of the view port."
+   *
+   * Shell renders {children} bare and every screen supplies its own `.wrap`. Admin did not,
+   * so it spanned 1440px of viewport with the content pinned left. Asserted as symmetry
+   * rather than by class name — a future refactor could rename the container and this
+   * should still hold.
+   */
+  const m = await adm.locator('.memberlist').first().evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    return { left: r.left, right: window.innerWidth - r.right, width: r.width }
+  })
+  if (m.width > 1100) return `the list is ${Math.round(m.width)}px wide on a 1440px viewport`
+  if (Math.abs(m.left - m.right) > 40) {
+    return `content is off-centre: ${Math.round(m.left)}px left, ${Math.round(m.right)}px right`
+  }
+  return true
+})
+
+await check('the desktop layout still does not clip a control', async () => {
+  const bad = await adm.locator('.memberrow').evaluateAll((rows) =>
+    rows.flatMap((row) => {
+      const r = row.getBoundingClientRect()
+      return [...row.querySelectorAll('button')]
+        .filter((el) => el.getBoundingClientRect().right > r.right + 1)
+        .map((el) => `${el.textContent.trim()} overflows its row`)
+    })
+  )
+  return bad.length === 0 ? true : bad.join('; ')
+})
+
+await adm.screenshot({ path: shot('admin-desktop.png'), fullPage: true })
+
 // ---- dark mode -------------------------------------------------------------
 
 

@@ -738,3 +738,158 @@
      merging with it when the two overlap. */
   box-shadow: 0 0 0 2px var(--shell);
 }
+
+/* ---- admin ----------------------------------------------------------------
+ *
+ * A member list is a table of people, and the first version rendered it as a run of
+ * stacked text with a hairline between rows. At a glance you could not tell where one
+ * person ended and the next began, which is the one thing a list of people has to do.
+ *
+ * What fixes it is not a heavier rule: it is an ANCHOR on the left of every row. An
+ * avatar gives the eye a fixed column to track down, and the name aligns to it. That
+ * is why every members list that works looks like this one.
+ */
+.memberlist {
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * A GRID, not a flex row, and the difference is the whole point.
+ *
+ * Flex-wrap put the avatar alone on the first line with the name underneath it on a phone,
+ * which is exactly backwards: the avatar is there to anchor the left edge, and an anchor on
+ * its own row anchors nothing. A grid keeps it in column one at every width and lets the
+ * controls move from column three to under the text without the name ever leaving its side.
+ */
+.memberrow {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  /* Top, not centre. A row whose tags wrap to a second line is taller than the avatar, and a
+     centred avatar drifts down to the middle of it while the name stays at the top. */
+  align-items: start;
+  column-gap: 14px;
+  row-gap: 8px;
+  padding: 14px 0;
+  border-top: 1px solid var(--hairline);
+}
+.memberrow:first-child { border-top: none; }
+
+/* Suspended reads as switched off rather than deleted: the row is still legible, and
+   the tag says why. Dimming the whole row would hide the controls that undo it. */
+.memberrow[data-suspended='true'] .memberavatar,
+.memberrow[data-suspended='true'] .memberwho { opacity: 0.55; }
+
+/*
+ * The initial, when there is no photo.
+ *
+ * Yoked has no avatars — media exists for progress photos and nothing else — so this is
+ * always a letter. It is a placeholder that is doing real work: the column exists whether
+ * or not there is an image to put in it.
+ */
+.memberavatar {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--yolk) 22%, var(--white));
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.memberrow[data-role='admin'] .memberavatar {
+  background: var(--yolk);
+}
+
+.memberwho {
+  min-width: 0;   /* without this a long handle widens the column instead of wrapping */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.membername {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.membermeta {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Controls on the right at desk width, under the name on a phone.
+ *
+ * Side by side they clipped off a 390px viewport — two buttons beside a three-line
+ * description does not fit — so below 620px they drop to the second row of column two,
+ * which puts them under the text they act on and keeps them off the avatar.
+ *
+ * OUTLINED, not bare. btn--quiet is borderless, which is right for a control that ends a
+ * card and wrong here: at the right-hand edge of a list row "demote" and "suspend" read as
+ * two more words of metadata. These change somebody's access, and they have to look
+ * pressable before anyone works out that they are.
+ */
+.memberacts {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  /* The row aligns to the top so the avatar tracks the name; the buttons want to line up
+     with that same first line, not with the middle of a description that may run to three. */
+  align-self: start;
+}
+.memberacts .btn {
+  border: 1px solid var(--hairline);
+  background: var(--white);
+}
+.memberacts .btn:hover:not(:disabled) {
+  border-color: var(--yolk-deep);
+}
+.memberacts .btn:disabled {
+  opacity: 0.45;
+  /* Not-allowed rather than a dead pointer: these are disabled by a RULE, and the title
+     explains which. A cursor change is what makes anyone hover long enough to read it. */
+  cursor: not-allowed;
+}
+
+@media (max-width: 620px) {
+  .memberrow { grid-template-columns: auto 1fr; }
+  .memberacts { grid-column: 2; justify-content: flex-start; }
+}
+
+/*
+ * An invite row: the same list, one column short.
+ *
+ * A code has no avatar, and reusing the member grid left the text starting under column two
+ * while the heading above it started at the card edge — a 54px indent with nothing in it.
+ */
+.memberrow--code {
+  grid-template-columns: 1fr auto;
+}
+.memberrow--code .memberacts { grid-column: 2; justify-content: flex-end; }
+
+/*
+ * The count in the section heading.
+ *
+ * "Members · 9" answers a question the list itself makes you count for, and it is the
+ * number an admin actually wants when they open the screen.
+ */
+.sectioncount {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* A minted code: large, spaced, and selectable. It exists to be copied by hand as often
+   as by button, and a run of 16 characters at body size invites a transcription error. */
+.codeout {
+  font-variant-numeric: tabular-nums;
+  font-size: 1.25rem;
+  letter-spacing: 0.09em;
+  word-break: break-all;
+  user-select: all;
+}

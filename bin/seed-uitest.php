@@ -58,6 +58,30 @@ $drop = in_array('--drop', array_slice($argv, 1), true);
 
 $allUsers = [UI_USER, UI_BASE_USER, UI_REVIEW_USER, UI_ADMIN_USER];
 
+/*
+ * Invites first, and this is not tidiness.
+ *
+ * fk_invites_creator has NO ON DELETE clause, so it is RESTRICT: an invite pins the user who
+ * minted it. That was harmless while invites were only ever created by the real owner, and it
+ * broke the moment a fixture admin existed and the suite pressed "Generate a code" — the next
+ * re-seed died on a 1451 trying to delete uitest_admin, and every fixture after it in the list
+ * never got rebuilt.
+ *
+ * RESTRICT is the RIGHT constraint to leave in place: used_by is the only record of who let a
+ * given person in, and a cascade would erase that when an admin account is removed. So the
+ * seeder clears what it is responsible for instead. Matched on the CREATOR rather than on a
+ * code prefix, because codes minted through the UI are random and carry no prefix at all.
+ */
+DB::run(
+    'DELETE FROM invites WHERE created_by IN (SELECT id FROM users WHERE username IN (?, ?, ?, ?))',
+    $allUsers
+);
+// Also any invite a fixture USED, which pins the row the same way through fk_invites_user.
+DB::run(
+    'DELETE FROM invites WHERE used_by IN (SELECT id FROM users WHERE username IN (?, ?, ?, ?))',
+    $allUsers
+);
+
 // ON DELETE CASCADE from users carries the plan, the logged days and the rest.
 DB::run(
     'DELETE FROM users WHERE username IN (?, ?, ?, ?)',

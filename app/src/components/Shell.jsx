@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import Yolk from './Yolk'
 import ThemeToggle from './ThemeToggle'
-import { GaugeIcon, LogOutIcon, ScrollTextIcon, UsersIcon } from './Icons'
+import { GaugeIcon, LogOutIcon, ScrollTextIcon, ShieldIcon, UsersIcon } from './Icons'
 
 /**
  * The chrome both signed-in views share.
@@ -15,10 +15,23 @@ import { GaugeIcon, LogOutIcon, ScrollTextIcon, UsersIcon } from './Icons'
  * wrapping, and these are destinations a user learns once. Every one carries an
  * aria-label and a title, so the label is available to a screen reader and to a hover.
  *
- * Order is deliberate: the two DESTINATIONS first, then the two SETTINGS-ish controls,
- * with sign-out last because it is the one that ends the session.
+ * Order is deliberate: the DESTINATIONS first, then the settings-ish controls, with
+ * sign-out last because it is the one that ends the session.
+ *
+ * Admin sits at the end of the destinations and only appears for an admin. It was a card at
+ * the bottom of the Dashboard, on the same reasoning as the profile — visited occasionally,
+ * so not in the nav. That reasoning was wrong for this one: the profile is somewhere you go
+ * to change your own answers, while admin is somewhere you go to check on other people, and
+ * burying it behind the Dashboard meant two taps to answer "has anyone used that code".
  */
-export default function Shell({ route, onNavigate, onSignOut, friendRequests = 0, children }) {
+export default function Shell({
+  route,
+  onNavigate,
+  onSignOut,
+  friendRequests = 0,
+  isAdmin = false,
+  children,
+}) {
   const [confirming, setConfirming] = useState(false)
 
   return (
@@ -65,6 +78,15 @@ export default function Shell({ route, onNavigate, onSignOut, friendRequests = 0
                requests made TO you, since those are the ones that need an answer. */
             badge={friendRequests}
           />
+          {isAdmin && (
+            <NavIcon
+              route="admin"
+              current={route}
+              onNavigate={onNavigate}
+              label="Admin"
+              Icon={ShieldIcon}
+            />
+          )}
 
           <ThemeToggle />
 

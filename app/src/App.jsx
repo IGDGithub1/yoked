@@ -180,6 +180,7 @@ export default function App() {
       onNavigate={navigate}
       onSignOut={signOut}
       friendRequests={friendRequests}
+      isAdmin={state.user?.role === 'admin'}
     >
       {route === 'journal' && (
         <Journal
