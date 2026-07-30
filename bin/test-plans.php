@@ -765,7 +765,11 @@ t('summary fields take the retry value', function () use ($merge) {
 });
 
 if ($seedOnly) {
-    printf("\n%d passed, %d failed (seed only — no generation)\n", $pass, $fail);
+    // The parenthetical goes on its own line: testall.sh matches the summary anchored
+    // end-to-end, so anything trailing it reads as NO SUMMARY and reports the suite as
+    // broken. Same trap that hid test-claude.php's offline summary.
+    printf("\n%d passed, %d failed\n", $pass, $fail);
+    echo "  (seed only — no generation)\n";
     printf("Test users left in place: u1=%d u2=%d\n", $ids['u1'], $ids['u2']);
     exit($fail === 0 ? 0 : 1);
 }

@@ -89,10 +89,17 @@ cd app && npm run drive        re-seed the fixtures, then drive the browser
 `N passed, 0 failed` AND exits 0. An earlier version matched a progress line and
 announced ALL GREEN over a run that had been killed by a timeout.
 
-The expensive halves are opt-in, because they cost money and take minutes: `--live`
-on `test-plans.php` (two real week generations), `test-chat.php`, and
-`test-vetoes.php`. `bin/test-plans.php` seeds the two users from the specs,
-generates their weeks, and asserts the output against the spec decisions.
+**Nothing in `testall.sh` calls the API.** Every suite that can is opt-in behind
+`--live`: `test-plans.php` (two real week generations), `test-claude.php`,
+`test-chat.php`, `test-vetoes.php`, and `test-skeleton-live.php`.
+`bin/test-plans.php` seeds the two users from the specs, generates their weeks, and
+asserts the output against the spec decisions.
+
+`test-claude.php` was the exception until it was not: it called the API by DEFAULT and
+took `--offline` to skip, which put six paid requests inside the sweep documented as
+"every PHP suite, ~20s, free" and run after every deploy. The flag is inverted now.
+`--offline` is still accepted and does nothing, because silently ignoring a flag that
+used to change behaviour is worse than honouring it.
 
 The browser suite mutates its fixture, so `npm run drive` re-seeds before running.
 `npm run drive:logging` skips that and is only right straight after a manual seed.
@@ -160,7 +167,7 @@ php bin/test-visibility.php   # who sees what; the privacy flags
 php bin/test-friends.php      # search cannot enumerate; blocking reveals nothing
 php bin/test-buddies.php      # no pairing without a friendship; either side can unpair
 php bin/test-buddy-schedule.php  # the grid is never rewritten; a conceded day is legal
-php bin/test-claude.php       # API client; --offline for shape checks only
+php bin/test-claude.php       # API client, shape checks only; --live to call the API
 php bin/test-logging.php      # over real HTTP: food, training, check-in
 php bin/test-plans.php        # generation; --live to actually generate
 php bin/test-admin.php        # the guards; asserts no member-delete route exists

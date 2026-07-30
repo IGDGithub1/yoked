@@ -2,16 +2,25 @@
 declare(strict_types=1);
 
 /**
- * Live tests for Claude.php. These make real API calls and cost real money
- * (a few cents total).
+ * Tests for Claude.php.
  *
- * The point is the wire format: adaptive-thinking-only, no sampling params,
- * effort nested in output_config, structured output instead of prefill. Every
- * one of those is a 400 if wrong, and none of them can be verified without
- * actually calling the API.
+ * The point is the wire format: adaptive-thinking-only, no sampling params, effort
+ * nested in output_config, structured output instead of prefill. Every one of those
+ * is a 400 if wrong, and none of them can be verified without actually calling the
+ * API.
  *
- *   php bin/test-claude.php
- *   php bin/test-claude.php --offline   # skip API calls; shape checks only
+ * SO THE API CALLS ARE OPT-IN, behind --live. They used to be the default, with
+ * --offline to skip them, which put paid calls inside `sh bin/testall.sh` — the
+ * suite that is documented as "every PHP suite, ~20s, free" and gets run after every
+ * deploy. That is how a routine test run started charging for six requests, and how
+ * an empty credit balance surfaced as six red assertions in a green-looking sweep.
+ *
+ * Free by default matches test-plans.php, which gates its two real generations the
+ * same way and for the same reason. Everything that can be checked without the
+ * network still runs: config, request shape, schema linting, the retry accounting.
+ *
+ *   php bin/test-claude.php           shape checks only, free
+ *   php bin/test-claude.php --live    plus real API calls (a few cents)
  */
 
 require __DIR__ . '/../src/bootstrap_cli.php';
@@ -19,7 +28,13 @@ require YK_SRC . '/lib/Response.php';
 require YK_SRC . '/lib/RateLimit.php';
 require YK_SRC . '/lib/Claude.php';
 
-$offline = in_array('--offline', array_slice($argv, 1), true);
+/*
+ * `--offline` is still accepted, because it is in muscle memory and in old notes, and
+ * silently ignoring a flag that used to change behaviour is worse than honouring it.
+ * It is now the default, so it does nothing.
+ */
+$live    = in_array('--live', array_slice($argv, 1), true);
+$offline = !$live;
 
 $pass = 0;
 $fail = 0;
@@ -194,7 +209,14 @@ t('usage summary query runs', function () {
 });
 
 if ($offline) {
-    printf("\n%d passed, %d failed (offline — API calls skipped)\n", $pass, $fail);
+    /*
+     * The summary line keeps testall.sh's exact shape — "N passed, M failed" — because
+     * that runner treats anything else as NO SUMMARY and reports the suite as broken.
+     * The note about the skipped calls goes after it, on its own line, for the same
+     * reason: a trailing parenthetical on the summary line would not match either.
+     */
+    printf("\n%d passed, %d failed\n", $pass, $fail);
+    echo "  (API calls skipped — pass --live to make them)\n";
     exit($fail === 0 ? 0 : 1);
 }
 

@@ -65,6 +65,16 @@ npm run drive:logging            # skip the re-seed (only right after a manual s
 An earlier version matched a progress line and announced ALL GREEN over a run killed by a
 timeout.
 
+That match is anchored end to end, so **a summary line with anything trailing it reads as NO
+SUMMARY** and the suite is reported broken. `test-claude.php` printed
+`22 passed, 0 failed (offline — API calls skipped)` and would never have matched. Notes go on
+the line after.
+
+**`testall.sh` is free, and that is now true rather than aspirational.** `test-claude.php`
+called the API by default and took `--offline` to skip, so every routine sweep paid for six
+requests. Everything costly is opt-in behind `--live`: `test-plans.php`, `test-claude.php`,
+`test-chat.php`, `test-vetoes.php`, `test-skeleton-live.php`.
+
 **The browser suite signs in nine times against a 20-per-IP-per-15-minute login limit.** Two
 back-to-back runs exhaust it and everything after fails at the sign-in screen — which looks like
 a catastrophic regression and is not. Wait out the window.
