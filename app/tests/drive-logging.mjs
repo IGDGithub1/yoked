@@ -727,6 +727,10 @@ await check('a favorite keeps the fiber it was starred with', async () => {
   await card.locator('.macro-grid input').nth(2).fill('3')     // fat
   await card.locator('.macro-grid input').nth(3).fill('40')    // total carbs
   await card.locator('.macro-grid input').nth(4).fill('12')    // fiber
+  // A serving too, so the favorite this becomes has a ratio to scale from. Without one
+  // the amount control is correctly not offered, and the scaling assertion below would
+  // have nothing to act on.
+  await card.locator('.macro-grid input').nth(5).fill('80')    // grams
   await card.getByRole('button', { name: /^Add it$/i }).click()
 
   // Net is derived server-side: 40 - 12 = 28.
@@ -777,6 +781,68 @@ await check('re-logging that favorite reproduces the fiber', async () => {
   const relogged = entries[entries.length - 1]
   if (relogged.fiber !== 12) return `re-logged fiber was ${relogged.fiber}, expected 12`
   if (relogged.carbs !== 28) return `re-logged net carbs was ${relogged.carbs}, expected 28`
+  return true
+})
+
+/*
+ * THE AMOUNT IS ASKED BEFORE THE FOOD IS LOGGED, not corrected afterwards.
+ *
+ * Search returns a standard serving — 100g of yellow mustard, because that is what a
+ * nutrition database calls one — and a scan returns whatever the packet declares. Neither
+ * is what you ate. Correcting it after the fact works, but it puts the wrong number in the
+ * record between two taps and makes the common case two steps.
+ *
+ * Driven through the usuals list rather than search: search is a paid API call, and the
+ * control under test is the same component in all three paths.
+ */
+await check('a found food can be logged at a different amount', async () => {
+  const card = page.locator('.card', { hasText: 'Dinner' }).first()
+  await card.getByRole('button', { name: /^Add food$/i }).click()
+  await card.getByRole('tab', { name: /Usual/i }).click()
+
+  const row = card.locator('.resultrow', { hasText: 'Fiber Test Bread' }).first()
+  await row.locator('.amountlink').click()
+
+  // 80g at 200 kcal, so 40g is 100 kcal and 4g of protein.
+  await row.locator('.amount input').fill('40')
+
+  /*
+   * The FIGURES ON THE ROW move before anything is sent. That is what makes one tap the
+   * save: the row you are about to press already reads what will be recorded, so a
+   * separate confirm button would only slow the path down.
+   */
+  const preview = (await row.locator('.result').innerText()).replace(/\s+/g, ' ')
+  if (!/100 kcal/.test(preview)) return `row did not rescale: ${preview}`
+  if (!/40g/.test(preview)) return `row did not show the new amount: ${preview}`
+
+  await row.locator('.result').click()
+
+  const day = await page.evaluate(async () => {
+    const d = new Date()
+    const p = (n) => String(n).padStart(2, '0')
+    const res = await fetch(
+      `/api/nutrition/day/${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
+      { headers: { accept: 'application/json' }, credentials: 'same-origin' }
+    )
+    return res.json()
+  })
+  const scaled = (day.meals || [])
+    .flatMap((m) => m.entries)
+    .filter((e) => e.name === 'Fiber Test Bread' && e.serving_g === 40)
+  if (scaled.length === 0) return 'no entry was logged at 40g'
+
+  /*
+   * Every macro scaled, and the net carbs are still DERIVED rather than carried. 40 total
+   * and 12 fiber at 80g is 20 and 6 at 40g, so net must be 14 — not 28 halved by accident
+   * and not 20 with the fiber subtracted twice.
+   */
+  const e = scaled[scaled.length - 1]
+  const want = { calories: 100, protein: 4, fat: 1.5, carbs: 14, fiber: 6 }
+  for (const [k, v] of Object.entries(want)) {
+    if (Math.abs(Number(e[k]) - v) > 0.11) {
+      return `${k} came back ${e[k]}, expected ${v}: ${JSON.stringify(e)}`
+    }
+  }
   return true
 })
 

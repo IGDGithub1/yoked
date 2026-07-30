@@ -1002,6 +1002,135 @@ function AddFood({ date, slot, favorites, onFavorites, onClose, onAdded }) {
   )
 }
 
+/**
+ * A found food, and how much of it.
+ *
+ * ONE COMPONENT FOR ALL THREE WAYS IN — search, scan, usuals — because they were three
+ * copies of the same button and the amount control would have been a fourth. Scan already
+ * printed the serving and the others did not, which was the only difference between them
+ * and not a deliberate one.
+ *
+ * THE AMOUNT IS ASKED BEFORE THE FOOD IS LOGGED, not corrected afterwards. Search returns
+ * a standard serving and a scan returns whatever the packet declares; neither is what you
+ * ate. Fixing it after the fact works (an entry can be rescaled) but it means the wrong
+ * number is in the record between the two taps, and it makes the common case two steps.
+ *
+ * Tapping the row still logs the standard serving in one tap. The amount is a second,
+ * quieter control for when that figure is wrong — which is most of the time for anything
+ * measured in condiments and almost never for a scanned bar.
+ */
+function Result({ food, busy, onAdd, netCarbs = false }) {
+  const [open, setOpen] = useState(false)
+  const [grams, setGrams] = useState('')
+
+  const base = Number(food.serving_g) || 0
+  const next = Number(grams)
+  const valid = Number.isFinite(next) && next > 0 && next <= 5000
+  const scale = valid && base > 0 ? next / base : 1
+  const changed = valid && next !== base
+
+  /*
+   * Scaled here rather than server-side, unlike an entry correction.
+   *
+   * An entry already exists on the server, so rescaling it is a PATCH against a stored
+   * row. Nothing exists yet at this point — the food is a search result — so there is no
+   * row to scale and the numbers go in already right. Both paths end up applying the same
+   * ratio to the same fields; this one just has nowhere to send it first.
+   */
+  const scaled = () => {
+    if (!changed) return food
+    const s = (v) => (v === null || v === undefined ? v : v * scale)
+    /*
+     * Every macro scales by the same ratio, and which CARB SHAPE this food is does not
+     * change — only the magnitude. A search result carries total_carbs and fiber; a
+     * favorite carries net with no total. Scaling both members of whichever pair is
+     * present keeps the relationship intact, so intake derives net from the scaled figures
+     * exactly as it would have from the originals.
+     *
+     * Deliberately NOT reshaping anything here. Mixing the two is the double-netting trap
+     * that turned a 50g net breakfast into 44g, and the place that decides which shape
+     * goes to the server is AddFood.add(); a second opinion in this function would be a
+     * second place to get it wrong.
+     */
+    return {
+      ...food,
+      serving_g: next,
+      calories: s(food.calories),
+      protein: s(food.protein),
+      fat: s(food.fat),
+      carbs: s(food.carbs),
+      total_carbs: s(food.total_carbs),
+      fiber: s(food.fiber),
+    }
+  }
+
+  const carbLabel = netCarbs ? 'net C' : 'C'
+  const carbValue = netCarbs ? food.carbs : food.total_carbs
+  const shownScale = changed ? scale : 1
+  const r1 = (v) => Math.round((Number(v) || 0) * shownScale * 10) / 10
+
+  return (
+    /* Its own class, not a bare .stack-tight. That layout class is on the logged-entry
+       wrapper too, so using it here made "the row for this food" ambiguous to anything
+       selecting by it — including the tests. */
+    <div className="resultrow stack-tight">
+      <button
+        type="button"
+        className="result"
+        disabled={busy}
+        onClick={() => onAdd(scaled())}
+      >
+        <span className="small">{food.name}</span>
+        <span className="tiny muted num">
+          {Math.round((Number(food.calories) || 0) * shownScale)} kcal · P {r1(food.protein)}
+          {' · '}F {r1(food.fat)} · {carbLabel} {r1(carbValue)}
+          {/* Only when it is known. A favorite saved before 008 has no fiber figure, and
+              printing "0g fiber" would assert something nobody recorded. */}
+          {food.fiber ? ` (−${r1(food.fiber)} fiber)` : ''}
+          {base ? ` · ${changed ? next : base}g` : ''}
+        </span>
+      </button>
+
+      {/*
+        Offered only where there is a serving to scale FROM. A result with no serving
+        recorded has no ratio, and the same all-or-nothing rule applies here as on a
+        logged entry: the control appears where the maths is possible and nowhere else.
+      */}
+      {base > 0 && !open && (
+        <button type="button" className="amountlink" onClick={() => setOpen(true)}>
+          Had a different amount?
+        </button>
+      )}
+
+      {base > 0 && open && (
+        <div className="amount">
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+            <input
+              className="input num"
+              type="number"
+              inputMode="decimal"
+              min="1"
+              max="5000"
+              step="1"
+              style={{ maxWidth: '6.5em' }}
+              placeholder={String(base)}
+              aria-label={`Grams of ${food.name}`}
+              value={grams}
+              onChange={(e) => setGrams(e.target.value)}
+            />
+            <span className="tiny muted">grams instead of {base}g</span>
+          </div>
+          {/* No Save. The row above already reads the scaled figures, so tapping it is the
+              save — a second confirm button would make the fast path two taps. */}
+          <span className="tiny muted">
+            {changed ? 'Tap the food to log it at that amount.' : 'Enter what you ate.'}
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Favorites({ favorites, busy, onPick, onRemove }) {
   const [q, setQ] = useState('')
 
@@ -1031,23 +1160,11 @@ function Favorites({ favorites, busy, onPick, onRemove }) {
         />
       )}
       {shown.map((f) => (
-        <div className="row" key={f.id}>
-          <button
-            type="button"
-            className="result"
-            disabled={busy}
-            onClick={() => onPick(f)}
-          >
-            <span className="small">{f.name}</span>
-            <span className="tiny muted num">
-              {Math.round(f.calories)} kcal · P {f.protein} · F {f.fat} · net C {f.carbs}
-              {/* Shown when it is known. A favorite saved before 008 has no
-                  fiber figure, and printing "0g fiber" would assert something
-                  nobody recorded. */}
-              {f.fiber ? ` (−${f.fiber} fiber)` : ''}
-              {f.serving_g ? ` · ${f.serving_g}g` : ''}
-            </span>
-          </button>
+        <div className="row favrow" key={f.id}>
+          {/* A favorite stores NET carbs, not a total: it was saved from a figure that had
+              already been through intake. Passing netCarbs says so, or the row would label
+              a net number "C" and read 12g low against the same food from search. */}
+          <Result food={f} busy={busy} onAdd={onPick} netCarbs />
           <button
             type="button"
             className="btn btn--quiet"
@@ -1123,21 +1240,11 @@ function BarcodeLookup({ busy, onAdd, onDone }) {
         </p>
       )}
 
+      {/* A scanned bar declares its serving, and it is the one result where the declared
+          figure is usually right — so the amount control matters least here and is offered
+          anyway, because "half the packet" is a real thing people do. */}
       {found?.map((f, i) => (
-        <button
-          key={`${f.name}-${i}`}
-          type="button"
-          className="result"
-          disabled={busy}
-          onClick={() => onAdd(f)}
-        >
-          <span className="small">{f.name}</span>
-          <span className="tiny muted num">
-            {Math.round(f.calories)} kcal · P {f.protein} · F {f.fat} · C {f.total_carbs}
-            {f.fiber ? ` (−${f.fiber} fiber)` : ''}
-            {f.serving_g ? ` · ${f.serving_g}g` : ''}
-          </span>
-        </button>
+        <Result key={`${f.name}-${i}`} food={f} busy={busy} onAdd={onAdd} />
       ))}
 
       <button type="button" className="btn btn--quiet" onClick={() => setScanning(true)}>
@@ -1197,20 +1304,11 @@ function Search({ date, slot, busy, onAdd }) {
         </p>
       )}
 
+      {/* The path the amount control exists for. A search for "yellow mustard" returns
+          100g, because that is what a nutrition database calls a serving, and nobody has
+          ever eaten 100g of yellow mustard. */}
       {results?.map((f, i) => (
-        <button
-          key={`${f.name}-${i}`}
-          type="button"
-          className="result"
-          disabled={busy}
-          onClick={() => onAdd(f)}
-        >
-          <span className="small">{f.name}</span>
-          <span className="tiny muted num">
-            {Math.round(f.calories)} kcal · P {f.protein} · F {f.fat} · C {f.total_carbs}
-            {f.fiber ? ` (−${f.fiber} fiber)` : ''}
-          </span>
-        </button>
+        <Result key={`${f.name}-${i}`} food={f} busy={busy} onAdd={onAdd} />
       ))}
     </div>
   )
