@@ -335,27 +335,139 @@ await check('the meal is tagged as planned', async () => {
   return /as planned/.test(tag) ? true : `tag read "${tag}"`
 })
 
-// The additive delta — the correction path that mattered most in the original.
-await check('the +100 nudge adds on top of the entries', async () => {
+/*
+ * The PRESENCE half of the delta pair. The absence half runs against uitest_baseline,
+ * and would pass trivially against a screen that never rendered — so this proves the
+ * control exists where it belongs before that one asserts it is gone where it does not.
+ */
+await check('a planned meal offers a correction for what went in the pan', async () => {
   const card = page.locator('.card', { hasText: 'Breakfast' }).first()
-  await card.getByRole('button', { name: '+100' }).click()
-  await page.waitForFunction(
-    () => /700\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
-    { timeout: 10000 }
-  )
+  const link = card.locator('.deltalink')
+  await link.waitFor({ timeout: 10000 })
+  return true
 })
 
-await check('the nudge is absolute against itself, not cumulative', async () => {
-  // +25 on a running +100 must land on 125, not 225: the client sends the
-  // running total and the server stores it absolutely.
+await check('the correction takes all four macros, not just calories', async () => {
+  /*
+   * Three buttons could only say "+25 kcal". A tablespoon of oil is 120 kcal AND 14g of
+   * fat, and sending the calories alone left the split wrong in a way nothing downstream
+   * could detect, because the number it needed was never asked for.
+   */
   const card = page.locator('.card', { hasText: 'Breakfast' }).first()
-  await card.getByRole('button', { name: '+25' }).click()
+  await card.locator('.deltalink').click()
+  const fields = card.locator('.delta-grid input')
+  await fields.first().waitFor({ timeout: 10000 })
+  const n = await fields.count()
+  return n === 4 ? true : `${n} fields, expected 4`
+})
+
+await check('a fat correction saves alongside the calories', async () => {
+  /*
+   * TWO WRITES IN FLIGHT AT ONCE, deliberately — no wait between the fields.
+   *
+   * This is the case that found the last-write-wins bug: both requests were correct,
+   * the fat response returned first, the calorie response returned second and reverted
+   * fat to zero on screen while the database held both. It read as "the second field
+   * does not save" and survived two wrong diagnoses. Pausing between fields here would
+   * pass against the broken build.
+   *
+   * Breakfast logged as planned is 600 kcal / F 22. A tablespoon of oil is both.
+   */
+  const card = page.locator('.card', { hasText: 'Breakfast' }).first()
+  await card.locator('#d-breakfast-calories').fill('120')
+  await card.locator('#d-breakfast-calories').blur()
+  await card.locator('#d-breakfast-fat').fill('14')
+  await card.locator('#d-breakfast-fat').blur()
+
+  /*
+   * Asserted on the MEAL TOTAL line, which carries all four. The day header shows
+   * calories alone, so it cannot tell "both saved" from "the calories saved".
+   *
+   * Matched against innerText rather than with getByText: the JSX splits that line
+   * across several text nodes, and getByText matches within one node.
+   */
+  const ok = await page.waitForFunction(
+    () => {
+      const c = [...document.querySelectorAll('.card')]
+        .find((el) => /Breakfast/.test(el.innerText))
+      return c ? /720 kcal · P 45 · F 36/.test(c.innerText.replace(/\s+/g, ' ')) : false
+    },
+    { timeout: 20000 }
+  ).catch(() => null)
+  // The failure message carries the whole line, because "the fat did not save" and "the
+  // calories were reverted by the fat write" look identical without the other three numbers.
+  if (ok) return true
+  return `meal total read: ${(await card.innerText()).replace(/\s+/g, ' ').slice(0, 200)}`
+})
+
+await check('the correction can be cleared, and the total goes back', async () => {
+  const card = page.locator('.card', { hasText: 'Breakfast' }).first()
+  await card.getByRole('button', { name: /^Clear$/ }).click()
+  await page.waitForFunction(
+    () => /600\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    { timeout: 15000 }
+  )
+  // Restores the fixture for everything after this: the suite shares one page and one
+  // day, and a 120 kcal surplus left behind would move every later total.
+  return true
+})
+
+// The additive delta — the correction path that mattered most in the original.
+await check('the correction is absolute against itself, not cumulative', async () => {
+  /*
+   * The server stores the delta absolutely, so editing a field twice must land on the
+   * second value rather than the sum. This was the property the old +25/+100 buttons
+   * guarded, and it still matters with typed fields: 125 then 40 is 40, not 165.
+   *
+   * Left in place for the reload assertion further down, which needs a surviving delta
+   * to prove anything. Section 5 clears it.
+   */
+  const card = page.locator('.card', { hasText: 'Breakfast' }).first()
+  await card.locator('.deltalink').click().catch(() => {})   // already open if a field is set
+  await card.locator('#d-breakfast-calories').fill('125')
+  await card.locator('#d-breakfast-calories').blur()
   await page.waitForFunction(
     () => /725\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
-    { timeout: 10000 }
+    { timeout: 15000 }
   )
-  const txt = await card.innerText()
-  return /\+125 kcal/.test(txt) ? true : `delta label read: ${txt.replace(/\n/g, ' | ')}`
+
+  await card.locator('#d-breakfast-calories').fill('40')
+  await card.locator('#d-breakfast-calories').blur()
+  await page.waitForFunction(
+    () => /640\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    { timeout: 15000 }
+  )
+
+  // Back to 125 for the reload check downstream.
+  await card.locator('#d-breakfast-calories').fill('125')
+  await card.locator('#d-breakfast-calories').blur()
+  await page.waitForFunction(
+    () => /725\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    { timeout: 15000 }
+  )
+  return true
+})
+
+await check('a correction can be negative', async () => {
+  /*
+   * The columns are signed and always were; the old buttons clamped at zero, which made
+   * "I ate less of it than planned" inexpressible. Restored to +125 afterwards so the
+   * reload assertion downstream still has its delta.
+   */
+  const card = page.locator('.card', { hasText: 'Breakfast' }).first()
+  await card.locator('#d-breakfast-calories').fill('-50')
+  await card.locator('#d-breakfast-calories').blur()
+  await page.waitForFunction(
+    () => /550\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    { timeout: 15000 }
+  )
+  await card.locator('#d-breakfast-calories').fill('125')
+  await card.locator('#d-breakfast-calories').blur()
+  await page.waitForFunction(
+    () => /725\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    { timeout: 15000 }
+  )
+  return true
 })
 
 // ---- training --------------------------------------------------------------
@@ -1608,6 +1720,24 @@ await check('an observing user has no targets and is told so', async () => {
   // has to read as such rather than as a broken screen.
   if (/\/ 2400/.test(body)) return 'targets were shown during observation'
   return /No targets yet/.test(body) ? true : 'nothing explained the missing targets'
+})
+
+await check('an observing user is not offered a correction to a plan', async () => {
+  /*
+   * The delta corrects a PRESCRIPTION: the plan said 600 kcal and the pan says otherwise.
+   * During observation nothing has been prescribed, so the control was a prompt for a case
+   * the user is not in — and "Cooked in oil? Nudge it." on a meal nobody proposed reads as
+   * the screen having lost track of where you are.
+   *
+   * The presence half of this pair runs against uitest_logging further down, because an
+   * absence assertion passes trivially against a screen that never rendered.
+   */
+  const n = await obs.locator('.delta, .deltalink').count()
+  if (n > 0) return `${n} delta control(s) on a day with no plan`
+  const body = await obs.locator('body').innerText()
+  return /Cooked (in oil|it in something)/i.test(body)
+    ? 'the oil prompt is still on an unplanned day'
+    : true
 })
 
 await check('the observing copy avoids "fortnight" and em dashes', async () => {

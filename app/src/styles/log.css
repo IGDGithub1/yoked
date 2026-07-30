@@ -588,18 +588,50 @@
 .delta {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   padding: 8px 0 2px;
 }
 
-.delta-btns {
-  display: flex;
-  gap: 4px;
-  /* Pulled left to the card edge: .btn--quiet carries 12px of its own padding,
-     and without this the row sits visibly indented from everything above it. */
-  margin-left: -12px;
+/*
+ * Four fields on one line at every width.
+ *
+ * Equal columns rather than auto: the numbers are the same kind of thing, and a grid that
+ * sizes to content makes "kcal" three times wider than "F" for no reason a reader can use.
+ * Four across fits 360px because each holds at most four characters.
+ */
+.delta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
 }
-.delta-btns .btn { padding: 6px 12px; }
+.deltafield {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.deltafield .input {
+  padding: 7px 4px;
+  text-align: center;
+}
+
+/*
+ * Closed, it is one quiet line rather than four empty boxes.
+ *
+ * Most meals need no adjustment at all, and four zeroed inputs on every card is a form
+ * where there was a fact. The link states the case it covers in words, because "delta" is
+ * the machinery and "cooked it in something" is the thing that happened.
+ */
+.deltalink {
+  align-self: flex-start;
+  border: 0;
+  background: none;
+  padding: 4px 0;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 1px dotted currentColor;
+}
+.deltalink:hover { color: var(--ink); }
 
 /* ---- adding food ------------------------------------------------------- */
 

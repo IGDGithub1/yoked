@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { foodPlaceholder } from '../foodExamples'
 import Scanner from './Scanner'
@@ -359,22 +359,50 @@ function Meal({ meal, date, prescribed, primary, favorites, onFavorites, onDay,
     ? vetoes.find((v) => v.subject_type === 'meal' && v.subject_id === prescribed.id)
     : null
 
-  const run = async (fn) => {
+  /*
+   * WRITES ARE QUEUED, one at a time, and this is not belt-and-braces.
+   *
+   * Every mutating route returns the whole day and this replaces state from it, which is
+   * what keeps totals and the verdict honest without a second GET. That is only sound
+   * while one write is in flight. Two overlapping PUTs to the same meal have no
+   * guaranteed commit order, and each response snapshots the day as of ITS OWN commit —
+   * so the second response can carry a day that predates the first write.
+   *
+   * Observed, in both directions: type 120 into a meal's calorie correction and 14 into
+   * its fat with no pause. Unguarded, the fat response returned first and the calorie
+   * response reverted fat to zero. With a last-write-wins guard, the fat response won and
+   * carried calories: 0, because the server had not committed the calories when it built
+   * that payload. Same bug, opposite symptom, and both read as "the second field does not
+   * save".
+   *
+   * Chaining removes the race rather than picking a winner. The queue is a promise the
+   * next call awaits, so the server sees the writes in the order they were made and every
+   * response is built on top of the one before it.
+   *
+   * Nothing else on this screen could fire two writes close enough together to show this.
+   * Four typed fields can.
+   */
+  const queue = useRef(Promise.resolve())
+
+  const run = (fn) => {
     setError(null)
     setBusy(true)
-    try {
-      const r = await fn()
-      // Every mutating route returns the whole day, so state is replaced from the
-      // response rather than patched locally — that keeps totals and the verdict
-      // honest without a second GET.
-      if (r?.day) onDay(r.day)
-      return r
-    } catch (e) {
-      setError(e.message || 'That did not save.')
-      return null
-    } finally {
-      setBusy(false)
-    }
+    const next = queue.current.then(async () => {
+      try {
+        const r = await fn()
+        if (r?.day) onDay(r.day)
+        return r
+      } catch (e) {
+        setError(e.message || 'That did not save.')
+        return null
+      } finally {
+        setBusy(false)
+      }
+    })
+    // The chain must never reject, or one failure wedges every later write. `fn`'s errors
+    // are already caught above; this covers anything thrown by onDay.
+    queue.current = next.catch(() => {})
+    return next
   }
 
   return (
@@ -420,7 +448,7 @@ function Meal({ meal, date, prescribed, primary, favorites, onFavorites, onDay,
         </div>
       )}
 
-      <Delta meal={meal} date={date} busy={busy} run={run} />
+      <Delta meal={meal} date={date} prescribed={prescribed} busy={busy} run={run} />
 
       <div className="row" style={{ flexWrap: 'wrap' }}>
         {/* The one-tap path, and the reason the plan is worth following.
@@ -694,53 +722,172 @@ function Amount({ entry, busy, run, onDone }) {
   )
 }
 
-/**
- * The manual calorie nudge — "+50 for the oil I cooked in".
- *
- * The most-used correction path in the original, so it is one tap from the meal
- * rather than behind an edit screen. It sends the RUNNING total because the
- * server treats the delta as absolute against itself; an increment would double
- * it.
- *
- * Calories only, deliberately. The full four-macro delta exists server-side, but
- * a row of twelve nudge buttons is how you make a fast path slow — and "I used
- * more oil than that" is a calorie correction in practice.
- */
-function Delta({ meal, date, busy, run }) {
-  const current = Math.round(meal.delta?.calories || 0)
-  const nudge = (by) =>
-    run(() =>
-      api.nutrition.setDelta(date, meal.slot, {
-        calories: Math.max(0, current + by),
-        // The other three are resent unchanged: the route writes all four
-        // columns, so omitting them would zero them.
-        protein: meal.delta?.protein || 0,
-        fat: meal.delta?.fat || 0,
-        carbs: meal.delta?.carbs || 0,
-      })
-    )
+const DELTA_FIELDS = [
+  { key: 'calories', label: 'kcal', step: 5 },
+  { key: 'protein', label: 'P', step: 1 },
+  { key: 'fat', label: 'F', step: 1 },
+  { key: 'carbs', label: 'net C', step: 1 },
+]
 
-  // Nothing logged and nothing nudged: there is no meal to correct yet.
-  if (current === 0 && meal.entries.length === 0) return null
+/**
+ * What went into the meal that no entry accounts for — the oil in the pan.
+ *
+ * ONLY WHERE THERE IS A PLAN. This used to render on any meal with entries, which meant
+ * a user in their baseline fortnight — with no prescribed meal, by definition — was
+ * offered "Cooked in oil? Nudge it." against a meal nothing had been proposed for. The
+ * correction is meaningful against a PRESCRIPTION: the plan said 600 kcal, and the pan
+ * says otherwise. With no plan, a food you did not log is a food to log, not a delta.
+ *
+ * It is additive and survives adding or removing entries, which is the whole reason it
+ * exists rather than being folded into the totals. It is sent as an ABSOLUTE value
+ * because the server treats it as absolute against itself.
+ *
+ * FOUR FIELDS, NOT THREE BUTTONS. The buttons could only say "+25 kcal", and a
+ * tablespoon of oil is 120 kcal AND 14g of fat. Sending the calories alone left the
+ * macro split wrong in a way nothing downstream could detect, because the number it
+ * needed was never asked for. Typed fields are slower than a tap and they are the only
+ * shape that can express the thing.
+ *
+ * Negative is allowed. The columns are signed and always were; the old buttons clamped
+ * at zero, which made "I ate less of it than planned" inexpressible.
+ */
+function Delta({ meal, date, prescribed, busy, run }) {
+  const d = meal.delta || {}
+  const [open, setOpen] = useState(false)
+
+  /*
+   * THE DELTA AS SENT, not as rendered. This is the whole bug, and it took four wrong
+   * diagnoses to find because every layer looked innocent on its own.
+   *
+   * The route writes all four columns, so every save must resend the other three. Reading
+   * them from `meal.delta` sends whatever React last rendered — and when two fields are
+   * committed in quick succession there is NO RENDER BETWEEN THEM. Blur calories, blur
+   * fat, and fat's write resends `calories: 0` because the calorie response has not come
+   * back and been rendered yet. The server is then correctly told to zero it.
+   *
+   * Observed payloads, in order:
+   *     PUT {"calories":120,"fat":0}     correct
+   *     PUT {"calories":0,"fat":14}      calories reverted by the sender
+   *
+   * A ref assigned during render does not help: there is no render to assign in. So the
+   * ref is updated AT WRITE TIME instead, making it the authoritative record of what has
+   * been sent rather than a mirror of what has been painted. It re-syncs from the server
+   * whenever a response arrives, so an edit made on another device is not clobbered.
+   */
+  const sent = useRef(null)
+  const known = sent.current ?? d
+  useEffect(() => { sent.current = null }, [d.calories, d.protein, d.fat, d.carbs])
+
+  const any = DELTA_FIELDS.some((f) => Math.abs(Number(known[f.key]) || 0) > 0.05)
+
+  // No plan, no prescription to correct against.
+  if (!prescribed) return null
+  // Nothing logged and nothing adjusted: there is no meal to correct yet.
+  if (!any && meal.entries.length === 0) return null
+
+  const save = (key, value) => {
+    // Built and recorded BEFORE the request goes out, so a second field committed in the
+    // same tick resends this value rather than the last-rendered one.
+    const body = {
+      calories: Number(known.calories) || 0,
+      protein: Number(known.protein) || 0,
+      fat: Number(known.fat) || 0,
+      carbs: Number(known.carbs) || 0,
+      [key]: value,
+    }
+    sent.current = body
+    return run(() => api.nutrition.setDelta(date, meal.slot, body))
+  }
+
+  if (!open && !any) {
+    return (
+      <button type="button" className="deltalink" disabled={busy} onClick={() => setOpen(true)}>
+        Cooked it in something?
+      </button>
+    )
+  }
 
   return (
     <div className="delta">
-      {/* Label above the buttons rather than beside them: at 360px "Extra +125
-          kcal" and three buttons do not share a line. */}
-      <span className="tiny muted">
-        {current > 0
-          ? <>Extra <span className="num">+{current} kcal</span> on top</>
-          : 'Cooked in oil? Nudge it.'}
-      </span>
-      <div className="delta-btns">
-        <button type="button" className="btn btn--quiet num" disabled={busy || current === 0}
-          onClick={() => nudge(-25)}>−25</button>
-        <button type="button" className="btn btn--quiet num" disabled={busy}
-          onClick={() => nudge(25)}>+25</button>
-        <button type="button" className="btn btn--quiet num" disabled={busy}
-          onClick={() => nudge(100)}>+100</button>
+      <div className="row">
+        <span className="tiny muted">On top of what is logged</span>
+        {any && (
+          <button
+            type="button"
+            className="btn btn--quiet btn--small push"
+            disabled={busy}
+            onClick={() => {
+              // Through `sent` like any other write, so a field edited straight after a
+              // clear resends zeroes rather than what was there before it.
+              const zero = { calories: 0, protein: 0, fat: 0, carbs: 0 }
+              sent.current = zero
+              return run(() => api.nutrition.setDelta(date, meal.slot, zero))
+                .then(() => setOpen(false))
+            }}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      <div className="delta-grid">
+        {DELTA_FIELDS.map((f) => (
+          <DeltaField
+            key={f.key}
+            field={f}
+            value={Number(known[f.key]) || 0}
+            slot={meal.slot}
+            onSave={(v) => save(f.key, v)}
+          />
+        ))}
       </div>
     </div>
+  )
+}
+
+/**
+ * One of the four.
+ *
+ * Held locally while it is being typed and committed on blur, because a write per
+ * keystroke would be four requests to type "120" — and each response replaces the whole
+ * day, so the field would fight the value under the cursor.
+ *
+ * NOT DISABLED WHILE A SIBLING SAVES, which is the opposite of every other control on
+ * this card. `busy` is shared across the meal, so disabling here meant: type into
+ * calories, tab to fat, and fat is inert until the calorie write returns — during which
+ * the browser drops focus from the disabled field and the keystrokes go nowhere. What
+ * you typed vanished with no error, because nothing had failed.
+ *
+ * Leaving them live is safe: the value is local until blur, and `latest` on the parent
+ * reads the delta at write time rather than at render time, so two saves in flight
+ * cannot revert each other.
+ */
+function DeltaField({ field, value, slot, onSave }) {
+  const [local, setLocal] = useState(null)
+  const shown = local ?? (value === 0 ? '' : String(value))
+  const id = `d-${slot}-${field.key}`
+
+  const commit = () => {
+    const next = local === null || local.trim() === '' ? 0 : Number(local)
+    setLocal(null)
+    if (Number.isFinite(next) && Math.abs(next - value) > 0.05) onSave(next)
+  }
+
+  return (
+    <label className="deltafield" htmlFor={id}>
+      <span className="tiny muted">{field.label}</span>
+      <input
+        id={id}
+        className="input num"
+        type="number"
+        inputMode="decimal"
+        step={field.step}
+        placeholder="0"
+        value={shown}
+        onChange={(e) => setLocal(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+      />
+    </label>
   )
 }
 
