@@ -996,3 +996,119 @@
   word-break: break-all;
   user-select: all;
 }
+
+/* ---- the day's rings ------------------------------------------------------
+ *
+ * Four rings at the top of the Journal, answering "how am I doing today" before you
+ * scroll. It was a right-aligned text line inside the Food header: six numbers and three
+ * slashes, in a place you had to go looking for.
+ *
+ * AN ARC, NOT A RADIAL FILL, which makes this a different object from .yolk rather than a
+ * variant of it. The yolk grows outward from the centre because it is a yolk; a quantity
+ * against a target reads as a sweep, because the gap left in the circle IS the remainder.
+ * Two shapes, two jobs, and conflating them would make the mark mean two things.
+ *
+ * ONE OF THEM IS YELLOW. DESIGN.md allows one accent per view and the yolk earns it by
+ * measuring — so calories, the number with a target everyone recognises, get the yolk, and
+ * the macros are ink at low opacity. Four hues is what the source app uses and it is right
+ * there; here it would put four accents on a screen whose discipline is one.
+ */
+.macrorings {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 4px 0 2px;
+}
+
+.macroring {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+/*
+ * The dial. A conic gradient clipped to a ring by an inner mask.
+ *
+ * `mask` rather than an inner circle element: one box, and the card colour shows through
+ * the hole, so it needs no knowledge of what it is sitting on. The track is the same
+ * gradient at a flat colour underneath, which keeps the unfilled arc exactly as thick as
+ * the filled one — a border would not, since it is outside the padding box.
+ */
+/* The positioning context the dial and the number share. */
+.macroring-face {
+  position: relative;
+  width: 100%;
+  max-width: 62px;
+  aspect-ratio: 1;
+}
+
+.macroring-dial {
+  --pct: 0;
+  --ring: 5px;
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    conic-gradient(
+      var(--dial, var(--ink)) 0 calc(var(--pct) * 1%),
+      var(--hairline) calc(var(--pct) * 1%) 100%
+    );
+  -webkit-mask: radial-gradient(farthest-side,
+    transparent calc(100% - var(--ring)), #000 calc(100% - var(--ring) + 0.5px));
+  mask: radial-gradient(farthest-side,
+    transparent calc(100% - var(--ring)), #000 calc(100% - var(--ring) + 0.5px));
+  transition: background var(--t-fill) var(--ease);
+}
+
+/* Calories: the one that carries the accent. */
+.macroring[data-accent='true'] .macroring-dial { --dial: var(--yolk); }
+
+/*
+ * The macros: ink, held back so four rings do not read as four equal alarms. Not --muted,
+ * which is a TEXT colour and disappears against the hairline track at this thickness.
+ */
+.macroring[data-accent='false'] .macroring-dial {
+  --dial: color-mix(in srgb, var(--ink) 45%, var(--hairline));
+}
+
+/*
+ * Over target closes the ring in --yolk-deep, and that is the whole treatment. It is NOT
+ * an error: the server owns judgment, it only forms one for a day that is over, and a
+ * mid-afternoon "over on fat" is the scolding the drift rules exist to prevent. Paprika is
+ * for errors and this is not one.
+ */
+.macroring-dial[data-over='true'] { --dial: var(--yolk-deep); }
+
+/* The total, over the hole in the middle. A sibling of the dial, not a child: a mask
+   applies to the whole subtree, so a number inside the dial loses its middle too. */
+.macroring-num {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/*
+ * The label under the ring. "net C / 220" is the widest of the four and must not wrap: two
+ * lines under one 62px circle and one line under the other three makes the row look broken.
+ * So it shrinks a little instead, which is invisible at these sizes.
+ */
+.macroring-label {
+  text-align: center;
+  line-height: 1.25;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+/* 360px: four rings plus their labels. The rings shrink before the labels wrap, because a
+   wrapped "net carbs / 220" is two lines of noise under a 40px circle. */
+@media (max-width: 380px) {
+  .macrorings { gap: 5px; }
+  .macroring-dial { --ring: 4px; }
+  .macroring-num { font-size: 12px; }
+}

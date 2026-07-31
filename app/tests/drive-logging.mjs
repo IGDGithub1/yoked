@@ -44,6 +44,33 @@ async function check(label, fn) {
 const browser = await chromium.launch()
 // A phone viewport: this is a PWA and the logging screen is a thumb interface.
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } })
+
+/*
+ * dayCals(), injected into every page in this context.
+ *
+ * TEN ASSERTIONS USED TO MATCH `/600\s*\/\s*2400/` against document.body.innerText. That
+ * worked while the day's totals were a text line in the Food section header, and broke the
+ * moment they became rings: the total lives in the dial and the target in the label under
+ * it, so the combined string exists nowhere on the page.
+ *
+ * Reading the accent ring's accessible name beats ten repaired regexes. It is one place, it
+ * asserts the number the component COMPUTED rather than a rendered string that happened to
+ * contain it, and it is the same string a screen reader is given — so a change that breaks
+ * it is a real defect and not a test detail.
+ *
+ * addInitScript, not a Node-side helper: these run inside waitForFunction predicates, which
+ * execute in the browser. It re-applies on every navigation and reload, which this suite
+ * does constantly.
+ */
+await ctx.addInitScript(() => {
+  window.dayCals = () => {
+    const d = document.querySelector('.macroring[data-accent="true"] .macroring-dial')
+    if (!d) return null
+    const m = /^([\d.]+)/.exec(d.getAttribute('aria-label') || '')
+    return m ? Math.round(Number(m[1])) : null
+  }
+})
+
 const page = await ctx.newPage()
 
 const consoleErrors = []
@@ -175,6 +202,7 @@ async function reloadJournal(target = page) {
   await target.getByRole('heading', { name: /how are you today/i })
     .waitFor({ timeout: 20000 })
 }
+
 
 await check('all navigation is in one place, and it is the header', async () => {
   /*
@@ -324,9 +352,75 @@ await check('the meal shows the prescribed food as an entry', async () => {
 
 await check('the day total picked up the meal', async () => {
   await page.waitForFunction(
-    () => /600\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    () => dayCals() === 600,
     { timeout: 10000 }
   )
+})
+
+await check('the day opens on four rings, not a line of numbers', async () => {
+  /*
+   * "How am I doing today" is the question this screen exists to answer, and it was
+   * answered in a right-aligned text line inside the Food section header: six numbers and
+   * three slashes, in a place you had to scroll to.
+   */
+  const rings = page.locator('.macroring')
+  await rings.first().waitFor({ timeout: 15000 })
+  const n = await rings.count()
+  if (n !== 4) return `${n} rings, expected 4`
+
+  // Above the fold and above the check-in: the totals are the state of today, the check-in
+  // is four taps about it and can wait.
+  const order = await page.evaluate(() => {
+    const r = document.querySelector('.macrorings')
+    const c = [...document.querySelectorAll('.card')].find((el) => /How are you/.test(el.innerText))
+    if (!r || !c) return null
+    return r.getBoundingClientRect().top < c.getBoundingClientRect().top
+  })
+  return order === true ? true : 'the rings are not above the check-in'
+})
+
+await check('a ring fills to its share of the target', async () => {
+  /*
+   * Breakfast logged as planned is 600 of 2400 kcal, so the calorie ring is at 25%. Read
+   * off the custom property the gradient uses rather than by sampling a pixel: the value
+   * IS the contract, and a colour probe would also be measuring the mask.
+   */
+  const pct = await page.evaluate(() => {
+    const d = document.querySelector('.macroring[data-accent="true"] .macroring-dial')
+    return d ? Number(getComputedStyle(d).getPropertyValue('--pct')) : null
+  })
+  if (pct === null) return 'no calorie ring found'
+  return Math.abs(pct - 25) < 1.5 ? true : `calorie ring at ${pct}%, expected ~25`
+})
+
+await check('each ring says its whole fact to a screen reader', async () => {
+  /*
+   * The digits inside a ring are the total ALONE, so a screen reader getting "106" off a
+   * screen that visually reads "106 / 180" is the same omission as a badge count that never
+   * reaches the accessibility tree. Every dial carries the total, the target and the unit.
+   */
+  const labels = await page.locator('.macroring-dial').evaluateAll((els) =>
+    els.map((e) => e.getAttribute('aria-label') || '')
+  )
+  const bad = labels.filter((l) => !/\d/.test(l) || !/(of \d|no target)/.test(l))
+  return bad.length === 0 ? true : `incomplete: ${JSON.stringify(labels)}`
+})
+
+await check('the rings do not spend a second accent', async () => {
+  /*
+   * DESIGN.md: one yellow element per view, and the yolk earns it by MEASURING. Four
+   * coloured rings is what the source app does and is right there; here it would put four
+   * accents on a screen whose whole palette discipline is one. So calories carry the yolk
+   * and the three macros are ink held back.
+   */
+  const yellow = await page.locator('.macroring-dial').evaluateAll((els) =>
+    els.filter((e) => {
+      const bg = getComputedStyle(e).backgroundImage
+      // --yolk is #F5B92E -> rgb(245, 185, 46); --yolk-deep is rgb(224, 162, 22).
+      return /245,\s*185,\s*46|224,\s*162,\s*22/.test(bg)
+    }).length
+  )
+  return yellow <= 1 ? true : `${yellow} rings are drawn in the accent, expected 1`
 })
 
 await check('the meal is tagged as planned', async () => {
@@ -404,7 +498,7 @@ await check('the correction can be cleared, and the total goes back', async () =
   const card = page.locator('.card', { hasText: 'Breakfast' }).first()
   await card.getByRole('button', { name: /^Clear$/ }).click()
   await page.waitForFunction(
-    () => /600\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    () => dayCals() === 600,
     { timeout: 15000 }
   )
   // Restores the fixture for everything after this: the suite shares one page and one
@@ -427,14 +521,14 @@ await check('the correction is absolute against itself, not cumulative', async (
   await card.locator('#d-breakfast-calories').fill('125')
   await card.locator('#d-breakfast-calories').blur()
   await page.waitForFunction(
-    () => /725\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    () => dayCals() === 725,
     { timeout: 15000 }
   )
 
   await card.locator('#d-breakfast-calories').fill('40')
   await card.locator('#d-breakfast-calories').blur()
   await page.waitForFunction(
-    () => /640\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    () => dayCals() === 640,
     { timeout: 15000 }
   )
 
@@ -442,7 +536,7 @@ await check('the correction is absolute against itself, not cumulative', async (
   await card.locator('#d-breakfast-calories').fill('125')
   await card.locator('#d-breakfast-calories').blur()
   await page.waitForFunction(
-    () => /725\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    () => dayCals() === 725,
     { timeout: 15000 }
   )
   return true
@@ -458,13 +552,13 @@ await check('a correction can be negative', async () => {
   await card.locator('#d-breakfast-calories').fill('-50')
   await card.locator('#d-breakfast-calories').blur()
   await page.waitForFunction(
-    () => /550\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    () => dayCals() === 550,
     { timeout: 15000 }
   )
   await card.locator('#d-breakfast-calories').fill('125')
   await card.locator('#d-breakfast-calories').blur()
   await page.waitForFunction(
-    () => /725\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    () => dayCals() === 725,
     { timeout: 15000 }
   )
   return true
@@ -610,7 +704,7 @@ await check('the check-in ratings came back', async () => {
 
 await check('the logged meal and its delta came back', async () => {
   await page.waitForFunction(
-    () => /725\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    () => dayCals() === 725,
     { timeout: 10000 }
   )
 })
@@ -659,7 +753,7 @@ await check('stepping back shows an empty yesterday', async () => {
 await check('"back to today" returns and re-loads the day', async () => {
   await page.getByRole('button', { name: /back to today/i }).click()
   await page.waitForFunction(
-    () => /725\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    () => dayCals() === 725,
     { timeout: 15000 }
   )
 })
@@ -704,7 +798,7 @@ await check('logging from usuals adds the food', async () => {
   await card.locator('.result', { hasText: 'Eggs and oats' }).first().click()
   // 725 (breakfast) + 600 (the re-logged usual) = 1325.
   await page.waitForFunction(
-    () => /1325\s*\/\s*2400/.test(document.body.innerText.replace(/\s+/g, ' ')),
+    () => dayCals() === 1325,
     { timeout: 15000 }
   )
 })
@@ -1781,10 +1875,25 @@ await check('the countdown rail marks the days elapsed', async () => {
 })
 
 await check('an observing user has no targets and is told so', async () => {
+  /*
+   * Week 1 is pure observation, so no plan exists. The absence is the design and has to read
+   * as such rather than as a broken screen.
+   *
+   * PRESENCE FIRST. This used to assert that "/ 2400" was absent from the body text, which
+   * became vacuous the moment the totals turned into rings — the string is gone from every
+   * screen now, so it would pass against a page that rendered nothing at all. So: the rings
+   * must exist, every one must say it has no target, and the copy must explain why.
+   */
+  const rings = obs.locator('.macroring-dial')
+  await rings.first().waitFor({ timeout: 15000 })
+  const labels = await rings.evaluateAll((els) =>
+    els.map((e) => e.getAttribute('aria-label') || '')
+  )
+  if (labels.length !== 4) return `${labels.length} rings, expected 4`
+  const withTarget = labels.filter((l) => / of \d/.test(l))
+  if (withTarget.length > 0) return `a target was shown during observation: ${withTarget[0]}`
+
   const body = await obs.locator('body').innerText()
-  // Week 1 is pure observation, so no plan exists. The absence is the design and
-  // has to read as such rather than as a broken screen.
-  if (/\/ 2400/.test(body)) return 'targets were shown during observation'
   return /No targets yet/.test(body) ? true : 'nothing explained the missing targets'
 })
 

@@ -148,37 +148,34 @@ export default function Food({ day, date, isToday, onDay, vetoes = [], onVeto })
   )
 }
 
-/** The section heading's live numbers, shown whether the body is open or shut. */
+/**
+ * What the Food section heading says, open or shut.
+ *
+ * IT USED TO BE THE NUMBERS: "1935 / 2400 kcal" over "P 106/180g F 50/80g net C 156/220g".
+ * Those are the rings at the top of the Journal now, and stating the same six figures twice
+ * on one screen makes neither of them the answer.
+ *
+ * So this says the thing the rings cannot: how much of the day is accounted for. A day sits
+ * at 1900 kcal whether three meals were logged or one enormous one was, and "2 of 3 meals"
+ * is the difference. It is also what tells you there is still work to do in here, which is
+ * what a section heading on a data-entry screen is for.
+ */
 export function FoodSummary({ day }) {
-  const totals = day.totals || {}
-  const target = day.target
-  return (
-    <div style={{ textAlign: 'right' }}>
-      <div className="num" style={{ fontWeight: 600 }}>
-        {Math.round(totals.calories || 0)}
-        {target && <span className="muted"> / {Math.round(target.calories)}</span>}
-        <span className="small muted"> kcal</span>
-      </div>
-      {/* Each macro is one unbreakable unit. As a flex row the label and its
-          value landed on separate lines at 360px ("P" above "90/180g"), which
-          reads as four mystery numbers. */}
-      <div className="macro-line">
-        <Macro label="P" v={totals.protein} t={target?.protein} />
-        <Macro label="F" v={totals.fat} t={target?.fat} />
-        {/* Net carbs — the server derives it. "net C" rather than "C" because
-            "carbs" is ambiguous to anyone actually counting them, and the whole
-            intake model turns on net vs total. */}
-        <Macro label={'net C'} v={totals.carbs} t={target?.carbs} />
-      </div>
-    </div>
-  )
-}
+  const all = day.meals || []
+  const mains = all.filter((m) => !SNACK_SLOTS.includes(m.slot))
+  // Skipped counts as accounted for. It is an answer about the meal, not an omission.
+  const done = mains.filter((m) => m.entries.length > 0 || m.adherence === 'skipped').length
+  const snacks = all
+    .filter((m) => SNACK_SLOTS.includes(m.slot))
+    .reduce((n, m) => n + m.entries.length, 0)
 
-function Macro({ label, v, t }) {
+  if (done === 0 && snacks === 0) {
+    return <span className="tiny muted">nothing logged</span>
+  }
   return (
-    <span className="tiny muted num macro">
-      {/* A non-breaking space: "P 90/180g" must never split after the label. */}
-      {label}&nbsp;{Math.round(v || 0)}{t ? `/${Math.round(t)}` : ''}g
+    <span className="tiny muted num">
+      {done} of {mains.length} meals
+      {snacks > 0 && ` · ${snacks} ${snacks === 1 ? 'snack' : 'snacks'}`}
     </span>
   )
 }

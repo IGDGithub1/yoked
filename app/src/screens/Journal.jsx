@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, today as todayDate, shiftDate } from '../api'
 import CheckIn from '../components/CheckIn'
 import Food, { FoodSummary } from '../components/Food'
+import Macros from '../components/Macros'
 import Training, { TrainingSummary } from '../components/Training'
 import Section from '../components/Section'
 import Yolk from '../components/Yolk'
@@ -146,6 +147,33 @@ export default function Journal({ baseline }) {
 
       {status === 'ready' && nutrition && training && (
         <>
+          {/*
+            The day's four numbers, first, because "how am I doing" is the question this
+            screen is opened to answer and it was previously answered in a text line inside
+            a section header you had to scroll to.
+
+            Above the check-in deliberately. The check-in is four taps ABOUT today and can
+            wait; the totals are the state of today and are why you came.
+          */}
+          <Macros totals={nutrition.totals} target={nutrition.target} />
+
+          {/*
+            Baseline week 1 is pure observation and has no prescription, so the absence of
+            targets is the design rather than a gap.
+
+            IT SITS HERE, next to the rings, and it used to sit at the bottom of the screen.
+            That was fine while the targets were a line inside a section header; with four
+            rings at the top it left a baseline user looking at four empty circles and the
+            explanation three sections below. The rings each say "no target yet" to a screen
+            reader; this is the same fact for everyone else.
+          */}
+          {!nutrition.target && (
+            <p className="tiny muted prose" style={{ margin: '2px 0 0' }}>
+              No targets yet. Log what you normally eat and do, and your first plan will
+              follow.
+            </p>
+          )}
+
           {/* Keyed by date so stepping days REMOUNTS the card. Its open/shut state is
               decided once at mount from whether the day is answered, and that is
               exactly the granularity wanted: shut when you arrive at an answered day,
@@ -177,15 +205,6 @@ export default function Journal({ baseline }) {
             />
           </Section>
 
-          {/* Baseline week 1 is pure observation and has no prescription, so the
-              absence of targets is the design rather than a gap. Saying so stops it
-              reading as a broken screen, without explaining the machinery. */}
-          {!nutrition.target && (
-            <p className="tiny muted prose">
-              No targets yet. Log what you normally eat and do, and your first
-              plan will follow.
-            </p>
-          )}
         </>
       )}
     </div>
