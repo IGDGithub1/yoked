@@ -104,6 +104,82 @@ export default function Food({ day, date, isToday, onDay, vetoes = [], onVeto })
     (m) => m.entries.length === 0 && m.adherence !== 'skipped' && prescribedSlots.has(m.slot)
   )?.slot
 
+  /*
+   * THE ONE ADD-FOOD PANEL, and the state that places it. SPEC-food-entry §3.1.
+   *
+   * It used to be mounted once per meal card, each with its own `adding` flag and its own
+   * `way` tab. That is right for a planned day, where adding a food is the DEVIATION path
+   * and belongs inside the meal it deviates from. It is wrong for the baseline fortnight,
+   * where nothing is prescribed, so deviation is the only path — and a control shaped like a
+   * second choice was the only choice, five times over, with its tab strip resetting each
+   * time because the state lived inside each instance.
+   *
+   * TWO PIECES OF STATE, deliberately, and they are different things:
+   *
+   *   addingSlot — which meal the food goes to. The user CAN change this, in the picker.
+   *   addingAt   — where the panel is drawn. The user cannot; it is fixed by what they
+   *                tapped.
+   *
+   * One value collapsed from both would make the panel jump to another card the moment you
+   * corrected the slot mid-interaction.
+   */
+  const [addingSlot, setAddingSlot] = useState(null)
+  const [addingAt, setAddingAt] = useState(null)
+
+  /*
+   * Whether anything is prescribed TODAY, which is what decides the arrangement.
+   *
+   * Read off the prescriptions rather than off `day.target`: a day can carry macro targets
+   * with no per-meal prescription, and the question here is "is there a plan to deviate
+   * from", not "is there a number to hit".
+   */
+  const hasPlan = (day.prescribed || []).length > 0
+  /*
+   * `way` lives HERE, not in AddFood, and that is the whole reason the tab persists.
+   *
+   * Hoisting the mount out of Meal is not sufficient: the panel is still conditionally
+   * rendered, and a conditional render unmounts the component and takes anything held
+   * inside it. Same for the favorites filter box.
+   */
+  const [way, setWay] = useState(null)
+  const [favFilter, setFavFilter] = useState('')
+
+  const openAt = (at, slot) => {
+    setAddingSlot(slot)
+    setAddingAt(at)
+  }
+  const closeAdd = () => {
+    setAddingSlot(null)
+    setAddingAt(null)
+  }
+
+  // First empty snack slot, falling back to the last so a fourth snack still logs rather
+  // than being silently refused. Mirrors what Snacks used to compute for itself.
+  const freeSnackSlot =
+    SNACK_SLOTS.find((s) => !snacks.find((m) => m.slot === s)?.entries.length)
+    || 'snack_eve'
+
+  /** The panel, wherever it is being drawn. One instance, one set of props. */
+  const panel = (
+    <AddFood
+      date={date}
+      slot={addingSlot}
+      onSlot={setAddingSlot}
+      freeSnackSlot={freeSnackSlot}
+      way={way}
+      onWay={setWay}
+      favFilter={favFilter}
+      onFavFilter={setFavFilter}
+      favorites={favorites}
+      onFavorites={setFavorites}
+      onClose={closeAdd}
+      onAdded={(dayPayload) => {
+        onDay(dayPayload)
+        closeAdd()
+      }}
+    />
+  )
+
   return (
     <>
       {/*
@@ -113,6 +189,34 @@ export default function Food({ day, date, isToday, onDay, vetoes = [], onVeto })
         exactly the noise §4.2 promises to spare people.
       */}
       {day.verdict && !isToday && <Verdict verdict={day.verdict} />}
+
+      {/*
+        THE STRIP. Top of the section on EVERY day, so the control never moves — only its
+        default state changes. SPEC-food-entry §3.3 and §4.2.
+        A position that depends on a state the user did not choose has to be re-found, and
+        graduation day is the worst moment for that: they have just earned a plan and should
+        not also have to relearn the screen.
+      */}
+      {addingAt === 'strip' ? (
+        <div className="card stack-sm">{panel}</div>
+      ) : (
+        hasPlan && (
+          <button
+            type="button"
+            className="striplink"
+            onClick={() => openAt('strip', nextSlot ?? 'breakfast')}
+          >
+            Log something else
+          </button>
+        )
+      )}
+
+      {/*
+        No plan at all: the panel is open from the start, because logging IS the job today
+        and there is nothing to collapse toward. Not a second instance — the same `panel`,
+        rendered in the strip position.
+      */}
+      {!hasPlan && addingAt === null && <div className="card stack-sm">{panel}</div>}
 
       {mainMeals.map((meal) => (
         <Meal
@@ -133,6 +237,10 @@ export default function Food({ day, date, isToday, onDay, vetoes = [], onVeto })
           onDay={onDay}
           vetoes={vetoes}
           onVeto={onVeto}
+          /* Opens the shared panel against THIS card rather than owning one. §4.1: the
+             panel appears where you asked for it. */
+          onAdd={() => openAt(meal.slot, meal.slot)}
+          panel={addingAt === meal.slot ? panel : null}
         />
       ))}
 
@@ -143,6 +251,8 @@ export default function Food({ day, date, isToday, onDay, vetoes = [], onVeto })
         favorites={favorites}
         onFavorites={setFavorites}
         onDay={onDay}
+        onAdd={() => openAt('snacks', freeSnackSlot)}
+        panel={addingAt === 'snacks' ? panel : null}
       />
     </>
   )
@@ -211,10 +321,13 @@ function Verdict({ verdict }) {
  * Adding fills the first free slot. That is arbitrary and deliberately invisible
  * — the slot only matters when the COACH chose it, and those are labelled.
  */
-function Snacks({ snacks, date, prescribedFor, favorites, onFavorites, onDay }) {
-  const [adding, setAdding] = useState(false)
+function Snacks({ snacks, date, prescribedFor, favorites, onFavorites, onDay,
+                 onAdd, panel }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  // `panel` is the shared AddFood, handed down when Food decided this card is where it
+  // belongs. Rendered, never owned: two cards holding their own meant two open at once.
+  const adding = panel !== null
 
   // Flattened across the three slots, each entry remembering which one it came
   // from so it can still be deleted and starred individually.
@@ -236,11 +349,8 @@ function Snacks({ snacks, date, prescribedFor, favorites, onFavorites, onDay }) 
     .map((s) => ({ slot: s, p: prescribedFor(s) }))
     .filter((x) => x.p !== null)
 
-  // First slot with nothing in it. Falls back to the last so a fourth snack still
-  // logs rather than being silently refused.
-  const freeSlot =
-    SNACK_SLOTS.find((s) => !snacks.find((m) => m.slot === s)?.entries.length)
-    || 'snack_eve'
+  // Which free snack slot an addition lands in is decided by Food, alongside the panel it
+  // hands down — the two have to agree, and one of them owning both is how they stay in step.
 
   const run = async (fn) => {
     setError(null)
@@ -310,7 +420,7 @@ function Snacks({ snacks, date, prescribedFor, favorites, onFavorites, onDay }) 
             </button>
           )}
           <button type="button" className="btn btn--ghost" disabled={busy}
-            onClick={() => setAdding(true)}>
+            onClick={onAdd}>
             Add a snack
           </button>
         </div>
@@ -318,19 +428,7 @@ function Snacks({ snacks, date, prescribedFor, favorites, onFavorites, onDay }) 
 
       {error && <p className="error">{error}</p>}
 
-      {adding && (
-        <AddFood
-          date={date}
-          slot={freeSlot}
-          favorites={favorites}
-          onFavorites={onFavorites}
-          onClose={() => setAdding(false)}
-          onAdded={(dayPayload) => {
-            onDay(dayPayload)
-            setAdding(false)
-          }}
-        />
-      )}
+      {panel}
     </div>
   )
 }
@@ -338,10 +436,11 @@ function Snacks({ snacks, date, prescribedFor, favorites, onFavorites, onDay }) 
 /* ---- one meal slot ------------------------------------------------------- */
 
 function Meal({ meal, date, prescribed, primary, favorites, onFavorites, onDay,
-               vetoes = [], onVeto }) {
-  const [adding, setAdding] = useState(false)
+               vetoes = [], onVeto, onAdd, panel }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  // The shared panel, handed down when Food decided this card is where it belongs.
+  const adding = panel !== null
 
   const logged = meal.entries.length > 0
 
@@ -470,7 +569,7 @@ function Meal({ meal, date, prescribed, primary, favorites, onFavorites, onDay,
             type="button"
             className={!prescribed && primary ? 'btn btn--primary' : 'btn btn--ghost'}
             disabled={busy}
-            onClick={() => setAdding(true)}
+            onClick={onAdd}
           >
             Add food
           </button>
@@ -513,19 +612,7 @@ function Meal({ meal, date, prescribed, primary, favorites, onFavorites, onDay,
           )
       )}
 
-      {adding && (
-        <AddFood
-          date={date}
-          slot={meal.slot}
-          favorites={favorites}
-          onFavorites={onFavorites}
-          onClose={() => setAdding(false)}
-          onAdded={(dayPayload) => {
-            onDay(dayPayload)
-            setAdding(false)
-          }}
-        />
-      )}
+      {panel}
     </div>
   )
 }
@@ -897,6 +984,20 @@ const WAYS = [
   { key: 'manual', label: 'By hand' },
 ]
 
+/*
+ * Four destinations for six slots.
+ *
+ * `snack` resolves to the first free snack slot, which is the same arbitrary-and-invisible
+ * choice the Snacks card has always made: "was that 4pm handful afternoon or evening" has no
+ * right answer and no consequence, and the slot only matters when the COACH picked it.
+ */
+const PICK_SLOTS = [
+  { key: 'breakfast', label: 'Breakfast' },
+  { key: 'lunch', label: 'Lunch' },
+  { key: 'dinner', label: 'Dinner' },
+  { key: 'snack', label: 'Snack' },
+]
+
 /**
  * Favorites, scan, search, or by hand.
  *
@@ -904,10 +1005,22 @@ const WAYS = [
  * things you have eaten before is the highest-yield thing to show first; search
  * is a paid call and the slowest of the four.
  */
-function AddFood({ date, slot, favorites, onFavorites, onClose, onAdded }) {
-  const [way, setWay] = useState(favorites.length > 0 ? 'favorites' : 'search')
+function AddFood({ date, slot, onSlot, freeSnackSlot, way, onWay, favFilter, onFavFilter,
+                  favorites, onFavorites, onClose, onAdded }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+
+  /*
+   * `way` is OWNED BY FOOD and passed in, so picking "Search" once survives adding a food
+   * and opening the panel again. It used to be local, and the panel is conditionally
+   * rendered — so every open re-mounted it and reset the tab, five times per baseline day.
+   *
+   * Null means "not chosen yet", which is not the same as a default: it resolves to
+   * favorites when there are any and search when there are not, and that resolution has to
+   * happen at RENDER rather than at mount, because on the first open the favorites fetch may
+   * not have landed.
+   */
+  const activeWay = way ?? (favorites.length > 0 ? 'favorites' : 'search')
 
   /**
    * The one place an entry is written, whichever way found the food.
@@ -947,15 +1060,46 @@ function AddFood({ date, slot, favorites, onFavorites, onClose, onAdded }) {
 
   return (
     <div className="stack-sm addfood">
+      {/*
+        WHICH MEAL, first, because it is the one thing a shared panel has to answer that a
+        panel living inside a meal card answered by position.
+
+        Pre-filled from whatever opened it, and editable — the strip has to pick something,
+        and tapping the wrong card should not mean closing and reopening. Four options for
+        six slots: the three snack slots exist because a plan can prescribe a specific one,
+        and a user adding an ad-hoc snack does not care which.
+      */}
+      <div className="slotpick">
+        <span className="tiny muted">Add to</span>
+        <div className="chips" role="radiogroup" aria-label="Which meal">
+          {PICK_SLOTS.map((p) => {
+            const value = p.key === 'snack' ? freeSnackSlot : p.key
+            const on = p.key === 'snack' ? SNACK_SLOTS.includes(slot) : slot === p.key
+            return (
+              <button
+                key={p.key}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                className="chip"
+                onClick={() => onSlot(value)}
+              >
+                {p.label}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
       <div className="chips" role="tablist" aria-label="How to add food">
         {WAYS.map((w) => (
           <button
             key={w.key}
             type="button"
             role="tab"
-            aria-selected={way === w.key}
+            aria-selected={activeWay === w.key}
             className="chip"
-            onClick={() => setWay(w.key)}
+            onClick={() => onWay(w.key)}
           >
             {w.label}
             {w.key === 'favorites' && favorites.length > 0 && (
@@ -967,10 +1111,12 @@ function AddFood({ date, slot, favorites, onFavorites, onClose, onAdded }) {
 
       {error && <p className="error">{error}</p>}
 
-      {way === 'favorites' && (
+      {activeWay === 'favorites' && (
         <Favorites
           favorites={favorites}
           busy={busy}
+          q={favFilter}
+          onQ={onFavFilter}
           onPick={(f) => add({ ...f, source: 'favorite', favorite_id: f.id })}
           onRemove={async (id) => {
             const r = await api.nutrition.deleteFavorite(id)
@@ -979,15 +1125,15 @@ function AddFood({ date, slot, favorites, onFavorites, onClose, onAdded }) {
         />
       )}
 
-      {way === 'scan' && (
-        <BarcodeLookup busy={busy} onAdd={(f) => add(f)} onDone={() => setWay('search')} />
+      {activeWay === 'scan' && (
+        <BarcodeLookup busy={busy} onAdd={(f) => add(f)} onDone={() => onWay('search')} />
       )}
 
-      {way === 'search' && (
+      {activeWay === 'search' && (
         <Search date={date} slot={slot} busy={busy} onAdd={(f) => add(f)} />
       )}
 
-      {way === 'manual' && <ManualFood busy={busy} onSubmit={(f) => add(f)} />}
+      {activeWay === 'manual' && <ManualFood busy={busy} onSubmit={(f) => add(f)} />}
 
       {/* The way out lives at the BOTTOM of the panel, quietly. Adding food
           closes it anyway, so this is only for changing your mind — which is not
@@ -1128,8 +1274,9 @@ function Result({ food, busy, onAdd, netCarbs = false }) {
   )
 }
 
-function Favorites({ favorites, busy, onPick, onRemove }) {
-  const [q, setQ] = useState('')
+function Favorites({ favorites, busy, onPick, onRemove, q, onQ }) {
+  // The filter text is owned by Food and passed in: the panel is conditionally rendered, so
+  // anything held here is lost every time it closes.
 
   if (favorites.length === 0) {
     return (
@@ -1153,7 +1300,7 @@ function Favorites({ favorites, busy, onPick, onRemove }) {
           placeholder="Filter your usuals"
           aria-label="Filter favorites"
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => onQ(e.target.value)}
         />
       )}
       {shown.map((f) => (

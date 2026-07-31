@@ -1112,3 +1112,38 @@
   .macroring-dial { --ring: 4px; }
   .macroring-num { font-size: 12px; }
 }
+
+/* ---- the shared add-food panel ------------------------------------------
+ *
+ * SPEC-food-entry. One panel for the whole section rather than one per meal card, which is
+ * what makes the slot picker necessary: a panel living inside a meal answered "which meal"
+ * by position, and a shared one has to ask.
+ */
+
+/*
+ * "Log something else" — the way in when no meal card is the obvious place.
+ *
+ * A quiet line, never a button. On a planned day the accent belongs to the next unlogged
+ * meal, and a second control of equal weight beside "Ate as planned" is exactly the
+ * two-primary-actions problem DESIGN.md's one-per-view rule exists to prevent.
+ */
+.striplink {
+  align-self: flex-start;
+  border: 0;
+  background: none;
+  padding: 6px 2px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 1px dotted currentColor;
+}
+.striplink:hover { color: var(--ink); }
+
+/* Which meal the food is going to. Above the tab strip, because it is the question the
+   shared panel has to answer before "how do I find the food". */
+.slotpick {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-bottom: 2px;
+}

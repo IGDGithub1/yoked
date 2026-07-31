@@ -776,6 +776,124 @@ await check('the star survives a reload', async () => {
   await star.and(page.locator('[aria-pressed="true"]')).waitFor({ timeout: 15000 })
 })
 
+/*
+ * ---- the shared add-food panel, SPEC-food-entry §6 -------------------------
+ *
+ * One panel for the section instead of one per meal card. The four ways in used to be
+ * mounted five times over, each with its own `way` tab that reset on every open — right for
+ * a planned day where adding a food is the DEVIATION path, wrong for the baseline fortnight
+ * where it is the ONLY path.
+ */
+
+await check('only one add-food panel exists, whatever is open', async () => {
+  // Two could be open at once before this: Meal and Snacks each held their own `adding`.
+  const dinner = page.locator('.card', { hasText: 'Dinner' }).first()
+  await dinner.getByRole('button', { name: /^Add food$/i }).click()
+  await page.locator('.addfood').first().waitFor({ timeout: 10000 })
+
+  // Open the snack one on top of it. The first must close.
+  const snacks = page.locator('.card', { hasText: 'Snacks' }).first()
+  await snacks.getByRole('button', { name: /add a snack/i }).click()
+  await page.waitForTimeout(400)
+  const n = await page.locator('.addfood').count()
+  return n === 1 ? true : `${n} panels open at once`
+})
+
+await check('the panel renders under the card that opened it', async () => {
+  /*
+   * §4.1. Asserted geometrically rather than by class name: the rule is "the panel appears
+   * where you asked for it", and a refactor could rename the container and still owe that.
+   */
+  const dinner = page.locator('.card', { hasText: 'Dinner' }).first()
+  await dinner.getByRole('button', { name: /^Add food$/i }).click()
+  await page.locator('.addfood').first().waitFor({ timeout: 10000 })
+  const inside = await dinner.locator('.addfood').count()
+  return inside === 1 ? true : 'the panel is not inside the Dinner card'
+})
+
+await check('a meal button pre-selects that meal in the picker', async () => {
+  const on = await page.locator('.slotpick .chip[aria-checked="true"]').allInnerTexts()
+  return on.length === 1 && /Dinner/.test(on[0])
+    ? true
+    : `picker showed ${JSON.stringify(on)}, expected Dinner`
+})
+
+await check('the way tab survives closing and reopening the panel', async () => {
+  /*
+   * THE REASON `way` HAD TO LEAVE AddFood. Hoisting the mount out of Meal is not enough:
+   * the panel is conditionally rendered, so every open re-mounts it and anything held
+   * inside is lost. Five times per baseline day, re-picking Search each time.
+   */
+  await page.getByRole('tab', { name: /^Search$/i }).click()
+  await page.getByRole('button', { name: /never mind/i }).click()
+  await page.locator('.striplink').click()
+  await page.locator('.addfood').first().waitFor({ timeout: 10000 })
+  const tab = await page.locator('.addfood .chips [role="tab"][aria-selected="true"]').innerText()
+  return /Search/.test(tab) ? true : `the tab reset to "${tab}"`
+})
+
+await check('the strip opens the panel above every meal card', async () => {
+  // Scoped to the Food section: the check-in card sits above it by design, and the Training
+  // cards below, so comparing against every .card on the page answers a different question.
+  const above = await page.evaluate(() => {
+    const p = document.querySelector('.addfood')
+    const cards = [...document.querySelectorAll('#sec-food .card')].filter((c) => !c.contains(p))
+    if (!p || !cards.length) return null
+    const top = p.getBoundingClientRect().top
+    return cards.every((c) => top < c.getBoundingClientRect().top)
+  })
+  return above === true ? true : 'the strip panel is not above the meals'
+})
+
+await check('changing the picker sends the food to the chosen slot', async () => {
+  /*
+   * Asserted against the DAY PAYLOAD, not the screen: the point is where the food landed.
+   * Opened from the strip, defaulted to the next unlogged meal, then overridden to Snack.
+   */
+  await page.getByRole('tab', { name: /Usual/i }).click()
+  await page.locator('.slotpick .chip', { hasText: /^Snack$/ }).click()
+  await page.locator('.resultrow', { hasText: 'Eggs and oats' }).first()
+    .locator('.result').click()
+  await page.waitForTimeout(2500)
+
+  const day = await page.evaluate(async () => {
+    const d = new Date()
+    const p = (n) => String(n).padStart(2, '0')
+    const res = await fetch(
+      `/api/nutrition/day/${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
+      { headers: { accept: 'application/json' }, credentials: 'same-origin' }
+    )
+    return res.json()
+  })
+  const inSnack = (day.meals || [])
+    .filter((m) => /^snack_/.test(m.slot))
+    .flatMap((m) => m.entries)
+    .filter((e) => e.name === 'Eggs and oats')
+
+  /*
+   * REMOVE IT AGAIN. The suite shares one fixture and one long-lived page, so an entry left
+   * in a snack slot is an entry every later snack assertion counts — which is exactly what
+   * happened: "a snack logs without asking which time of day" read "2 logged" where it
+   * wanted 1, and reported a defect that was this test's litter.
+   *
+   * Through the API rather than the × button: this proves where the food LANDED, and the
+   * cleanup should not depend on finding the right row on screen to undo it.
+   */
+  for (const e of inSnack) {
+    await page.evaluate(async (id) => {
+      const me = await (await fetch('/api/me', { credentials: 'same-origin' })).json()
+      await fetch(`/api/nutrition/entries/${id}`, {
+        method: 'DELETE',
+        headers: { 'x-csrf-token': me.csrf, accept: 'application/json' },
+        credentials: 'same-origin',
+      })
+    }, e.id)
+  }
+  await reloadJournal()
+
+  return inSnack.length > 0 ? true : 'the food did not land in a snack slot'
+})
+
 await check('the starred food appears as a usual on another meal', async () => {
   const card = page.locator('.card', { hasText: 'Lunch' }).first()
   await card.getByRole('button', { name: /^Add food$/i }).click()
@@ -1895,6 +2013,62 @@ await check('an observing user has no targets and is told so', async () => {
 
   const body = await obs.locator('body').innerText()
   return /No targets yet/.test(body) ? true : 'nothing explained the missing targets'
+})
+
+await check('with no plan, the way to log is open from the start', async () => {
+  /*
+   * SPEC-food-entry §1. The baseline fortnight is fourteen days of logging with nothing
+   * returned, and adding a food was buried one tap deep behind a control shaped like a
+   * second choice — because with a plan it IS the second choice. With no plan it is the
+   * only one, so it opens.
+   *
+   * PRESENCE FIRST: the panel must exist before asserting the strip link does not.
+   */
+  const panel = obs.locator('.addfood')
+  await panel.waitFor({ timeout: 15000 })
+  if ((await panel.count()) !== 1) return `${await panel.count()} panels, expected 1`
+  // Nothing to collapse toward, so no "Log something else" line either.
+  const strip = await obs.locator('.striplink').count()
+  return strip === 0 ? true : 'a collapse link was offered on a day with nothing planned'
+})
+
+await check('the strip sits in the same place whether or not there is a plan', async () => {
+  /*
+   * §4.2, and the decision a later refactor is most likely to undo by accident. A control
+   * that moves between two positions depending on a state the user did not choose has to be
+   * re-found, and graduation day is the worst moment for it.
+   *
+   * Measured as "first thing in the Food section" on both fixtures rather than as a pixel
+   * offset, which would depend on how much is logged above it.
+   */
+  /*
+   * The entry control is the FIRST thing in the section on both, and it is the entry
+   * control rather than a meal — asserted by what the element actually is, since a loose
+   * class match would pass against the wrong element and report a decision as held when it
+   * had been reversed.
+   */
+  const lead = (target) => target.evaluate(() => {
+    const body = document.querySelector('#sec-food')
+    const el = body?.firstElementChild
+    if (!el) return null
+    return {
+      isStripLink: el.classList.contains('striplink'),
+      holdsPanel: !!el.querySelector('.addfood'),
+      isMealCard: !!el.querySelector('.entry-wrap, .deltalink') ,
+      text: (el.innerText || '').split('\n')[0].slice(0, 40),
+    }
+  })
+
+  const b = await lead(obs)
+  const p = await lead(page)
+  if (b === null || p === null) return 'the Food section body was not found'
+  // Baseline: the open panel. Planned: the collapse link. Neither may be a meal card.
+  if (!b.holdsPanel) return `baseline leads with "${b.text}" instead of the open panel`
+  if (!(p.isStripLink || p.holdsPanel)) {
+    return `a planned day leads with "${p.text}" instead of the entry control`
+  }
+  if (b.isMealCard || p.isMealCard) return 'a meal card is the first thing in the section'
+  return true
 })
 
 await check('an observing user is not offered a correction to a plan', async () => {

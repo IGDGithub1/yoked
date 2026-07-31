@@ -20,7 +20,7 @@ baseline, and report their week back to the coach that plans the next one.
 | `Plans.php` | ✅ week generation, validation, versioned persistence |
 | API tier | ✅ `api/index.php`, global CSRF, session auth |
 | Onboarding UI | ✅ the quiz, tier confirmation, answer review |
-| Journal (logging) | ⚠️ works, but the food half needs the rework below |
+| Journal (logging) | ✅ food: rings, correctable servings, one shared entry panel. Training is next |
 | Dashboard | ✅ landing page: nudges, coach reviews, week-at-a-glance |
 | Admin | ✅ members, roles, suspension, invite codes. No delete: suspension is reversible, a cascade is not |
 | Baseline lifecycle | ✅ two weeks, Monday-aligned, per-user local time, graduates to active |
@@ -42,40 +42,41 @@ baseline, and report their week back to the coach that plans the next one.
 | Menu variety | ⬜ nothing tracks recent meals, so the same week can repeat |
 | Password reset | ⬜ blocked: no mail delivery decided. Invites are issued by hand today |
 
-## What is being worked on
+## The food logging rework — done
 
-**The food logging screen.** The intelligence behind Yoked beats what it was built from;
-the screen you touch every day for fourteen straight days does not, and that stretch comes
-first and gives nothing back. Someone bails during baseline and never sees the coaching.
+**Why it mattered.** The intelligence behind Yoked beats what it was built from; the screen
+you touch every day for fourteen straight days did not, and that stretch comes first and
+gives nothing back. Someone bails during baseline and never sees the coaching.
 
-Established by comparing the live screen against `source-projects/keto-extract`:
+Five defects, established by comparing the live screen against `source-projects/keto-extract`,
+all now fixed:
 
-1. **A logged entry cannot be corrected.** If search returns 100g of mustard and you ate a
-   teaspoon, every number downstream is wrong — the day, the drift detection, the check-in,
-   and the menu Claude writes off the back of it. `PATCH /api/nutrition/entries/{id}`,
-   `Nutrition::updateEntry()` and `api.nutrition.updateEntry()` all exist and **nothing in
-   the UI calls them**. The gap is a control and the rescale maths, not a feature.
-2. **No servings field before adding** a search or scan result. The barcode flow is the only
-   place that ever asks, and search is the commoner path.
-3. **The delta row renders with no plan.** "Cooked in oil? Nudge it." is a correction against
-   a *prescribed* meal; during baseline there is nothing prescribed, so it is a prompt for a
-   case the user is not in. It is also calories-only, and cannot say "and 3g of fat".
-4. **No macro rings.** The day's four numbers are a text line that reads as data rather than
-   progress. The information is already on the day payload.
-5. **Search, scan and favourites are nested inside every meal**, because they are the
-   DEVIATION path — the answer to "I ate something other than the plan". During baseline
-   deviation is the only path, so a control shaped like a second choice is the only choice,
-   repeated five times with its sub-tabs resetting each time.
+1. **A logged entry could not be corrected.** Search returns 100g of mustard, you ate a
+   teaspoon, and every number downstream was wrong — the day, the drift detection, the
+   check-in, and the menu Claude writes off the back of all three. `PATCH
+   /api/nutrition/entries/{id}`, `Nutrition::updateEntry()` and `api.nutrition.updateEntry()`
+   all existed with **no caller in the UI**. The gap was a control and the rescale maths.
+2. **No servings field before adding** a search or scan result. Barcode was the only flow
+   that ever asked, and search is the commoner path.
+3. **The delta row rendered with no plan.** "Cooked in oil? Nudge it." corrects a
+   *prescribed* meal; during baseline nothing is prescribed. It was also calories-only and
+   could not say "and 3g of fat" — four typed fields now, negatives allowed.
+4. **No macro rings.** Four now, with calories carrying the accent and the macros in ink,
+   because DESIGN.md allows one yellow element per view and the yolk earns it by measuring.
+5. **Search, scan and favourites were nested inside every meal**, because they are the
+   DEVIATION path. During baseline deviation is the only path, so a control shaped like a
+   second choice was the only choice, five times over, with its tab strip resetting each
+   time. One shared panel now, per [SPEC-food-entry.md](docs/SPEC-food-entry.md).
 
-Rescaling is automatic and server-side: if the maths can be done it gets done, and it is all
-or nothing rather than some foods scaling and others asking. Item 5 gets a spec document
-before any code, because it changes the shape of the screen and interacts with the planned
-meal model in ways 1-4 do not.
+**Rescaling is automatic and all-or-nothing.** If the maths can be done it gets done. The one
+case that cannot scale — an entry with no serving recorded, from a prescribed meal logged
+as-planned — is handled by not offering the control there, rather than by falling back to
+asking for four numbers.
 
-Not adopted from Keto: editing the four meal totals to compensate for a wrong entry. It
+**Not adopted from Keto:** editing the four meal totals to compensate for a wrong entry. It
 makes the day's number right while leaving the record a lie, and Claude reads the record.
 
-**Next after that: training logging.** Untouched so far and the larger of the two halves.
+**Next: training logging.** Untouched so far and the larger of the two halves.
 
 ### Running the tests
 
@@ -125,6 +126,7 @@ Read in this order:
 | [SPEC-onboarding.md](docs/SPEC-onboarding.md) | The quiz. Everything Claude knows starts here. |
 | [SPEC-safety.md](docs/SPEC-safety.md) | Per-user constraints, hard/soft tiers, enforcement. |
 | [SPEC-coaching.md](docs/SPEC-coaching.md) | Generation, observation, vetoes, chat, adaptation, buddy system. |
+| [SPEC-food-entry.md](docs/SPEC-food-entry.md) | How a food gets into a day, and why a baseline day is arranged differently. |
 | [sample-week.md](docs/sample-week.md) | A worked example — two paired users, week 5. Review artifact. |
 | [SCHEMA.md](docs/SCHEMA.md) | What the tables are and why. |
 
